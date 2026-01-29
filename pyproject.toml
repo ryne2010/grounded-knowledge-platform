@@ -1,0 +1,49 @@
+[project]
+name = "grounded-knowledge-platform"
+version = "0.2.0"
+description = "Citations-first, eval-driven grounded knowledge (RAG) reference implementation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ryne Schroder" }]
+
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.23",
+  "python-multipart>=0.0.9",
+  "pydantic>=2.5",
+  "numpy>=1.26",
+  "rank-bm25>=0.2.2",
+  "httpx>=0.27",
+
+  # PDF + OCR (open source, fully local)
+  "pymupdf>=1.24",
+  "pytesseract>=0.3.10",
+  "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+providers = [
+  "openai>=1.0",
+  "google-genai>=0.3",
+]
+
+embeddings = [
+  "sentence-transformers>=2.6",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.6.0",
+  "mypy>=1.8.0",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true

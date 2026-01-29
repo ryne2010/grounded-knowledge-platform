@@ -1,0 +1,5 @@
+{"question":"What does PUBLIC_DEMO_MODE do?","expected_doc_ids":["01-public-demo-welcome-36e5d92e8f","05-cloud-run-demo-cost-controls-d220e7a1ab"]}
+{"question":"What is hybrid retrieval?","expected_doc_ids":["02-reference-architecture-fb1c8ca98a"]}
+{"question":"What are the key reliability patterns for event-driven ingestion?","expected_doc_ids":["03-event-driven-data-platform-9444437cf4"]}
+{"question":"What are practical mitigations against prompt injection?","expected_doc_ids":["04-security-and-confidentiality-bb4a62bbdc"]}
+{"question":"How do you keep a Cloud Run demo low-cost?","expected_doc_ids":["05-cloud-run-demo-cost-controls-d220e7a1ab"]}
