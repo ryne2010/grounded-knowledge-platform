@@ -1,9 +1,12 @@
+# answering.py
 from __future__ import annotations
+import logging
 
 from .config import settings
 from .llm.base import Answer, AnswerProvider
 from .llm.extractive import ExtractiveAnswerer
 
+logger = logging.getLogger(__name__)
 
 def get_answerer() -> AnswerProvider:
     """
@@ -15,18 +18,21 @@ def get_answerer() -> AnswerProvider:
         try:
             from .llm.openai_provider import OpenAIAnswerer
             return OpenAIAnswerer()
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to init OpenAIAnswerer; falling back to extractive: %s", e)
             return ExtractiveAnswerer()
     if provider == "gemini":
         try:
             from .llm.gemini_provider import GeminiAnswerer
             return GeminiAnswerer()
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to init GeminiAnswerer; falling back to extractive: %s", e)
             return ExtractiveAnswerer()
     if provider == "ollama":
         try:
             from .llm.ollama_provider import OllamaAnswerer
             return OllamaAnswerer()
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to init OllamaAnswerer; falling back to extractive: %s", e)
             return ExtractiveAnswerer()
     return ExtractiveAnswerer()

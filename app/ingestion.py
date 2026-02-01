@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from .config import settings
-from .embeddings import HashEmbedder, NoEmbedder, SentenceTransformerEmbedder
+from .embeddings import Embedder, HashEmbedder, NoEmbedder, SentenceTransformerEmbedder
 from .ocr import extract_text_from_pdf
 from .storage import (
     Chunk,
@@ -78,13 +78,14 @@ class IngestResult:
     num_chunks: int
     embedding_dim: int
 
+_embedder_singleton: Embedder | None = None
 
-def _get_embedder():
-    if settings.embeddings_backend == "none":
-        return NoEmbedder(1)
-    if settings.embeddings_backend == "sentence-transformers":
-        return SentenceTransformerEmbedder(settings.embeddings_model)
-    return HashEmbedder(settings.embedding_dim)
+def _get_embedder() -> Embedder:
+    global _embedder_singleton
+    if _embedder_singleton is None:
+        _embedder_singleton = SentenceTransformerEmbedder(settings.embeddings_model)
+    return _embedder_singleton
+
 
 
 def ingest_text(*, title: str, source: str, text: str, doc_id: str | None = None) -> IngestResult:

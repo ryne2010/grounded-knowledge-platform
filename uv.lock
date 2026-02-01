@@ -389,6 +389,7 @@ dependencies = [
     { name = "pytesseract" },
     { name = "python-multipart" },
     { name = "rank-bm25" },
+    { name = "sentence-transformers" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -421,6 +422,7 @@ requires-dist = [
     { name = "pytesseract", specifier = ">=0.3.10" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
+    { name = "sentence-transformers", specifier = ">=5.2.2" },
     { name = "sentence-transformers", marker = "extra == 'embeddings'", specifier = ">=2.6" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23" },
 ]

@@ -2,6 +2,20 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+# Load a local .env for developer convenience.
+# - Does NOT override already-set environment variables (CI/Cloud Run wins)
+# - Safe: if .env doesn't exist, no-op
+try:
+    from dotenv import load_dotenv  # python-dotenv
+except Exception:  # pragma: no cover
+    load_dotenv = None
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]  # repo root (where .env lives)
+_ENV_PATH = _REPO_ROOT / ".env"
+if load_dotenv is not None and _ENV_PATH.exists():
+    load_dotenv(dotenv_path=_ENV_PATH, override=False)
 
 
 def _env_str(name: str, default: str) -> str:

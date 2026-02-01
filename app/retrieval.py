@@ -8,7 +8,7 @@ from typing import Optional
 import numpy as np
 
 from .config import settings
-from .embeddings import HashEmbedder, NoEmbedder, SentenceTransformerEmbedder, cosine_sim
+from .embeddings import Embedder, HashEmbedder, NoEmbedder, SentenceTransformerEmbedder, cosine_sim
 from .storage import Chunk, connect, get_embeddings_by_ids, init_db, list_chunks
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
@@ -29,12 +29,14 @@ class RetrievedChunk:
     vector_score: float
 
 
-def _get_embedder():
-    if settings.embeddings_backend == "none":
-        return NoEmbedder(1)
-    if settings.embeddings_backend == "sentence-transformers":
-        return SentenceTransformerEmbedder(settings.embeddings_model)
-    return HashEmbedder(settings.embedding_dim)
+_embedder_singleton: Embedder | None = None
+
+def _get_embedder() -> Embedder:
+    global _embedder_singleton
+    if _embedder_singleton is None:
+        _embedder_singleton = SentenceTransformerEmbedder(settings.embeddings_model)
+    return _embedder_singleton
+
 
 
 def _tokenize(text: str) -> list[str]:
