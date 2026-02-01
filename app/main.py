@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 from fastapi.responses import JSONResponse
@@ -27,6 +28,88 @@ from .observability import (
 
 # NEW: lightweight injection/circumvention detection
 from .safety import detect_prompt_injection
+
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+
+_STOPWORDS = {
+    "a", "an", "the", "and", "or", "but", "if", "then", "else", "when", "while",
+    "to", "of", "for", "in", "on", "at", "by", "with", "about", "against",
+    "between", "into", "through", "during", "before", "after", "above", "below",
+    "from", "up", "down", "out", "over", "under", "again", "further", "once",
+    "here", "there", "all", "any", "both", "each", "few", "more", "most", "other",
+    "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too",
+    "very", "can", "will", "just", "should", "could", "would", "may", "might", "must",
+    "do", "does", "did", "doing", "done", "is", "are", "was", "were", "be", "been",
+    "being", "have", "has", "had", "having",
+    "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them",
+    "my", "your", "yours", "his", "hers", "its", "our", "their",
+    "what", "which", "who", "whom", "whose", "where", "when", "why", "how",
+    "tell", "show", "explain", "describe", "list", "give", "summarize", "summarise",
+    "define", "meaning", "mean", "means", "stand", "stands", "refers", "refer",
+    "related", "relation", "relate", "about", "information", "info", "source",
+    "sources", "provided", "provide", "using", "use", "used", "usage",
+    "vs", "versus", "example", "examples", "please", "thanks", "thank",
+}
+
+_RELATIONSHIP_TERMS = {
+    "related", "relationship", "relate", "between", "compare", "comparison",
+    "difference", "different", "vs", "versus", "associate", "associated",
+    "link", "linked", "connection", "connected",
+}
+
+
+def _term_variants(term: str) -> list[str]:
+    variants = [term]
+    if term.endswith("ies") and len(term) > 4:
+        variants.append(f"{term[:-3]}y")
+    if term.endswith("es") and len(term) > 4:
+        variants.append(term[:-2])
+    if term.endswith("s") and len(term) > 3:
+        variants.append(term[:-1])
+    return variants
+
+
+def _extract_key_terms(question: str) -> list[str]:
+    tokens = [t.lower() for t in _TOKEN_RE.findall(question or "")]
+    terms = []
+    for t in tokens:
+        if t in _STOPWORDS:
+            continue
+        if len(t) < 3:
+            continue
+        if not any(ch.isalpha() for ch in t):
+            continue
+        terms.append(t)
+    return terms
+
+
+def _is_relationship_question(question: str) -> bool:
+    tokens = {t.lower() for t in _TOKEN_RE.findall(question or "")}
+    return any(t in _RELATIONSHIP_TERMS for t in tokens)
+
+
+def _is_unrelated_question(question: str, retrieved: list[Any]) -> bool:
+    terms = _extract_key_terms(question)
+    if not terms:
+        return False
+    text = " ".join(r.text for r in retrieved[: settings.max_context_chunks]).lower()
+    if not text:
+        return True
+    hits = 0
+    for term in terms:
+        if any(v in text for v in _term_variants(term)):
+            hits += 1
+
+    if hits == 0:
+        return True
+
+    if _is_relationship_question(question) and len(terms) >= 2:
+        return hits < len(terms)
+
+    if len(terms) <= 2:
+        return hits < 1
+
+    return (hits / len(terms)) < 0.6
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -294,6 +377,32 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
         }
         if debug:
             out["retrieval"] = []
+        return out
+
+    # If the retrieved chunks don't cover the question terms, treat as unrelated.
+    if _is_unrelated_question(question, retrieved):
+        out = {
+            "question": question,
+            "answer": "I don’t have enough evidence in the indexed sources to answer that.",
+            "refused": True,
+            "refusal_reason": "insufficient_evidence",
+            "provider": "policy",
+            "citations": [],
+        }
+        if debug:
+            out["retrieval"] = [
+                {
+                    "chunk_id": r.chunk_id,
+                    "doc_id": r.doc_id,
+                    "idx": r.idx,
+                    "score": r.score,
+                    "lexical_score": r.lexical_score,
+                    "vector_score": r.vector_score,
+                    "text_preview": r.text[:240],
+                    "text": r.text,
+                }
+                for r in retrieved
+            ]
         return out
 
     # --- Answer ---

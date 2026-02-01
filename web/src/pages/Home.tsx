@@ -49,15 +49,14 @@ export function HomePage() {
 
 
   const [chunkOpen, setChunkOpen] = React.useState(false)
-  const [selectedHit, setSelectedHit] = React.useState<NonNullable<QueryResponse['retrieval']>[number] | null>(null)
-
-  const openChunk = React.useCallback((hit: NonNullable<QueryResponse['retrieval']>[number]) => {
-    setSelectedHit(hit)
-    setChunkOpen(true)
-  }, [])
+  const [selectedChunk, setSelectedChunk] = React.useState<{
+    chunk: NonNullable<QueryResponse['retrieval']>[number] | null
+    citation: QueryCitation | null
+  } | null>(null)
 
   const citations = mutation.data?.citations ?? []
   const retrieval = mutation.data?.retrieval ?? []
+  const showEvidence = Boolean(mutation.data && !mutation.data.refused)
 
   // Highlight retrieved chunks that were actually cited in the final answer.
   // This improves transparency: "what did we retrieve" vs "what did we rely on".
@@ -65,13 +64,102 @@ export function HomePage() {
     return new Set((citations ?? []).map((c) => c.chunk_id))
   }, [citations])
 
+  const citationByChunkId = React.useMemo(() => {
+    const map = new Map<string, QueryCitation>()
+    for (const c of citations) map.set(c.chunk_id, c)
+    return map
+  }, [citations])
+
+  const openChunkFromRetrieval = React.useCallback(
+    (hit: NonNullable<QueryResponse['retrieval']>[number]) => {
+      setSelectedChunk({ chunk: hit, citation: citationByChunkId.get(hit.chunk_id) ?? null })
+      setChunkOpen(true)
+    },
+    [citationByChunkId],
+  )
+
+  const openChunkFromCitation = React.useCallback(
+    (citation: QueryCitation) => {
+      const hit =
+        retrieval.find((r) => r.chunk_id === citation.chunk_id) ??
+        retrieval.find((r) => r.doc_id === citation.doc_id && r.idx === citation.idx) ??
+        null
+      setSelectedChunk({ chunk: hit, citation })
+      setChunkOpen(true)
+    },
+    [retrieval],
+  )
+
+  const findQuoteSpan = React.useCallback((text: string, quote: string) => {
+    const cleanedQuote = quote.trim().replace(/\s+/g, ' ').toLowerCase()
+    if (!cleanedQuote) return null
+
+    let normalized = ''
+    const map: number[] = []
+    let inWs = false
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i]
+      if (/\s/.test(ch)) {
+        if (!inWs) {
+          normalized += ' '
+          map.push(i)
+          inWs = true
+        }
+        continue
+      }
+      normalized += ch.toLowerCase()
+      map.push(i)
+      inWs = false
+    }
+
+    const idx = normalized.indexOf(cleanedQuote)
+    if (idx === -1) return null
+    const start = map[idx] ?? 0
+    const end = (map[idx + cleanedQuote.length - 1] ?? start) + 1
+    return [start, end] as const
+  }, [])
+
+  const renderHighlighted = React.useCallback(
+    (text: string, quote?: string) => {
+      if (!quote) return text
+      const needle = quote.trim()
+      if (!needle) return text
+
+      const lowerText = text.toLowerCase()
+      const lowerNeedle = needle.toLowerCase()
+      let start = lowerText.indexOf(lowerNeedle)
+      let end = start === -1 ? -1 : start + needle.length
+
+      if (start === -1) {
+        const span = findQuoteSpan(text, needle)
+        if (span) {
+          ;[start, end] = span
+        }
+      }
+
+      if (start === -1) return text
+
+      return (
+        <>
+          {text.slice(0, start)}
+          <mark className="rounded bg-amber-200/70 px-1 text-foreground">
+            {text.slice(start, end)}
+          </mark>
+          {text.slice(end)}
+        </>
+      )
+    },
+    [findQuoteSpan],
+  )
+
   const citationCols = React.useMemo<ColumnDef<QueryCitation>[]>(() => {
     return [
       {
         header: '',
         id: 'view',
+        meta: { width: 96 },
         cell: ({ row }) => (
-          <Button variant="outline" size="sm" onClick={() => openChunk(row.original)}>
+          <Button variant="outline" size="sm" onClick={() => openChunkFromCitation(row.original)}>
             View
           </Button>
         ),
@@ -84,7 +172,7 @@ export function HomePage() {
         cell: (info) => {
           const v = String(info.getValue() ?? '')
           return v ? (
-            <span className="text-muted-foreground">{v.slice(0, 160)}{v.length > 160 ? '…' : ''}</span>
+            <span className="text-muted-foreground">{v.slice(0, 50)}{v.length > 50 ? '…' : ''}</span>
           ) : (
             <span className="text-muted-foreground">—</span>
           )
@@ -98,15 +186,16 @@ export function HomePage() {
         ),
       },
     ]
-  }, [])
+  }, [openChunkFromCitation])
 
   const retrievalCols = React.useMemo<ColumnDef<NonNullable<QueryResponse['retrieval']>[number]>[]>(() => {
     return [
       {
         header: '',
         id: 'view',
+        meta: { width: 96 },
         cell: ({ row }) => (
-          <Button variant="outline" size="sm" onClick={() => openChunk(row.original)}>
+          <Button variant="outline" size="sm" onClick={() => openChunkFromRetrieval(row.original)}>
             View
           </Button>
         ),
@@ -145,10 +234,17 @@ export function HomePage() {
       {
         header: 'Preview',
         accessorKey: 'text_preview',
-        cell: (info) => <span className="text-muted-foreground">{String(info.getValue())}</span>,
+        cell: (info) => {
+          const v = String(info.getValue() ?? '')
+          return v ? (
+            <span className="text-muted-foreground">{v.slice(0, 50)}{v.length > 50 ? '…' : ''}</span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )
+        },
       },
     ]
-  }, [openChunk])
+  }, [openChunkFromRetrieval])
 
   const meta = metaQ.data
 
@@ -215,6 +311,13 @@ export function HomePage() {
                       id={field.name}
                       value={field.state.value}
                       onChange={(e) => field.handleChange(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return
+                        if (e.shiftKey) return
+                        if (e.nativeEvent.isComposing) return
+                        e.preventDefault()
+                        form.handleSubmit()
+                      }}
                       placeholder="e.g., What does the demo say about PUBLIC_DEMO_MODE?"
                     />
                     {field.state.meta.errors?.length ? (
@@ -306,20 +409,22 @@ export function HomePage() {
                     <span className="font-mono">{mutation.data.refusal_reason}</span>
                   </div>
                 ) : null}
-                <div className="whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-sm leading-relaxed">
+                <div className="whitespace-pre-wrap rounded-md border border-primary/20 bg-muted/40 p-4 text-sm leading-relaxed shadow">
                   {mutation.data.answer}
                 </div>
 
-                <div className="space-y-2">
-                  <div className="text-sm font-medium">Citations</div>
-                  {citations.length ? (
-                    <DataTable<QueryCitation> data={citations} columns={citationCols} height={240} />
-                  ) : (
-                    <div className="text-sm text-muted-foreground">No citations returned.</div>
-                  )}
-                </div>
+                {showEvidence ? (
+                  <div className="space-y-2">
+                    <div className="text-sm font-medium">Citations</div>
+                    {citations.length ? (
+                      <DataTable<QueryCitation> data={citations} columns={citationCols} height={240} />
+                    ) : (
+                      <div className="text-sm text-muted-foreground">No citations returned.</div>
+                    )}
+                  </div>
+                ) : null}
 
-                {form.state.values.debug && retrieval.length ? (
+                {showEvidence && form.state.values.debug && retrieval.length ? (
                   <div className="space-y-2">
                     <div className="text-sm font-medium">Retrieval debug</div>
                     <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-3">
@@ -358,17 +463,27 @@ export function HomePage() {
           <DialogHeader>
             <DialogTitle>Retrieved chunk</DialogTitle>
             <DialogDescription>
-              {selectedHit ? (
+              {selectedChunk ? (
                 <span className="font-mono text-xs">
-                  {selectedHit.doc_id} / idx {selectedHit.idx} • score {Number(selectedHit.score).toFixed(4)}
+                  {selectedChunk.chunk?.doc_id ?? selectedChunk.citation?.doc_id ?? '—'} / idx{' '}
+                  {selectedChunk.chunk?.idx ?? selectedChunk.citation?.idx ?? '—'}
+                  {selectedChunk.chunk ? ` • score ${Number(selectedChunk.chunk.score).toFixed(4)}` : ''}
                 </span>
               ) : null}
             </DialogDescription>
           </DialogHeader>
           <div className="mt-3 max-h-[60vh] overflow-auto rounded-lg border bg-muted p-3">
-            <pre className="whitespace-pre-wrap text-sm leading-relaxed">
-{selectedHit ? (selectedHit.text ?? selectedHit.text_preview) : ''}
-            </pre>
+            <div className="whitespace-pre-wrap text-sm leading-relaxed">
+              {selectedChunk
+                ? renderHighlighted(
+                    selectedChunk.chunk?.text ??
+                      selectedChunk.chunk?.text_preview ??
+                      selectedChunk.citation?.quote ??
+                      '',
+                    selectedChunk.citation?.quote,
+                  )
+                : ''}
+            </div>
           </div>
         </DialogContent>
       </Dialog>

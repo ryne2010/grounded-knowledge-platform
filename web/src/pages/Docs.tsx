@@ -1,7 +1,7 @@
-import React from 'react'
+import { useDebouncedValue } from '@tanstack/react-pacer/debouncer'
 import { useQuery } from '@tanstack/react-query'
 import type { ColumnDef } from '@tanstack/react-table'
-import { useDebouncedValue } from '@tanstack/react-pacer/debouncer'
+import React from 'react'
 import { api, type Doc } from '../api'
 import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, DataTable, Input, Page } from '../portfolio-ui'
 
@@ -37,7 +37,7 @@ export function DocsPage() {
       title="Documents"
       description={
         <span>
-          Indexed documents available to retrieval. In public demo mode, these are open-source sample docs only.
+          Indexed documents available for retrieval. In public demo mode, these are open-source sample docs only.
         </span>
       }
       actions={
