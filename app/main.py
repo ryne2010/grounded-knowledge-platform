@@ -17,7 +17,16 @@ from .ingestion import ingest_file, ingest_text
 from .ratelimit import SlidingWindowRateLimiter
 from .retrieval import invalidate_cache, retrieve
 from .storage import connect, init_db, list_docs
-from .observability import Timer, configure_logging, log_http_request, parse_cloud_trace_context, request_id_from_headers
+from .observability import (
+    Timer,
+    configure_logging,
+    log_http_request,
+    parse_cloud_trace_context,
+    request_id_from_headers,
+)
+
+# NEW: lightweight injection/circumvention detection
+from .safety import detect_prompt_injection
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -29,7 +38,10 @@ app = FastAPI(title="Grounded Knowledge Platform", version="0.1.0")
 # Configure JSON logging early so Cloud Run/Cloud Logging parses fields.
 configure_logging()
 
-_limiter = SlidingWindowRateLimiter(window_s=settings.rate_limit_window_s, max_requests=settings.rate_limit_max_requests)
+_limiter = SlidingWindowRateLimiter(
+    window_s=settings.rate_limit_window_s,
+    max_requests=settings.rate_limit_max_requests,
+)
 
 
 @app.on_event("startup")
@@ -50,7 +62,9 @@ async def _request_middleware(request: Request, call_next):
 
     # Prefer X-Forwarded-For in managed environments (Cloud Run).
     xff = request.headers.get("x-forwarded-for")
-    remote_ip = (xff.split(",")[0].strip() if xff else None) or (request.client.host if request.client else "unknown")
+    remote_ip = (xff.split(",")[0].strip() if xff else None) or (
+        request.client.host if request.client else "unknown"
+    )
     user_agent = request.headers.get("user-agent", "")
 
     # Cloud Trace correlation (if present).
@@ -59,7 +73,6 @@ async def _request_middleware(request: Request, call_next):
     # ---- Demo safety controls (defense-in-depth) ----
     if settings.public_demo_mode and settings.rate_limit_enabled and request.url.path == "/api/query":
         if not _limiter.allow(remote_ip):
-            # Return explicitly so we can log and attach request ID.
             latency_ms = timer.ms()
             log_http_request(
                 request_id=rid,
@@ -75,13 +88,16 @@ async def _request_middleware(request: Request, call_next):
                 limited=True,
                 severity="WARNING",
             )
-            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"}, headers={"X-Request-Id": rid})
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded"},
+                headers={"X-Request-Id": rid},
+            )
 
     # ---- Normal request execution ----
     try:
         response = await call_next(request)
     except HTTPException as he:
-        # Log and re-raise so FastAPI builds the response.
         latency_ms = timer.ms()
         log_http_request(
             request_id=rid,
@@ -138,7 +154,6 @@ async def _request_middleware(request: Request, call_next):
 @app.exception_handler(HTTPException)
 async def _http_exception_handler(request: Request, exc: HTTPException):
     """Ensure error responses include X-Request-Id for correlation."""
-
     rid = getattr(request.state, "request_id", None)
     headers = {"X-Request-Id": rid} if rid else None
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=headers)
@@ -147,15 +162,9 @@ async def _http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(Exception)
 async def _unhandled_exception_handler(request: Request, exc: Exception):
     """Return a safe JSON 500 (and keep request correlation)."""
-
     rid = getattr(request.state, "request_id", None)
     headers = {"X-Request-Id": rid} if rid else None
-    # Don't leak internal exception details in a public demo.
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"}, headers=headers)
-
-
-# Frontend (React) is served from web/dist when present.
-# In dev, run `pnpm dev` in ./web and the Vite dev server will proxy API calls.
 
 
 # ---- API models ----
@@ -238,24 +247,99 @@ async def ingest_file_api(file: UploadFile = File(...)) -> dict[str, Any]:
 # ---- Query ----
 @app.post("/api/query")
 def query_api(req: QueryRequest) -> dict[str, Any]:
-    if len(req.question) > settings.max_question_chars:
+    """
+    Core query endpoint.
+
+    Staff-grade behaviors:
+      - prompt injection / circumvention refusal (defense-in-depth)
+      - citations-required grounding (refuse if no evidence)
+      - stable response contract (answer/refused/refusal_reason/citations/provider)
+    """
+    question = (req.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question is required")
+
+    if len(question) > settings.max_question_chars:
         raise HTTPException(status_code=400, detail=f"Question too long (max {settings.max_question_chars} chars)")
 
     # Clamp knobs for public demos.
     top_k = max(1, min(int(req.top_k or settings.top_k_default), settings.max_top_k))
     debug = bool(req.debug) and not settings.public_demo_mode
 
-    retrieved = retrieve(req.question, top_k=top_k)
+    # --- Prompt-injection/circumvention detection ---
+    inj = detect_prompt_injection(question)
+    if inj.is_injection:
+        return {
+            "question": question,
+            "answer": "I can’t help with that request. I can only answer questions using the provided sources.",
+            "refused": True,
+            "refusal_reason": f"prompt_injection:{','.join(inj.reasons)}",
+            "provider": "policy",
+            "citations": [],
+        }
+
+    # --- Retrieve ---
+    retrieved = retrieve(question, top_k=top_k)
     context = [(r.chunk_id, r.doc_id, r.idx, r.text) for r in retrieved]
+
+    # If nothing retrieved, refuse (no hallucinations).
+    if not context:
+        out: dict[str, Any] = {
+            "question": question,
+            "answer": "I don’t have enough evidence in the indexed sources to answer that.",
+            "refused": True,
+            "refusal_reason": "insufficient_evidence",
+            "provider": "policy",
+            "citations": [],
+        }
+        if debug:
+            out["retrieval"] = []
+        return out
+
+    # --- Answer ---
     answerer = get_answerer()
-    ans = answerer.answer(req.question, context)
+    ans = answerer.answer(question, context)
+
+    citations = [c.__dict__ for c in (ans.citations or [])]
+
+    # Enforce grounding (citations required).
+    # In public demo mode we are intentionally conservative: no citations => refuse.
+    if settings.public_demo_mode and not citations:
+        out: dict[str, Any] = {
+            "question": question,
+            "answer": "I don’t have enough evidence in the indexed sources to answer that.",
+            "refused": True,
+            "refusal_reason": "insufficient_evidence",
+            "provider": ans.provider,
+            "citations": [],
+        }
+        if debug:
+            out["retrieval"] = [
+                {
+                    "chunk_id": r.chunk_id,
+                    "doc_id": r.doc_id,
+                    "idx": r.idx,
+                    "score": r.score,
+                    "lexical_score": r.lexical_score,
+                    "vector_score": r.vector_score,
+                    "text_preview": r.text[:240],
+                }
+                for r in retrieved
+            ]
+        return out
+
+    # If the answerer itself refused, provide a reason for consistent contract.
+    refusal_reason = None
+    if bool(getattr(ans, "refused", False)):
+        refusal_reason = "answerer_refused"
 
     out: dict[str, Any] = {
-        "question": req.question,
+        "question": question,
         "answer": ans.text,
-        "refused": ans.refused,
+        "refused": bool(ans.refused),
+        "refusal_reason": refusal_reason,
         "provider": ans.provider,
-        "citations": [c.__dict__ for c in ans.citations],
+        "citations": citations,
     }
 
     if debug:

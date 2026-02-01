@@ -125,37 +125,46 @@ help:
 # - If you switch gcloud configs in this command, re-run your next make command in a fresh invocation.
 init:
 	$(call require,gcloud)
-	@set -e; \
+	@bash -euo pipefail -c '\
 	  echo "== Init: configure gcloud defaults =="; \
-	  # Optionally isolate this repo to a dedicated gcloud configuration (recommended for teams). \
-	  if [ -n "$(GCLOUD_CONFIG)" ]; then \
-	    if gcloud config configurations describe "$(GCLOUD_CONFIG)" >/dev/null 2>&1; then :; else \
-	      echo "Creating gcloud configuration: $(GCLOUD_CONFIG)"; \
-	      gcloud config configurations create "$(GCLOUD_CONFIG)" >/dev/null; \
-	    fi; \
-	    echo "Activating gcloud configuration: $(GCLOUD_CONFIG)"; \
-	    gcloud config configurations activate "$(GCLOUD_CONFIG)" >/dev/null; \
-	  fi; \
-	  # Resolve project/region from Make vars (preferred) or current gcloud config as a fallback. \
+	  cfg="$${GCLOUD_CONFIG:-}"; \
 	  proj="$(PROJECT_ID)"; \
-	  if [ -z "$$proj" ]; then proj=$$(gcloud config get-value project 2>/dev/null || true); fi; \
 	  region="$(REGION)"; \
+	  if [ -n "$$cfg" ]; then \
+	    if gcloud config configurations describe "$$cfg" >/dev/null 2>&1; then \
+	      :; \
+	    else \
+	      echo "Creating gcloud configuration: $$cfg"; \
+	      gcloud config configurations create "$$cfg" >/dev/null; \
+	    fi; \
+	    echo "Activating gcloud configuration: $$cfg"; \
+	    gcloud config configurations activate "$$cfg" >/dev/null; \
+	  fi; \
+	  if [ -z "$$proj" ]; then proj="$$(gcloud config get-value project 2>/dev/null || true)"; fi; \
+	  if [ -z "$$region" ]; then region="$$(gcloud config get-value run/region 2>/dev/null || true)"; fi; \
 	  if [ -z "$$proj" ]; then \
 	    echo "ERROR: PROJECT_ID is not set."; \
-	    echo "Fix: run 'make init PROJECT_ID=<your-project-id> REGION=<region>'"; \
+	    echo "Fix: make init PROJECT_ID=<your-project-id> REGION=<region> [GCLOUD_CONFIG=name]"; \
+	    exit 1; \
+	  fi; \
+	  if [ -z "$$region" ]; then \
+	    echo "ERROR: REGION is not set."; \
+	    echo "Fix: make init PROJECT_ID=<your-project-id> REGION=<region> [GCLOUD_CONFIG=name]"; \
 	    exit 1; \
 	  fi; \
 	  echo "Setting gcloud defaults..."; \
 	  gcloud config set project "$$proj" >/dev/null; \
 	  gcloud config set run/region "$$region" >/dev/null; \
-	  active=$$(gcloud config configurations list --filter=is_active:true --format='value(name)' 2>/dev/null | head -n1); \
+	  # Fix ADC quota project warning if ADC exists (non-fatal). \
+	  gcloud auth application-default set-quota-project "$$proj" >/dev/null 2>&1 || true; \
+	  active="$$(gcloud config configurations list --filter=is_active:true --format=value\(name\) 2>/dev/null | head -n1)"; \
 	  echo ""; \
 	  echo "Configured:"; \
 	  echo "  project: $$proj"; \
 	  echo "  region:  $$region"; \
 	  echo "  gcloud config: $${active:-default}"; \
 	  echo ""; \
-	  acct=$$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -n1 || true); \
+	  acct="$$(gcloud auth list --filter=status:ACTIVE --format=value\(account\) 2>/dev/null | head -n1 || true)"; \
 	  if [ -z "$$acct" ]; then \
 	    echo "Auth status: not logged in"; \
 	    echo "Next: make auth"; \
@@ -167,7 +176,9 @@ init:
 	  echo "  make doctor"; \
 	  echo "  make deploy"; \
 	  echo ""; \
-	  echo "Tip: if you changed gcloud configs, run the next make command in a fresh invocation."
+	  echo "Tip: if you changed gcloud configs, run the next make command in a fresh invocation." \
+	'
+
 
 # Interactive auth helper (explicit on purpose).
 # This will open browser windows for OAuth flows.
