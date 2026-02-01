@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deploy a safety-first public demo to Cloud Run.
+# Deploy a safety-first public demo to Cloud Run using gcloud.
 #
-# Notes:
-# - This uses `gcloud run deploy --source .` which triggers Cloud Build.
-# - For many personal demos, Cloud Run usage can stay near the free tier, but you should still set a budget.
+# This is an OPTIONAL alternative to the Terraform workflow.
+# Prefer Terraform for team workflows / repeatability (remote state, reviewable plans).
 
 : "${GCP_PROJECT:?Set GCP_PROJECT}"
 : "${GCP_REGION:=us-central1}"
-: "${SERVICE_NAME:=grounded-kp-demo}"
+: "${ENV:=dev}"
+: "${SERVICE_NAME:=gkp-${ENV}}"
 
-gcloud config set project "$GCP_PROJECT"
+# Recommended: keep your CLI pointed at the right project to avoid mistakes.
+gcloud config set project "$GCP_PROJECT" >/dev/null
 
 gcloud run deploy "$SERVICE_NAME" \
   --source . \

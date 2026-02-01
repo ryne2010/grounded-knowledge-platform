@@ -1,5 +1,24 @@
 # Grounded Knowledge Platform (RAG) — citations-first, eval-driven
 
+## Quickstart (team workflow)
+
+Run a prerequisite/config check (recommended first step):
+
+```bash
+make doctor
+```
+
+For a team-friendly GCP demo deploy (one-time setup, then deploy):
+
+```bash
+make init GCLOUD_CONFIG=personal-portfolio PROJECT_ID=YOUR_PROJECT_ID REGION=us-central1
+make auth    # only needed once per machine/user
+make deploy
+```
+
+- Local dev: `make` is optional — see the README sections below for `uv`/`pnpm` commands.
+- GCP demo deploy (safe defaults): `make deploy`
+
 A small, production-minded reference implementation of a **grounded knowledge system**.
 
 **Design goals**
@@ -82,8 +101,7 @@ curl -s http://localhost:8080/api/query \
 To run a **public-facing** demo safely:
 
 ```bash
-export PUBLIC_DEMO_MODE=1
-uv run uvicorn app.main:app --port 8080
+PUBLIC_DEMO_MODE=1 uv run uvicorn app.main:app --port 8080
 ```
 
 When enabled, the service:
@@ -182,31 +200,43 @@ docker build -t grounded-kp -f docker/Dockerfile .
 docker run -p 8080:8080 grounded-kp
 ```
 
-## Deploy (Cloud Run) for a low-cost public demo
+## Deploy to GCP Cloud Run (team-ready, IaC-first)
 
 Cloud Run can scale to zero and has a generous free tier. You can typically keep a personal demo at or near $0/month,
 but you should still set budgets/alerts.
 
-High-level idea:
-- build a container image
-- deploy to Cloud Run with `--min-instances=0`
-- set `PUBLIC_DEMO_MODE=1` so uploads are disabled
+This repo includes a **staff-level Makefile workflow** that:
+- uses **remote Terraform state** (GCS)
+- builds images via **Cloud Build** (consistent, macOS-friendly)
+- deploys Cloud Run with **safe demo defaults** (`PUBLIC_DEMO_MODE=1`)
+- supports **plan/apply separation**
 
-### Option A: one-command demo deploy (gcloud)
+### One-time: set gcloud defaults
 
 ```bash
-export GCP_PROJECT=your-project-id
-export GCP_REGION=us-central1
-scripts/deploy_cloud_run_demo.sh
+gcloud auth login
+gcloud auth application-default login
+gcloud config set project YOUR_PROJECT_ID
+gcloud config set run/region us-central1
 ```
 
-### Option B: Terraform (recommended for portfolio/IaC)
+### Deploy (one command)
 
-See: `infra/gcp/cloud_run_demo/`
+```bash
+make deploy
+```
 
-This uses the same baseline modules as the rest of the portfolio and includes:
-- optional (disabled by default) Serverless VPC Access connector
-- scale-to-zero defaults + max instance cap
+### Plan/apply separation
+
+```bash
+make plan
+make apply
+```
+
+See:
+- `docs/DEPLOY_GCP.md`
+- `docs/TEAM_WORKFLOW.md`
+
 
 ### Safety checklist
 

@@ -1,79 +1,72 @@
-# Cloud Run demo deployment (Terraform)
+# Cloud Run deployment (Terraform) — Grounded Knowledge Platform
 
-This folder shows how to deploy the **Grounded Knowledge Platform** to **Cloud Run** using the
-same **baseline Terraform modules** used across the portfolio.
+This Terraform root deploys the **Grounded Knowledge Platform** API to **Cloud Run** using the same “platform baseline” patterns used across the portfolio.
 
-Emphasis:
-- **Safe public demo defaults** (`PUBLIC_DEMO_MODE=1`, no uploads)
-- **Scale-to-zero** (min instances `0`)
-- **Cost guardrails** (max instances `1`)
+What this demonstrates (staff-level):
+- **Remote Terraform state** (GCS backend)
+- **Plan/apply separation** (PR-friendly)
+- **Safe public demo defaults** (`PUBLIC_DEMO_MODE=1`, no uploads, extractive-only)
+- **Scale-to-zero** (min instances 0)
+- **Cost guardrails** (max instances cap)
+- macOS-friendly **Cloud Build** based image builds
 - Optional (disabled by default): **Serverless VPC Access connector**
-
-> Note: the VPC connector is *not* free. Keep it disabled for a near-$0 demo.
-
----
-
-## Prereqs
-
-- Terraform >= 1.5
-- `gcloud` authenticated (`gcloud auth application-default login`)
-- A GCP project with billing enabled
+- Optional: **Workspace IAM starter pack** (Google Groups → roles)
+- **Observability as code** (small dashboard + alert policies)
 
 ---
 
-## Quickstart
+## Recommended workflow
 
-### 1) Initialize
-
-```bash
-cd infra/gcp/cloud_run_demo
-terraform init
-```
-
-### 2) Plan/apply
-
-You must provide an image URI. The module will also create an Artifact Registry repo for you.
+Use the repo root Makefile:
 
 ```bash
-terraform apply \
-  -var="project_id=YOUR_PROJECT_ID" \
-  -var="region=us-central1" \
-  -var="image=us-central1-docker.pkg.dev/YOUR_PROJECT_ID/gkp/grounded-kp:latest"
+make deploy
 ```
 
-### 3) Build + push the image
-
-From the repo root:
+Or use plan/apply separation:
 
 ```bash
-gcloud auth configure-docker us-central1-docker.pkg.dev
-
-IMAGE="us-central1-docker.pkg.dev/YOUR_PROJECT_ID/gkp/grounded-kp:latest"
-docker build -t "$IMAGE" -f docker/Dockerfile .
-docker push "$IMAGE"
+make plan
+make apply
 ```
 
-Re-run `terraform apply` if needed.
+More details:
+- `../../docs/DEPLOY_GCP.md`
+- `../../docs/TEAM_WORKFLOW.md`
+- `../../docs/IAM_STARTER_PACK.md`
+- `../../docs/OBSERVABILITY.md`
+
+---
+
+## Remote state
+
+This root includes `backend.tf`:
+
+```hcl
+terraform { backend "gcs" {} }
+```
+
+Backend config (`bucket`/`prefix`) is passed at init time by the Makefile so this code stays environment-agnostic.
+
+---
+
+## Team IAM (Google Groups)
+
+Set `workspace_domain` to enable the in-repo IAM starter pack.
+
+Expected groups (by default):
+- `gkp-clients-observers@<domain>`
+- `gkp-engineers-min@<domain>`
+- `gkp-engineers@<domain>`
+- `gkp-auditors@<domain>`
+- `gkp-platform-admins@<domain>`
+
+See `docs/IAM_STARTER_PACK.md` for the full role matrix.
 
 ---
 
 ## Optional: VPC connector
 
-If you want to demonstrate a *private networking* deployment path (e.g., Cloud Run → private DB),
-enable the connector:
+If you want to demonstrate private networking (Cloud Run → private IP resources), enable `enable_vpc_connector`.
 
-```bash
-terraform apply \
-  -var="project_id=YOUR_PROJECT_ID" \
-  -var="enable_vpc_connector=true"
-```
-
-This will create a VPC + Serverless VPC Access connector and attach it to the Cloud Run service.
-
----
-
-## Outputs
-
-- `service_url` — public URL
-- `artifact_repo` — Artifact Registry repo ID
-- `runtime_service_account` — Cloud Run runtime service account email
+> Note: Serverless VPC Access connectors are not free.
