@@ -18,12 +18,14 @@ export type QueryCitation = {
   chunk_id: string
   doc_id: string
   idx: number
+  quote?: string
 }
 
 export type QueryResponse = {
   question: string
   answer: string
   refused: boolean
+  refusal_reason?: string | null
   provider: string
   citations: QueryCitation[]
   retrieval?: Array<{
@@ -34,6 +36,7 @@ export type QueryResponse = {
     lexical_score: number | null
     vector_score: number | null
     text_preview: string
+    text?: string
   }>
 }
 

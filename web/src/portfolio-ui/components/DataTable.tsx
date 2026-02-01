@@ -13,6 +13,11 @@ export type DataTableProps<T> = {
   columns: ColumnDef<T, any>[]
   height?: number
   className?: string
+  /**
+   * Optional row class hook to highlight rows (e.g., cited chunks, alerts).
+   * Keep this UI-only so it can be shared via git subtree without backend coupling.
+   */
+  getRowClassName?: (row: T) => string
 }
 
 export function DataTable<T>(props: DataTableProps<T>) {
@@ -61,10 +66,14 @@ export function DataTable<T>(props: DataTableProps<T>) {
         >
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const row = rows[virtualRow.index]
+            const extraRowClass = props.getRowClassName ? props.getRowClassName(row.original as T) : ''
             return (
               <tr
                 key={row.id}
-                className="absolute left-0 right-0 border-b last:border-b-0 hover:bg-accent/50"
+                className={cn(
+                  'absolute left-0 right-0 border-b last:border-b-0 hover:bg-accent/50',
+                  extraRowClass,
+                )}
                 style={{ transform: `translateY(${virtualRow.start}px)` }}
               >
                 {row.getVisibleCells().map((cell) => (

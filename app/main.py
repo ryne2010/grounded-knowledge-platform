@@ -323,6 +323,7 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
                     "lexical_score": r.lexical_score,
                     "vector_score": r.vector_score,
                     "text_preview": r.text[:240],
+                    "text": r.text,
                 }
                 for r in retrieved
             ]
@@ -352,6 +353,7 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
                 "lexical_score": r.lexical_score,
                 "vector_score": r.vector_score,
                 "text_preview": r.text[:240],
+                    "text": r.text,
             }
             for r in retrieved
         ]
