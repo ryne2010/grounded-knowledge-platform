@@ -40,7 +40,7 @@ COPY pyproject.toml ./
 
 # If you generate a lockfile locally (`uv lock`), feel free to copy it into the image
 # to make builds more reproducible.
-# COPY uv.lock ./
+COPY uv.lock ./
 
 # Install only runtime deps into /opt/venv
 RUN uv sync --no-dev --no-install-project

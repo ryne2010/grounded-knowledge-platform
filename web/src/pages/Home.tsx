@@ -2,7 +2,7 @@ import React from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useForm } from '@tanstack/react-form'
 import type { ColumnDef } from '@tanstack/react-table'
-import { api, type QueryCitation, type QueryResponse } from '../api'
+import { api, type IngestTextRequest, type QueryCitation, type QueryResponse } from '../api'
 import {
   Badge,
   Button,
@@ -13,6 +13,7 @@ import {
   CardTitle,
   Checkbox,
   DataTable,
+  Input,
   Label,
   Page,
   RangeSlider,
@@ -36,6 +37,14 @@ export function HomePage() {
     mutationFn: api.query,
   })
 
+  const fileMutation = useMutation({
+    mutationFn: api.ingestFile,
+  })
+
+  const textMutation = useMutation({
+    mutationFn: api.ingestText,
+  })
+
   const form = useForm({
     defaultValues: {
       question: '',
@@ -53,6 +62,13 @@ export function HomePage() {
     chunk: NonNullable<QueryResponse['retrieval']>[number] | null
     citation: QueryCitation | null
   } | null>(null)
+
+  const [uploadFile, setUploadFile] = React.useState<File | null>(null)
+  const [textTitle, setTextTitle] = React.useState('')
+  const [textSource, setTextSource] = React.useState('')
+  const [textBody, setTextBody] = React.useState('')
+  const [textDocId, setTextDocId] = React.useState('')
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   const citations = mutation.data?.citations ?? []
   const retrieval = mutation.data?.retrieval ?? []
@@ -247,6 +263,7 @@ export function HomePage() {
   }, [openChunkFromRetrieval])
 
   const meta = metaQ.data
+  const uploadsEnabled = Boolean(meta?.uploads_enabled)
 
   const _didInitDebug = React.useRef(false)
   React.useEffect(() => {
@@ -284,103 +301,226 @@ export function HomePage() {
       }
     >
       <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Question</CardTitle>
-            <CardDescription>Submit a question. The answer will include citations, or refuse when unsupported.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <form
-              onSubmit={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                form.handleSubmit()
-              }}
-              className="space-y-4"
-            >
-              <form.Field
-                name="question"
-                validators={{
-                  onSubmit: ({ value }) => (!value?.trim() ? 'Question is required' : undefined),
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Question</CardTitle>
+              <CardDescription>Submit a question. The answer will include citations, or refuse when unsupported.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  form.handleSubmit()
                 }}
+                className="space-y-4"
               >
-                {(field) => (
-                  <div className="space-y-2">
-                    <Label htmlFor={field.name}>Question</Label>
-                    <Textarea
-                      id={field.name}
+                <form.Field
+                  name="question"
+                  validators={{
+                    onSubmit: ({ value }) => (!value?.trim() ? 'Question is required' : undefined),
+                  }}
+                >
+                  {(field) => (
+                    <div className="space-y-2">
+                      <Label htmlFor={field.name}>Question</Label>
+                      <Textarea
+                        id={field.name}
+                        value={field.state.value}
+                        onChange={(e) => field.handleChange(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter') return
+                          if (e.shiftKey) return
+                          if (e.nativeEvent.isComposing) return
+                          e.preventDefault()
+                          form.handleSubmit()
+                        }}
+                        placeholder="e.g., What does the demo say about PUBLIC_DEMO_MODE?"
+                      />
+                      {field.state.meta.errors?.length ? (
+                        <div className="text-xs text-destructive">{field.state.meta.errors.join(', ')}</div>
+                      ) : null}
+                    </div>
+                  )}
+                </form.Field>
+
+                <form.Field name="top_k">
+                  {(field) => (
+                    <RangeSlider
+                      min={2}
+                      max={12}
+                      step={1}
                       value={field.state.value}
-                      onChange={(e) => field.handleChange(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key !== 'Enter') return
-                        if (e.shiftKey) return
-                        if (e.nativeEvent.isComposing) return
+                      onChange={(v) => field.handleChange(v)}
+                      label="Top-K chunks"
+                      format={(n) => `${n}`}
+                    />
+                  )}
+                </form.Field>
+                {meta?.public_demo_mode ? null : (
+                  <form.Field name="debug">
+                    {(field) => (
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          checked={field.state.value}
+                          onChange={(e) => field.handleChange((e.target as HTMLInputElement).checked)}
+                          disabled={Boolean(meta?.public_demo_mode)}
+                        />
+                        <Label>
+                          Include retrieval debug{' '}
+                          {meta?.public_demo_mode ? <span className="text-muted-foreground">(disabled in public demo)</span> : null}
+                        </Label>
+                      </div>
+                    )}
+                  </form.Field>
+                )}
+
+                <Button type="submit" disabled={mutation.isPending} className="w-full">
+                  {mutation.isPending ? 'Running…' : 'Ask'}
+                </Button>
+              </form>
+
+              {mutation.isError ? (
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+                  <div className="font-medium">Request failed</div>
+                  <div className="text-muted-foreground">{(mutation.error as Error).message}</div>
+                </div>
+              ) : null}
+
+              {mutation.data ? (
+                <div className="text-xs text-muted-foreground">
+                  Provider: <span className="font-mono">{mutation.data.provider}</span> •{' '}
+                  {meta?.public_demo_mode ? 'Public demo mode' : 'Normal mode'} •{' '}
+                  {formatEpochSeconds(Math.floor(Date.now() / 1000))}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Upload</CardTitle>
+              <CardDescription>Add documents to the index. Supports .txt, .md, and .pdf.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {!meta ? <div className="text-sm text-muted-foreground">Loading…</div> : null}
+              {meta && !uploadsEnabled ? (
+                <div className="text-sm text-muted-foreground">
+                  Uploads are disabled in this deployment.
+                </div>
+              ) : null}
+              {uploadsEnabled ? (
+                <>
+                  <div className="space-y-3">
+                    <div className="text-sm font-medium">Upload file</div>
+                    <form
+                      onSubmit={async (e) => {
                         e.preventDefault()
-                        form.handleSubmit()
+                        if (!uploadFile) return
+                        await fileMutation.mutateAsync(uploadFile)
+                        setUploadFile(null)
+                        if (fileInputRef.current) fileInputRef.current.value = ''
                       }}
-                      placeholder="e.g., What does the demo say about PUBLIC_DEMO_MODE?"
-                    />
-                    {field.state.meta.errors?.length ? (
-                      <div className="text-xs text-destructive">{field.state.meta.errors.join(', ')}</div>
-                    ) : null}
+                      className="space-y-3"
+                    >
+                      <Input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".txt,.md,.pdf"
+                        disabled={fileMutation.isPending}
+                        onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+                      />
+                      <div className="flex items-center gap-3">
+                        <Button type="submit" disabled={!uploadFile || fileMutation.isPending}>
+                          {fileMutation.isPending ? 'Uploading…' : 'Upload file'}
+                        </Button>
+                        {uploadFile ? (
+                          <span className="text-xs text-muted-foreground">{uploadFile.name}</span>
+                        ) : null}
+                      </div>
+                      {fileMutation.isError ? (
+                        <div className="text-xs text-destructive">{(fileMutation.error as Error).message}</div>
+                      ) : null}
+                      {fileMutation.isSuccess ? (
+                        <div className="text-xs text-muted-foreground">
+                          Ingested {fileMutation.data.doc_id} ({fileMutation.data.num_chunks} chunks).
+                        </div>
+                      ) : null}
+                    </form>
                   </div>
-                )}
-              </form.Field>
 
-              <form.Field name="top_k">
-                {(field) => (
-                  <RangeSlider
-                    min={2}
-                    max={12}
-                    step={1}
-                    value={field.state.value}
-                    onChange={(v) => field.handleChange(v)}
-                    label="Top-K chunks"
-                    format={(n) => `${n}`}
-                  />
-                )}
-              </form.Field>
-              {meta?.public_demo_mode ? null : (
-
-
-              <form.Field name="debug">
-                {(field) => (
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      checked={field.state.value}
-                      onChange={(e) => field.handleChange((e.target as HTMLInputElement).checked)}
-                      disabled={Boolean(meta?.public_demo_mode)}
-                    />
-                    <Label>
-                      Include retrieval debug{' '}
-                      {meta?.public_demo_mode ? <span className="text-muted-foreground">(disabled in public demo)</span> : null}
-                    </Label>
+                  <div className="space-y-3">
+                    <div className="text-sm font-medium">Paste text</div>
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault()
+                        if (!textTitle.trim() || !textSource.trim() || !textBody.trim()) return
+                        const payload: IngestTextRequest = {
+                          title: textTitle.trim(),
+                          source: textSource.trim(),
+                          text: textBody.trim(),
+                          doc_id: textDocId.trim() || undefined,
+                        }
+                        await textMutation.mutateAsync(payload)
+                        setTextTitle('')
+                        setTextSource('')
+                        setTextBody('')
+                        setTextDocId('')
+                      }}
+                      className="space-y-3"
+                    >
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>Title</Label>
+                          <Input value={textTitle} onChange={(e) => setTextTitle(e.target.value)} placeholder="Quarterly report" />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Source</Label>
+                          <Input value={textSource} onChange={(e) => setTextSource(e.target.value)} placeholder="internal:reports/q1" />
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Doc ID (optional)</Label>
+                        <Input value={textDocId} onChange={(e) => setTextDocId(e.target.value)} placeholder="optional-stable-id" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Text</Label>
+                        <Textarea
+                          value={textBody}
+                          onChange={(e) => setTextBody(e.target.value)}
+                          placeholder="Paste the content to ingest…"
+                          rows={6}
+                        />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Button
+                          type="submit"
+                          disabled={
+                            textMutation.isPending ||
+                            !textTitle.trim() ||
+                            !textSource.trim() ||
+                            !textBody.trim()
+                          }
+                        >
+                          {textMutation.isPending ? 'Ingesting…' : 'Ingest text'}
+                        </Button>
+                      </div>
+                      {textMutation.isError ? (
+                        <div className="text-xs text-destructive">{(textMutation.error as Error).message}</div>
+                      ) : null}
+                      {textMutation.isSuccess ? (
+                        <div className="text-xs text-muted-foreground">
+                          Ingested {textMutation.data.doc_id} ({textMutation.data.num_chunks} chunks).
+                        </div>
+                      ) : null}
+                    </form>
                   </div>
-                )}
-              </form.Field>
-              )}
-
-              <Button type="submit" disabled={mutation.isPending} className="w-full">
-                {mutation.isPending ? 'Running…' : 'Ask'}
-              </Button>
-            </form>
-
-            {mutation.isError ? (
-              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
-                <div className="font-medium">Request failed</div>
-                <div className="text-muted-foreground">{(mutation.error as Error).message}</div>
-              </div>
-            ) : null}
-
-            {mutation.data ? (
-              <div className="text-xs text-muted-foreground">
-                Provider: <span className="font-mono">{mutation.data.provider}</span> •{' '}
-                {meta?.public_demo_mode ? 'Public demo mode' : 'Normal mode'} •{' '}
-                {formatEpochSeconds(Math.floor(Date.now() / 1000))}
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
+                </>
+              ) : null}
+            </CardContent>
+          </Card>
+        </div>
 
         <Card>
           <CardHeader>

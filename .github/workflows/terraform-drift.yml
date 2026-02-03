@@ -29,6 +29,11 @@ jobs:
       TF_VAR_region: ${{ vars.REGION }}
       TF_VAR_env: ${{ inputs.env || 'dev' }}
       TF_VAR_service_name: "gkp-${{ inputs.env || 'dev' }}"
+      TF_VAR_image: ${{ vars.IMAGE }}
+      TF_VAR_workspace_domain: ${{ vars.WORKSPACE_DOMAIN }}
+      TF_VAR_group_prefix: ${{ vars.GROUP_PREFIX }}
+      TF_VAR_enable_project_iam: ${{ vars.ENABLE_PROJECT_IAM }}
+
 
     steps:
       - uses: actions/checkout@v4

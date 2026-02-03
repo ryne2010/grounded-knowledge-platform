@@ -1,0 +1,9 @@
+substitutions:
+  _IMAGE: ""
+
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["build", "-t", "${_IMAGE}", "-f", "docker/Dockerfile", "."]
+
+images:
+  - "${_IMAGE}"
