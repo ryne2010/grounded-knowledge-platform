@@ -112,6 +112,11 @@ This repo includes keyless GitHub Actions workflows (WIF, no long-lived keys):
 - `.github/workflows/terraform-apply-gcp.yml`
 - `.github/workflows/terraform-drift.yml`
 
+Notes:
+- `gcp-build-and-deploy.yml` runs on `push` to `main` (and can be run manually). It uses path filters, so doc-only changes won't trigger a deploy.
+- `gcp-terraform-plan.yml` and `terraform-apply-gcp.yml` are `workflow_dispatch` (manual) by design.
+- `terraform-drift.yml` runs on a weekly schedule and can also be run manually.
+
 To enable:
 - Bootstrap WIF with `infra/gcp/wif_bootstrap/`
 - Set GitHub Environment variables as described in `docs/WIF_GITHUB_ACTIONS.md`

@@ -13,9 +13,11 @@ on:
 
 jobs:
   drift:
-    if: ${{ vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != '' && vars.GCP_TF_CONFIG_GCS_PATH != '' }}
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env || 'dev' }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.env || 'dev' }}
+    concurrency:
+      group: terraform-drift-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.env || 'dev' }}
+      cancel-in-progress: true
     permissions:
       contents: read
       id-token: write
@@ -23,16 +25,30 @@ jobs:
     env:
       TF_DIR: infra/gcp/cloud_run_demo
       TF_CONFIG_GCS_PATH: ${{ vars.GCP_TF_CONFIG_GCS_PATH }}
-
+      GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+      GCP_WIF_SERVICE_ACCOUNT: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
 
     steps:
+      - name: Assert required GitHub Environment variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "These must be set at: Repo → Settings → Environments → <env> → Variables"
+          test -n "${GCP_WIF_PROVIDER}" || { echo "::error::Missing env var: GCP_WIF_PROVIDER"; exit 1; }
+          test -n "${GCP_WIF_SERVICE_ACCOUNT}" || { echo "::error::Missing env var: GCP_WIF_SERVICE_ACCOUNT"; exit 1; }
+          test -n "${TF_CONFIG_GCS_PATH}" || { echo "::error::Missing env var: GCP_TF_CONFIG_GCS_PATH"; exit 1; }
+
+          echo "WIF provider is set (length: ${#GCP_WIF_PROVIDER})"
+          echo "WIF service account: ${GCP_WIF_SERVICE_ACCOUNT}"
+          echo "Terraform config path: ${TF_CONFIG_GCS_PATH}"
+
       - uses: actions/checkout@v4
 
       - name: Auth to Google Cloud (WIF)
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_WIF_SERVICE_ACCOUNT }}
 
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2

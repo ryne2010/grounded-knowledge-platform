@@ -75,6 +75,10 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
   --role="roles/owner"
 ```
 
+IAM prompt gotcha:
+- If `gcloud` prompts you to select an IAM condition (because your project already has conditional bindings),
+  choose **`None`** to add an unconditional binding.
+
 More “production-ish” (still broad, but avoids full Owner):
 
 ```bash
