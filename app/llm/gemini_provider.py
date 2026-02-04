@@ -65,11 +65,16 @@ class GeminiAnswerer:
         try:
             parsed = json.loads(text)
         except Exception:
-            citations = [
+            fallback_citations = [
                 Citation(chunk_id=c[0], doc_id=c[1], idx=c[2], quote=c[3][:300])
                 for c in context[: min(3, len(context))]
             ]
-            return Answer(text=text.strip() or "Unable to parse model output.", citations=citations, refused=False, provider=self.name)
+            return Answer(
+                text=text.strip() or "Unable to parse model output.",
+                citations=fallback_citations,
+                refused=False,
+                provider=self.name,
+            )
 
         refused = bool(parsed.get("refused", False))
         answer = str(parsed.get("answer", "")).strip()

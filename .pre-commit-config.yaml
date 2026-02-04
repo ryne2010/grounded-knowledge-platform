@@ -20,6 +20,13 @@ repos:
         additional_dependencies:
           - ruff==0.14.14
 
+      - id: mypy
+        name: mypy (typecheck)
+        # Use the repo venv so mypy can resolve third-party imports without re-installing the whole world in pre-commit.
+        entry: .venv/bin/mypy app
+        language: system
+        pass_filenames: false
+
   # Terraform formatting only (keeps commit-time checks fast; validation still happens in CI).
   - repo: local
     hooks:

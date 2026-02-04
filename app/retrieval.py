@@ -130,7 +130,7 @@ def _lexical_scores_bm25(tokenized_chunks: list[list[str]], query: str) -> dict[
     Returns dict chunk_index -> lexical_score in [0,1].
     """
     try:
-        from rank_bm25 import BM25Okapi
+        from rank_bm25 import BM25Okapi  # type: ignore[import-untyped]
     except Exception:
         q = set(_tokenize(query))
         if not q:

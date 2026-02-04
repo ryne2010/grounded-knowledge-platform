@@ -64,4 +64,4 @@ jobs:
           docker run --rm -v "${{ github.workspace }}:/project" -w /project openpolicyagent/conftest:latest test \
             --parser hcl2 \
             --policy infra/gcp/policy \
-            $(find "${TF_DIR}" -type f -name "*.tf" -not -path "${TF_DIR}/.terraform/*")
+            $(find "${TF_DIR}" -path "${TF_DIR}/.terraform" -prune -o -type f -name "*.tf" -print)

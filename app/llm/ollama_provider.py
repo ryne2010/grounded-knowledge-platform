@@ -86,12 +86,14 @@ class OllamaAnswerer:
             )
             r.raise_for_status()
             data = r.json()
-            text = (
-                (data.get("message") or {}).get("content")
-                if isinstance(data, dict)
-                else ""
-            )
-            text = (text or "").strip()
+            content: str = ""
+            if isinstance(data, dict):
+                message = data.get("message")
+                if isinstance(message, dict):
+                    message_content = message.get("content")
+                    if isinstance(message_content, str):
+                        content = message_content
+            text = content.strip()
         except Exception:
             # If Ollama is unavailable, gracefully fall back to the local extractive answerer.
             return ExtractiveAnswerer().answer(question, context)
@@ -101,13 +103,13 @@ class OllamaAnswerer:
             parsed = json.loads(text)
         except Exception:
             # Model didn't return JSON; fall back to plain text + top citations
-            citations = [
+            fallback_citations = [
                 Citation(chunk_id=c[0], doc_id=c[1], idx=c[2], quote=c[3][:300])
                 for c in context[: min(3, len(context))]
             ]
             return Answer(
                 text=text or "Unable to parse model output.",
-                citations=citations,
+                citations=fallback_citations,
                 refused=False,
                 provider=self.name,
             )

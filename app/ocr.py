@@ -24,7 +24,7 @@ def extract_text_from_pdf(path: str | Path) -> PdfTextResult:
 
     path = Path(path)
     try:
-        import fitz  # PyMuPDF
+        import fitz  # type: ignore[import-untyped]  # PyMuPDF
     except Exception as e:
         raise RuntimeError("PDF support requires `PyMuPDF` (package: pymupdf).") from e
 
@@ -52,7 +52,7 @@ def extract_text_from_pdf(path: str | Path) -> PdfTextResult:
 def _ocr_page(page) -> str:
     """OCR a PyMuPDF page using Tesseract (via pytesseract)."""
     try:
-        import pytesseract
+        import pytesseract  # type: ignore[import-untyped]
         from PIL import Image
     except Exception as e:
         raise RuntimeError(

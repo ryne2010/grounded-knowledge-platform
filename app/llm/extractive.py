@@ -24,13 +24,13 @@ class ExtractiveAnswerer:
             )
 
         q_terms = set(re.findall(r"[A-Za-z0-9_]+", question.lower()))
-        chosen = []
+        chosen: list[str] = []
         citations: list[Citation] = []
 
         for chunk_id, doc_id, idx, text in context[:3]:
             # Pick up to 2 sentences that overlap with question terms
             sents = _SENT_RE.split(text.strip())
-            picked = []
+            picked: list[str] = []
             for s in sents:
                 if len(picked) >= 2:
                     break

@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 # Load a local .env for developer convenience.
 # - Does NOT override already-set environment variables (CI/Cloud Run wins)
 # - Safe: if .env doesn't exist, no-op
+load_dotenv: Callable[..., object] | None
 try:
-    from dotenv import load_dotenv  # python-dotenv
+    from dotenv import load_dotenv as _load_dotenv  # python-dotenv
 except Exception:  # pragma: no cover
     load_dotenv = None
+else:
+    load_dotenv = _load_dotenv
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]  # repo root (where .env lives)
 _ENV_PATH = _REPO_ROOT / ".env"

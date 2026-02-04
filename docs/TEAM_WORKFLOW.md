@@ -32,12 +32,15 @@ Notes:
 
 This repo includes a `pre-commit` configuration (`.pre-commit-config.yaml`) that runs:
 - `ruff` (Python lint)
+- `mypy` (Python typecheck)
 - `terraform fmt -check` (infra formatting)
 - basic YAML + whitespace sanity checks
 
 Setup (one-time per machine):
 
 ```bash
+uv sync --dev
+
 brew install pre-commit
 pre-commit install
 ```

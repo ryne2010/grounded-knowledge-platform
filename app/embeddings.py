@@ -64,7 +64,10 @@ class SentenceTransformerEmbedder:
 
         self.model = SentenceTransformer(model_name)
         try:
-            self.dim = int(self.model.get_sentence_embedding_dimension())
+            dim = self.model.get_sentence_embedding_dimension()
+            if dim is None:
+                raise ValueError("embedding dimension is None")
+            self.dim = int(dim)
         except Exception:
             self.dim = int(self.model.encode(["test"], normalize_embeddings=True).shape[1])
 

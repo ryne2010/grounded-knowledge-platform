@@ -367,7 +367,7 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
 
     # If nothing retrieved, refuse (no hallucinations).
     if not context:
-        out: dict[str, Any] = {
+        out_no_context: dict[str, Any] = {
             "question": question,
             "answer": "I don’t have enough evidence in the indexed sources to answer that.",
             "refused": True,
@@ -376,12 +376,12 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
             "citations": [],
         }
         if debug:
-            out["retrieval"] = []
-        return out
+            out_no_context["retrieval"] = []
+        return out_no_context
 
     # If the retrieved chunks don't cover the question terms, treat as unrelated.
     if _is_unrelated_question(question, retrieved):
-        out = {
+        out_unrelated: dict[str, Any] = {
             "question": question,
             "answer": "I don’t have enough evidence in the indexed sources to answer that.",
             "refused": True,
@@ -390,7 +390,7 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
             "citations": [],
         }
         if debug:
-            out["retrieval"] = [
+            out_unrelated["retrieval"] = [
                 {
                     "chunk_id": r.chunk_id,
                     "doc_id": r.doc_id,
@@ -403,7 +403,7 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
                 }
                 for r in retrieved
             ]
-        return out
+        return out_unrelated
 
     # --- Answer ---
     answerer = get_answerer()
@@ -414,7 +414,7 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
     # Enforce grounding (citations required).
     # In public demo mode we are intentionally conservative: no citations => refuse.
     if settings.public_demo_mode and not citations:
-        out: dict[str, Any] = {
+        out_no_citations: dict[str, Any] = {
             "question": question,
             "answer": "I don’t have enough evidence in the indexed sources to answer that.",
             "refused": True,
@@ -423,7 +423,7 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
             "citations": [],
         }
         if debug:
-            out["retrieval"] = [
+            out_no_citations["retrieval"] = [
                 {
                     "chunk_id": r.chunk_id,
                     "doc_id": r.doc_id,
@@ -436,7 +436,7 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
                 }
                 for r in retrieved
             ]
-        return out
+        return out_no_citations
 
     # If the answerer itself refused, provide a reason for consistent contract.
     refusal_reason = None
@@ -462,7 +462,7 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
                 "lexical_score": r.lexical_score,
                 "vector_score": r.vector_score,
                 "text_preview": r.text[:240],
-                    "text": r.text,
+                "text": r.text,
             }
             for r in retrieved
         ]
