@@ -46,7 +46,16 @@ jobs:
         run: docker run --rm -v "${{ github.workspace }}:/src" aquasec/tfsec:latest /src/${TF_DIR}
 
       - name: checkov (docker)
-        run: docker run --rm -v "${{ github.workspace }}:/src" bridgecrew/checkov:latest -d /src/${TF_DIR}
+        run: |
+          # NOTE: These skipped checks are org-policy dependent and are intentionally out of scope for
+          # this public Cloud Run demo stack (cost + complexity tradeoffs).
+          #
+          # - CKV_GCP_84: Artifact Registry CMEK/CSEK enforcement (demo uses Google-managed encryption)
+          # - CKV_GCP_26: VPC Flow Logs for every subnet (network module is optional; default is no VPC)
+          # - CKV2_GCP_18: Require explicit firewall rules (network module is optional; default is no VPC)
+          docker run --rm -v "${{ github.workspace }}:/src" bridgecrew/checkov:latest \
+            -d "/src/${TF_DIR}" \
+            --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18"
 
       - name: conftest policy (docker)
         run: docker run --rm -v "${{ github.workspace }}:/project" -w /project openpolicyagent/conftest:latest test --parser hcl2 --policy infra/gcp/policy ${TF_DIR}
