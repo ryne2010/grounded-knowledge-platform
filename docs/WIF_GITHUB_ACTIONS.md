@@ -116,10 +116,10 @@ GitHub → Settings → **Environments** → (create/select `dev`, `stage`, `pro
 Set:
 
 ### WIF variables
-- `GCP_WIF_PROVIDER`  
+- `GCP_WIF_PROVIDER`
   Example: `projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/github`
 
-- `GCP_WIF_SERVICE_ACCOUNT`  
+- `GCP_WIF_SERVICE_ACCOUNT`
   Example: `ci-terraform@my-project.iam.gserviceaccount.com`
 
 ### Single-source-of-truth config (GCS)
@@ -154,7 +154,7 @@ gcloud storage cp "${TF_DIR}/terraform.tfvars" "gs://${PROJECT_ID}-config/gkp/${
 ```
 
 Then set ONE environment variable per GitHub Environment:
-- `GCP_TF_CONFIG_GCS_PATH`  
+- `GCP_TF_CONFIG_GCS_PATH`
   Example: `gs://your-project-id-config/gkp/dev`
 
 > The workflows expect that path to contain `backend.hcl` and `terraform.tfvars`.

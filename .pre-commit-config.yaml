@@ -1,0 +1,30 @@
+repos:
+  # Basic repo hygiene (fast, catches common "oops" before CI).
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+
+  # Python linting (matches the CI "ruff check ." behavior, but only on staged files by default).
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        entry: ruff check
+        language: python
+        types_or: [python]
+        additional_dependencies:
+          - ruff==0.14.14
+
+  # Terraform formatting only (keeps commit-time checks fast; validation still happens in CI).
+  - repo: local
+    hooks:
+      - id: terraform-fmt
+        name: terraform fmt (check)
+        entry: terraform fmt -check -recursive infra/gcp
+        language: system
+        pass_filenames: false

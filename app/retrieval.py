@@ -223,9 +223,9 @@ def retrieve(
         results: list[RetrievedChunk] = []
         for i in cand_idx:
             c = chunks[i]
-            l = float(lex_scores.get(i, 0.0))
-            v = float(sims[i])
-            score = (0.5 * l + 0.5 * v) if use_vector else l
+            lex_score = float(lex_scores.get(i, 0.0))
+            vec_score = float(sims[i])
+            score = (0.5 * lex_score + 0.5 * vec_score) if use_vector else lex_score
             results.append(
                 RetrievedChunk(
                     chunk_id=c.chunk_id,
@@ -233,8 +233,8 @@ def retrieve(
                     idx=c.idx,
                     text=c.text,
                     score=score,
-                    lexical_score=l,
-                    vector_score=v,
+                    lexical_score=lex_score,
+                    vector_score=vec_score,
                 )
             )
 

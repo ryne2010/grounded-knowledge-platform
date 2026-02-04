@@ -118,7 +118,7 @@ By default, the system uses a **local extractive answerer** (no API keys require
 
 ```bash
 export LLM_PROVIDER=openai
-export OPENAI_API_KEY=... 
+export OPENAI_API_KEY=...
 export OPENAI_MODEL=gpt-4.1-mini # example
 ```
 

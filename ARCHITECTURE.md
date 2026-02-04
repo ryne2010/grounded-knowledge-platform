@@ -101,4 +101,3 @@ Recommended “staff-level” deployment:
 - Optional: **Serverless VPC Access connector** (costs money; off by default)
 
 The Terraform example lives in `infra/gcp/cloud_run_demo/` and is designed to be driven via `make`.
-

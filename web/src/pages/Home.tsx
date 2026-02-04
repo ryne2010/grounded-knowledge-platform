@@ -597,7 +597,7 @@ export function HomePage() {
           </CardContent>
         </Card>
       </div>
-    
+
       <Dialog open={chunkOpen} onOpenChange={setChunkOpen}>
         <DialogContent>
           <DialogHeader>

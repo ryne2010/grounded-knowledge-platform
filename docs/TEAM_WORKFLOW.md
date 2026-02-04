@@ -28,6 +28,31 @@ Notes:
 
 ---
 
+## Pre-commit (catch lint/YAML/Terraform fmt before CI)
+
+This repo includes a `pre-commit` configuration (`.pre-commit-config.yaml`) that runs:
+- `ruff` (Python lint)
+- `terraform fmt -check` (infra formatting)
+- basic YAML + whitespace sanity checks
+
+Setup (one-time per machine):
+
+```bash
+brew install pre-commit
+pre-commit install
+```
+
+Run manually:
+
+```bash
+pre-commit run --all-files
+```
+
+Teaching point:
+- Pre-commit makes the “fast feedback loop” local, so CI failures are mostly for things you *couldn’t* reasonably catch on your laptop (integration, permissions, environment drift).
+
+---
+
 - A new teammate can run the project locally and deploy to a sandbox GCP project quickly.
 - Infrastructure changes are reviewable (`plan`/`apply` separation) and state is shared safely (remote state).
 - Deployments are reproducible (lockfiles, deterministic builds, clear Makefile targets).

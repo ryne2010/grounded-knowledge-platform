@@ -58,4 +58,10 @@ jobs:
             --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18"
 
       - name: conftest policy (docker)
-        run: docker run --rm -v "${{ github.workspace }}:/project" -w /project openpolicyagent/conftest:latest test --parser hcl2 --policy infra/gcp/policy ${TF_DIR}
+        run: |
+          set -euo pipefail
+          # Pass explicit *.tf files so we don't accidentally parse .terraform/** artifacts.
+          docker run --rm -v "${{ github.workspace }}:/project" -w /project openpolicyagent/conftest:latest test \
+            --parser hcl2 \
+            --policy infra/gcp/policy \
+            $(find "${TF_DIR}" -type f -name "*.tf" -not -path "${TF_DIR}/.terraform/*")

@@ -12,4 +12,3 @@ output "workload_identity_pool" {
   description = "Workload Identity Pool resource name."
   value       = module.github_oidc.workload_identity_pool
 }
-

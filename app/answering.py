@@ -1,12 +1,14 @@
 # answering.py
 from __future__ import annotations
+
 import logging
 
 from .config import settings
-from .llm.base import Answer, AnswerProvider
+from .llm.base import AnswerProvider
 from .llm.extractive import ExtractiveAnswerer
 
 logger = logging.getLogger(__name__)
+
 
 def get_answerer() -> AnswerProvider:
     """
