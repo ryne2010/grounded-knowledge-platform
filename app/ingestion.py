@@ -83,7 +83,16 @@ _embedder_singleton: Embedder | None = None
 def _get_embedder() -> Embedder:
     global _embedder_singleton
     if _embedder_singleton is None:
-        _embedder_singleton = SentenceTransformerEmbedder(settings.embeddings_model)
+        backend = settings.embeddings_backend
+        if backend == "none":
+            _embedder_singleton = NoEmbedder()
+        elif backend == "hash":
+            _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
+        elif backend == "sentence-transformers":
+            _embedder_singleton = SentenceTransformerEmbedder(settings.embeddings_model)
+        else:
+            # Safety default: avoid network/model downloads.
+            _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
     return _embedder_singleton
 
 

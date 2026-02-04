@@ -3,6 +3,16 @@ output "service_url" {
   description = "Cloud Run service URL."
 }
 
+output "service_name" {
+  value       = module.cloud_run.service_name
+  description = "Cloud Run service name."
+}
+
+output "image" {
+  value       = local.image
+  description = "Deployed container image URI."
+}
+
 output "artifact_repo" {
   value       = module.artifact_registry.docker_repository
   description = "Artifact Registry Docker repository host/path (use for docker build/tag/push)."
@@ -14,21 +24,21 @@ output "runtime_service_account" {
 }
 
 output "serverless_connector_id" {
-  value       = var.enable_vpc_connector ? module.network[0].serverless_connector_id : null
+  value       = var.enable_vpc_connector ? try(module.network[0].serverless_connector_id, null) : null
   description = "Serverless VPC Access connector ID (if created)."
 }
 
 output "monitoring_dashboard_name" {
-  value       = var.enable_observability ? try(google_monitoring_dashboard.cloudrun[0].name, null) : null
+  value       = var.enable_observability ? try(google_monitoring_dashboard.cloudrun[0].id, null) : null
   description = "Monitoring dashboard resource name (if enabled)."
 }
 
 output "alert_policy_5xx_name" {
-  value       = var.enable_observability ? try(google_monitoring_alert_policy.cloudrun_5xx[0].name, null) : null
+  value       = var.enable_observability ? try(google_monitoring_alert_policy.cloudrun_5xx[0].id, null) : null
   description = "Alert policy name for 5xx errors (if enabled)."
 }
 
 output "alert_policy_latency_name" {
-  value       = var.enable_observability ? try(google_monitoring_alert_policy.cloudrun_latency_p95[0].name, null) : null
+  value       = var.enable_observability ? try(google_monitoring_alert_policy.cloudrun_latency_p95[0].id, null) : null
   description = "Alert policy name for latency p95 (if enabled)."
 }

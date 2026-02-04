@@ -105,16 +105,16 @@ See:
 
 ## 6) Keyless CI/CD (WIF) + drift detection
 
-This repo includes workflow templates:
+This repo includes keyless GitHub Actions workflows (WIF, no long-lived keys):
 
+- `.github/workflows/gcp-build-and-deploy.yml` (push → build image → deploy)
+- `.github/workflows/gcp-terraform-plan.yml` (manual plan)
 - `.github/workflows/terraform-apply-gcp.yml`
 - `.github/workflows/terraform-drift.yml`
 
-To enable, bootstrap WIF in Repo 3:
-- `terraform-gcp-platform/docs/WIF_GITHUB_ACTIONS.md`
-- `terraform-gcp-platform/examples/github_actions_wif/`
-
-Then set the GitHub repo Secrets + Variables described in `docs/WIF_GITHUB_ACTIONS.md`.
+To enable:
+- Bootstrap WIF with `infra/gcp/wif_bootstrap/`
+- Set GitHub Environment variables as described in `docs/WIF_GITHUB_ACTIONS.md`
 
 ---
 

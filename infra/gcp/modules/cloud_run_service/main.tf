@@ -4,6 +4,9 @@ resource "google_cloud_run_v2_service" "service" {
   location = var.region
   ingress  = var.ingress
 
+  # For demos, we prefer cleanup-friendly defaults. In production, you may want this true.
+  deletion_protection = var.deletion_protection
+
   labels = var.labels
 
   template {

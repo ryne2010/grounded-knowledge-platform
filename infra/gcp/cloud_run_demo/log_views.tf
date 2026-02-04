@@ -16,7 +16,7 @@
 */
 
 locals {
-  logs_location  = "global"
+  logs_location = "global"
 
   # NOTE: service_name should include env already (e.g., gkp-dev), so we do NOT suffix env again.
   logs_bucket_id = "${var.service_name}-logs"
@@ -45,8 +45,8 @@ resource "google_logging_project_bucket_config" "service_logs" {
   retention_days = var.log_retention_days
   description    = "Service-scoped logs for ${var.service_name} (${var.env})"
 
-  # Analytics isn't required; we enable it to support faster queries & richer UX where available.
-  enable_analytics = true
+  # Analytics isn't required; default is off to avoid surprise costs + reduce flakiness on fast destroy/redeploy loops.
+  enable_analytics = var.enable_log_bucket_analytics
 }
 
 resource "google_logging_project_sink" "service_to_bucket" {
@@ -59,17 +59,8 @@ resource "google_logging_project_sink" "service_to_bucket" {
   # logging.googleapis.com/projects/<PROJECT_ID>/locations/<LOCATION>/buckets/<BUCKET_ID>
   destination = "logging.googleapis.com/${google_logging_project_bucket_config.service_logs[0].id}"
 
-  filter                = local.service_logs_router_filter
+  filter                 = local.service_logs_router_filter
   unique_writer_identity = true
-}
-
-# The sink uses a dedicated service account identity; grant it permission to write into buckets.
-resource "google_project_iam_member" "sink_bucket_writer" {
-  count = (var.enable_observability && var.enable_log_views) ? 1 : 0
-
-  project = var.project_id
-  role    = "roles/logging.bucketWriter"
-  member  = google_logging_project_sink.service_to_bucket[0].writer_identity
 }
 
 resource "google_logging_log_view" "service_view" {
@@ -83,5 +74,5 @@ resource "google_logging_log_view" "service_view" {
 
 output "service_log_view_resource_name" {
   description = "Full resource name used in IAM Conditions for roles/logging.viewAccessor."
-  value       = (var.enable_observability && var.enable_log_views) ? google_logging_log_view.service_view[0].id : null
+  value       = (var.enable_observability && var.enable_log_views) ? try(google_logging_log_view.service_view[0].id, null) : null
 }

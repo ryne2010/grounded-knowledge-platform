@@ -20,6 +20,10 @@ web/.tanstack/
 terraform.tfstate
 terraform.tfstate.backup
 *.tfvars
+*.tfvars.json
+backend.hcl
+*.tfplan
+*.tfplan.json
 crash.log
 crash.*.log
 

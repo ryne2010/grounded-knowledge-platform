@@ -95,3 +95,9 @@ variable "labels" {
   description = "Labels for the service."
   default     = {}
 }
+
+variable "deletion_protection" {
+  type        = bool
+  description = "If true, block Terraform from destroying/replacing the Cloud Run service. Set to false for demos so cleanup is easy."
+  default     = false
+}

@@ -34,7 +34,40 @@ variable "artifact_repo_name" {
 
 variable "image" {
   type        = string
-  description = "Container image URI (Artifact Registry recommended)."
+  description = <<EOT
+Optional full container image URI (Artifact Registry recommended).
+
+If empty, the image URI is derived from:
+- region
+- project_id
+- artifact_repo_name
+- image_name
+- image_tag
+EOT
+  default     = ""
+}
+
+variable "image_name" {
+  type        = string
+  description = "Artifact Registry image name (the part after the repo)."
+  default     = "gkp"
+}
+
+variable "image_tag" {
+  type        = string
+  description = <<EOT
+Artifact Registry image tag.
+
+Recommended workflow:
+- Use immutable tags for deploys (e.g., v2026-02-03-1).
+- Optionally ALSO push a floating tag like 'latest' for convenience.
+EOT
+  default     = "latest"
+
+  validation {
+    condition     = length(var.image) > 0 || length(trimspace(var.image_tag)) > 0
+    error_message = "Set either image (full URI) or image_tag (when using derived image URI)."
+  }
 }
 
 variable "allow_unauthenticated" {
@@ -95,6 +128,30 @@ EOT
   default     = "gkp"
 }
 
+variable "clients_observers_group_email" {
+  type        = string
+  description = <<EOT
+Optional override for the "clients-observers" group email.
+
+Use this when you don't have a Workspace/Cloud Identity domain but still want to demonstrate
+group-based IAM (example: "job-search-ryne@googlegroups.com").
+
+When set, this takes precedence over workspace_domain/group_prefix for the clients-observers group only.
+EOT
+  default     = ""
+}
+
+variable "enable_clients_observers_monitoring_viewer" {
+  type        = bool
+  description = <<EOT
+If true, grant roles/monitoring.viewer to the clients-observers group.
+
+This is useful for a demo project so a "viewer" group can see dashboards without enabling the full
+project-level IAM starter pack.
+EOT
+  default     = false
+}
+
 # --- Observability as code ---
 
 variable "enable_observability" {
@@ -107,6 +164,12 @@ variable "notification_channels" {
   type        = list(string)
   description = "Optional Monitoring notification channel IDs to attach to alert policies. If empty, incidents will be created without notifications."
   default     = []
+}
+
+variable "bootstrap_demo_corpus" {
+  type        = bool
+  description = "Whether the app bootstraps the bundled demo corpus on startup. Disable to troubleshoot slow startups."
+  default     = true
 }
 
 
@@ -135,6 +198,18 @@ variable "enable_log_views" {
   type        = bool
   description = "Create a service-scoped log bucket + Logs Router sink + log view for least-privilege client access."
   default     = true
+}
+
+variable "enable_log_bucket_analytics" {
+  type        = bool
+  description = <<EOT
+Enable Cloud Logging bucket analytics for the service-scoped log bucket.
+
+Notes:
+- Not required for this demo; default is false to keep costs and complexity down.
+- Some bucket settings can be eventually-consistent right after create/undelete, so enabling analytics may require a retry.
+EOT
+  default     = false
 }
 
 variable "enable_slo" {

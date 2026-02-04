@@ -4,24 +4,28 @@ locals {
     env = var.env
   }
 
+  # Preferred: keep `image_tag` as the only thing you bump per deploy, and derive the full URI.
+  # You can override with a full URI via var.image if needed (e.g., pinning by digest).
+  image = length(trimspace(var.image)) > 0 ? trimspace(var.image) : "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_repo_name}/${var.image_name}:${var.image_tag}"
+
   # Safety-first public demo configuration.
   # - extractive-only (no generative output)
   # - no uploads
   # - fixed demo corpus
   env_vars = {
-    GCP_PROJECT            = var.project_id
-    GKP_ENV                = var.env
+    GCP_PROJECT = var.project_id
+    GKP_ENV     = var.env
 
-    PUBLIC_DEMO_MODE       = "1"
-    BOOTSTRAP_DEMO_CORPUS  = "1"
+    PUBLIC_DEMO_MODE      = "1"
+    BOOTSTRAP_DEMO_CORPUS = var.bootstrap_demo_corpus ? "1" : "0"
 
     # On Cloud Run, /tmp is the safest writable location.
-    SQLITE_PATH            = "/tmp/index.sqlite"
+    SQLITE_PATH = "/tmp/index.sqlite"
 
     # Keep the live demo "boring" on purpose.
-    LLM_PROVIDER           = "extractive"
-    EMBEDDINGS_BACKEND     = "hash"
-    OCR_ENABLED            = "0"
+    LLM_PROVIDER       = "extractive"
+    EMBEDDINGS_BACKEND = "hash"
+    OCR_ENABLED        = "0"
 
     # Simple edge rate limiting (application-level).
     RATE_LIMIT_ENABLED      = "1"
@@ -96,12 +100,12 @@ module "network" {
     }
   }
 
-  create_serverless_connector          = true
-  serverless_connector_name            = "gkp-${var.env}-connector"
-  serverless_connector_region          = var.region
-  serverless_connector_cidr            = "10.8.0.0/28"
-  serverless_connector_min_throughput  = 200
-  serverless_connector_max_throughput  = 300
+  create_serverless_connector         = true
+  serverless_connector_name           = "gkp-${var.env}-connector"
+  serverless_connector_region         = var.region
+  serverless_connector_cidr           = "10.8.0.0/28"
+  serverless_connector_min_throughput = 200
+  serverless_connector_max_throughput = 300
 }
 
 module "cloud_run" {
@@ -110,17 +114,21 @@ module "cloud_run" {
   project_id            = var.project_id
   region                = var.region
   service_name          = var.service_name
-  image                 = var.image
+  image                 = local.image
   service_account_email = module.service_accounts.runtime_service_account_email
 
-  cpu           = "1"
-  memory        = "256Mi"
+  cpu = "1"
+  # Cloud Run v2 enforces >= 512Mi for some CPU allocation modes; 512Mi is also safer for Python apps.
+  memory        = "512Mi"
   min_instances = var.min_instances
   max_instances = var.max_instances
 
   allow_unauthenticated = var.allow_unauthenticated
   env_vars              = local.env_vars
   labels                = local.labels
+
+  # For personal demos, keep cleanup easy.
+  deletion_protection = false
 
   vpc_connector_id = var.enable_vpc_connector ? module.network[0].serverless_connector_id : null
   vpc_egress       = var.vpc_egress

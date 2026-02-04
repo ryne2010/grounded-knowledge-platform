@@ -39,6 +39,25 @@ These Terraform variables drive group identities:
 
 When `workspace_domain` is empty, the repo creates **no** group bindings.
 
+### No Workspace? (single Google Group demo)
+
+If you don’t have a Workspace/Cloud Identity domain but you still want to demonstrate **group-based IAM**,
+you can point the stack at a single Google Group email (including `@googlegroups.com`) for the
+**clients-observers** role.
+
+Terraform vars:
+
+```hcl
+clients_observers_group_email              = "job-search-ryne@googlegroups.com"
+enable_clients_observers_monitoring_viewer = true
+```
+
+This enables:
+- service-scoped log view access (via IAM Condition)
+- Monitoring dashboard visibility (roles/monitoring.viewer) for that group
+
+If IAM rejects the group principal, confirm the group exists and that your account is a member; propagation can take a few minutes.
+
 ---
 
 ## Recommended group naming scheme

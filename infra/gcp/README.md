@@ -4,6 +4,15 @@ This folder contains Terraform examples for deploying this project to **Google C
 
 Included:
 - `cloud_run_demo/` — deploy the app to **Cloud Run** with safe public-demo defaults.
+- `wif_bootstrap/` — bootstrap **Workload Identity Federation (WIF)** for GitHub Actions (no long-lived keys).
+
+## Repo map (what’s used vs included)
+
+See `MAP.md` for a quick “what’s in play” inventory:
+- deploy entrypoints
+- Terraform modules actually invoked by `cloud_run_demo/`
+- CI workflows that run in GitHub Actions
+- optional baseline modules included for reference
 
 ## Baseline modules
 

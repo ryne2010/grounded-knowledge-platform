@@ -55,6 +55,8 @@ TF_STATE_PREFIX ?= gkp/$(ENV)
 # Workspace IAM starter pack (optional; Google Groups)
 WORKSPACE_DOMAIN ?=
 GROUP_PREFIX ?= gkp
+CLIENTS_OBSERVERS_GROUP_EMAIL ?=
+ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER ?= false
 
 # Observability as code
 ENABLE_OBSERVABILITY ?= true
@@ -99,6 +101,8 @@ help:
 	@echo "  SERVICE_NAME=$(SERVICE_NAME)"
 	@echo "  WORKSPACE_DOMAIN=$(WORKSPACE_DOMAIN)"
 	@echo "  GROUP_PREFIX=$(GROUP_PREFIX)"
+	@echo "  CLIENTS_OBSERVERS_GROUP_EMAIL=$(CLIENTS_OBSERVERS_GROUP_EMAIL)"
+	@echo "  ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)"
 	@echo "  ENABLE_OBSERVABILITY=$(ENABLE_OBSERVABILITY)"
 	@echo "  IMAGE=$(IMAGE)"
 	@echo "  TF_STATE_BUCKET=$(TF_STATE_BUCKET)"
@@ -212,6 +216,8 @@ doctor:
 	echo "  SERVICE_NAME=$(SERVICE_NAME)"; \
 	echo "  WORKSPACE_DOMAIN=$(WORKSPACE_DOMAIN)"; \
 	echo "  GROUP_PREFIX=$(GROUP_PREFIX)"; \
+	echo "  CLIENTS_OBSERVERS_GROUP_EMAIL=$(CLIENTS_OBSERVERS_GROUP_EMAIL)"; \
+	echo "  ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)"; \
 	echo "  ENABLE_OBSERVABILITY=$(ENABLE_OBSERVABILITY)"; \
 	echo "  IMAGE=$(IMAGE)"; \
 	echo "  TF_STATE_BUCKET=$(TF_STATE_BUCKET)"; \
@@ -303,11 +309,11 @@ bootstrap-state: doctor
 	@if gcloud storage buckets describe "gs://$(TF_STATE_BUCKET)" >/dev/null 2>&1; then \
 		echo "Bucket already exists."; \
 	else \
-		echo "Creating bucket..."; \
-		gcloud storage buckets create "gs://$(TF_STATE_BUCKET)" --location="$(REGION)" --uniform-bucket-level-access --public-access-prevention=enforced; \
-		echo "Enabling versioning..."; \
-		gcloud storage buckets update "gs://$(TF_STATE_BUCKET)" --versioning; \
-	fi
+			echo "Creating bucket..."; \
+			gcloud storage buckets create "gs://$(TF_STATE_BUCKET)" --location="$(REGION)" --uniform-bucket-level-access --public-access-prevention; \
+			echo "Enabling versioning..."; \
+			gcloud storage buckets update "gs://$(TF_STATE_BUCKET)" --versioning; \
+		fi
 
 # Terraform init with explicit backend config.
 # Backend config is kept out of repo files to minimize environment-specific config.
@@ -326,6 +332,8 @@ infra: tf-init
 		-var "env=$(ENV)" \
 		-var "workspace_domain=$(WORKSPACE_DOMAIN)" \
 		-var "group_prefix=$(GROUP_PREFIX)" \
+		-var "clients_observers_group_email=$(CLIENTS_OBSERVERS_GROUP_EMAIL)" \
+		-var "enable_clients_observers_monitoring_viewer=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)" \
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
 		-var "service_name=$(SERVICE_NAME)" \
 		-var "artifact_repo_name=$(AR_REPO)" \
@@ -351,6 +359,8 @@ plan: tf-init
 		-var "env=$(ENV)" \
 		-var "workspace_domain=$(WORKSPACE_DOMAIN)" \
 		-var "group_prefix=$(GROUP_PREFIX)" \
+		-var "clients_observers_group_email=$(CLIENTS_OBSERVERS_GROUP_EMAIL)" \
+		-var "enable_clients_observers_monitoring_viewer=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)" \
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
 		-var "service_name=$(SERVICE_NAME)" \
 		-var "artifact_repo_name=$(AR_REPO)" \
@@ -363,6 +373,8 @@ apply: tf-init
 		-var "env=$(ENV)" \
 		-var "workspace_domain=$(WORKSPACE_DOMAIN)" \
 		-var "group_prefix=$(GROUP_PREFIX)" \
+		-var "clients_observers_group_email=$(CLIENTS_OBSERVERS_GROUP_EMAIL)" \
+		-var "enable_clients_observers_monitoring_viewer=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)" \
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
 		-var "service_name=$(SERVICE_NAME)" \
 		-var "artifact_repo_name=$(AR_REPO)" \
@@ -398,6 +410,8 @@ destroy: tf-init
 		-var "env=$(ENV)" \
 		-var "workspace_domain=$(WORKSPACE_DOMAIN)" \
 		-var "group_prefix=$(GROUP_PREFIX)" \
+		-var "clients_observers_group_email=$(CLIENTS_OBSERVERS_GROUP_EMAIL)" \
+		-var "enable_clients_observers_monitoring_viewer=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)" \
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
 		-var "service_name=$(SERVICE_NAME)" \
 		-var "artifact_repo_name=$(AR_REPO)" \
@@ -463,4 +477,3 @@ tf-policy: ## OPA/Conftest policy gate for Terraform (falls back to docker)
 	fi
 
 tf-check: tf-fmt tf-validate tf-lint tf-sec tf-policy ## Run all Terraform hygiene checks
-

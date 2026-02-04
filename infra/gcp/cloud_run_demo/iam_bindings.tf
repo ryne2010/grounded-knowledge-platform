@@ -18,16 +18,23 @@
     group_prefix = "gkp"
     workspace_domain = "example.com"
     => gkp-engineers@example.com
+
+  If you don't have Workspace/Cloud Identity, you can still demonstrate group-based IAM by
+  setting:
+    clients_observers_group_email = "your-group@googlegroups.com"
 */
 
 locals {
   has_workspace = var.workspace_domain != ""
 
-  clients_observers_group = local.has_workspace ? "group:${var.group_prefix}-clients-observers@${var.workspace_domain}" : null
-  engineers_min_group     = local.has_workspace ? "group:${var.group_prefix}-engineers-min@${var.workspace_domain}" : null
-  engineers_group         = local.has_workspace ? "group:${var.group_prefix}-engineers@${var.workspace_domain}" : null
-  auditors_group          = local.has_workspace ? "group:${var.group_prefix}-auditors@${var.workspace_domain}" : null
-  platform_admins_group   = local.has_workspace ? "group:${var.group_prefix}-platform-admins@${var.workspace_domain}" : null
+  clients_observers_group_email = var.clients_observers_group_email != "" ? var.clients_observers_group_email : (local.has_workspace ? "${var.group_prefix}-clients-observers@${var.workspace_domain}" : "")
+
+  clients_observers_group = local.clients_observers_group_email != "" ? "group:${local.clients_observers_group_email}" : null
+
+  engineers_min_group   = local.has_workspace ? "group:${var.group_prefix}-engineers-min@${var.workspace_domain}" : null
+  engineers_group       = local.has_workspace ? "group:${var.group_prefix}-engineers@${var.workspace_domain}" : null
+  auditors_group        = local.has_workspace ? "group:${var.group_prefix}-auditors@${var.workspace_domain}" : null
+  platform_admins_group = local.has_workspace ? "group:${var.group_prefix}-platform-admins@${var.workspace_domain}" : null
 }
 
 # --- App-scoped access -------------------------------------------------------
@@ -35,7 +42,7 @@ locals {
 # If the service is private (allow_unauthenticated=false), engineers typically need invoker permission.
 # In "public demo" mode this is unnecessary.
 resource "google_cloud_run_v2_service_iam_member" "engineers_invoker" {
-  count = (local.has_workspace && !var.allow_unauthenticated) ? 1 : 0
+  count = (local.engineers_group != null && !var.allow_unauthenticated) ? 1 : 0
 
   project  = var.project_id
   location = var.region
@@ -46,7 +53,7 @@ resource "google_cloud_run_v2_service_iam_member" "engineers_invoker" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "engineers_min_invoker" {
-  count = (local.has_workspace && !var.allow_unauthenticated) ? 1 : 0
+  count = (local.engineers_min_group != null && !var.allow_unauthenticated) ? 1 : 0
 
   project  = var.project_id
   location = var.region
@@ -64,7 +71,7 @@ resource "google_cloud_run_v2_service_iam_member" "engineers_min_invoker" {
 # NOTE: The view is created in log_views.tf and is only present when
 # enable_observability && enable_log_views are true.
 resource "google_project_iam_member" "clients_log_view_accessor" {
-  count = (local.has_workspace && var.enable_observability && var.enable_log_views) ? 1 : 0
+  count = (local.clients_observers_group != null && var.enable_observability && var.enable_log_views) ? 1 : 0
 
   project = var.project_id
   role    = "roles/logging.viewAccessor"
@@ -77,6 +84,14 @@ resource "google_project_iam_member" "clients_log_view_accessor" {
   }
 }
 
+resource "google_project_iam_member" "clients_monitoring_viewer" {
+  count = (local.clients_observers_group != null && var.enable_observability && var.enable_clients_observers_monitoring_viewer) ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/monitoring.viewer"
+  member  = local.clients_observers_group
+}
+
 # --- Optional project-level IAM ----------------------------------------------
 #
 # For a "real" team environment, project-level IAM belongs in a centralized "platform baseline"
@@ -87,32 +102,32 @@ locals {
   project_iam_bindings = (var.enable_project_iam && local.has_workspace) ? [
     # ---- Platform admins: full platform ownership (use carefully) ----
     { role = "roles/resourcemanager.projectIamAdmin", member = local.platform_admins_group },
-    { role = "roles/iam.serviceAccountAdmin",        member = local.platform_admins_group },
+    { role = "roles/iam.serviceAccountAdmin", member = local.platform_admins_group },
     { role = "roles/serviceusage.serviceUsageAdmin", member = local.platform_admins_group },
-    { role = "roles/run.admin",                      member = local.platform_admins_group },
-    { role = "roles/artifactregistry.admin",         member = local.platform_admins_group },
-    { role = "roles/secretmanager.admin",            member = local.platform_admins_group },
-    { role = "roles/monitoring.admin",               member = local.platform_admins_group },
-    { role = "roles/logging.admin",                  member = local.platform_admins_group },
+    { role = "roles/run.admin", member = local.platform_admins_group },
+    { role = "roles/artifactregistry.admin", member = local.platform_admins_group },
+    { role = "roles/secretmanager.admin", member = local.platform_admins_group },
+    { role = "roles/monitoring.admin", member = local.platform_admins_group },
+    { role = "roles/logging.admin", member = local.platform_admins_group },
 
     # ---- Engineers: build + ship + operate ----
-    { role = "roles/run.admin",              member = local.engineers_group },
+    { role = "roles/run.admin", member = local.engineers_group },
     { role = "roles/artifactregistry.writer", member = local.engineers_group },
     { role = "roles/secretmanager.secretAccessor", member = local.engineers_group },
-    { role = "roles/monitoring.viewer",      member = local.engineers_group },
-    { role = "roles/logging.viewer",         member = local.engineers_group },
+    { role = "roles/monitoring.viewer", member = local.engineers_group },
+    { role = "roles/logging.viewer", member = local.engineers_group },
 
     # ---- Engineers-min: deploy + troubleshoot without full admin ----
-    { role = "roles/run.developer",          member = local.engineers_min_group },
+    { role = "roles/run.developer", member = local.engineers_min_group },
     { role = "roles/artifactregistry.reader", member = local.engineers_min_group },
-    { role = "roles/monitoring.viewer",      member = local.engineers_min_group },
+    { role = "roles/monitoring.viewer", member = local.engineers_min_group },
 
     # ---- Auditors: read-only visibility ----
-    { role = "roles/monitoring.viewer",      member = local.auditors_group },
-    { role = "roles/logging.viewer",         member = local.auditors_group },
+    { role = "roles/monitoring.viewer", member = local.auditors_group },
+    { role = "roles/logging.viewer", member = local.auditors_group },
 
     # ---- Clients: read-only monitoring + log view (log view handled above) ----
-    { role = "roles/monitoring.viewer",      member = local.clients_observers_group },
+    { role = "roles/monitoring.viewer", member = local.clients_observers_group },
   ] : []
 }
 

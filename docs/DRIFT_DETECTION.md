@@ -22,11 +22,12 @@ Drift detection gives you:
 ## How to enable
 
 1) Configure Workload Identity Federation (WIF) for GitHub Actions (see `docs/WIF_GITHUB_ACTIONS.md`)
-2) Set GitHub Actions repo variables:
-   - `PROJECT_ID`
-   - `REGION`
-   - `TFSTATE_BUCKET`
-   - `TFSTATE_PREFIX`
+2) Set one GitHub Actions variable:
+   - `GCP_TF_CONFIG_GCS_PATH` (example: `gs://my-config-bucket/gkp/dev`)
+
+The drift workflow downloads:
+- `${GCP_TF_CONFIG_GCS_PATH}/backend.hcl` (remote state location)
+- `${GCP_TF_CONFIG_GCS_PATH}/terraform.tfvars` (desired configuration)
 
 Then the scheduled workflow will run automatically.
 

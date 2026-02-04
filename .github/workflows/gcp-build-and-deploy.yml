@@ -1,0 +1,240 @@
+name: gcp-build-and-deploy
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      # App + container build inputs
+      - "app/**"
+      - "web/**"
+      - "docker/**"
+      - "cloudbuild.yaml"
+      # Infra changes should redeploy too
+      - "infra/gcp/cloud_run_demo/**"
+      - ".github/workflows/gcp-build-and-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Environment (dev|stage|prod)"
+        required: true
+        default: "dev"
+
+jobs:
+  build_deploy:
+    # Skip entirely until you configure WIF + config path in GitHub Environments.
+    if: ${{ vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != '' && vars.GCP_TF_CONFIG_GCS_PATH != '' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env || 'dev' }}
+    concurrency:
+      group: gcp-build-and-deploy-${{ inputs.env || 'dev' }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      TF_DIR: infra/gcp/cloud_run_demo
+      TF_CONFIG_GCS_PATH: ${{ vars.GCP_TF_CONFIG_GCS_PATH }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auth to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Fetch Terraform config from GCS
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Fetching Terraform config from: ${TF_CONFIG_GCS_PATH}"
+          gcloud storage cp "${TF_CONFIG_GCS_PATH}/backend.hcl" "${TF_DIR}/backend.hcl"
+          gcloud storage cp "${TF_CONFIG_GCS_PATH}/terraform.tfvars" "${TF_DIR}/terraform.tfvars"
+
+      - name: Parse terraform.tfvars (project/region/repo/service)
+        id: cfg
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          tf_dir = pathlib.Path(os.environ["TF_DIR"])
+          path = tf_dir / "terraform.tfvars"
+          txt = path.read_text(encoding="utf-8")
+
+          def get_str(key: str, default: str | None = None) -> str:
+              # Supports:
+              #   key = "value"
+              #   key = value
+              # Ignores commented lines and trailing comments.
+              m = re.search(rf'^\s*{re.escape(key)}\s*=\s*"([^"]*)"\s*(?:#.*)?$', txt, re.M)
+              if m:
+                  return m.group(1)
+              m = re.search(rf'^\s*{re.escape(key)}\s*=\s*([^\s#]+)\s*(?:#.*)?$', txt, re.M)
+              if m:
+                  return m.group(1)
+              if default is not None:
+                  return default
+              raise SystemExit(f"Missing required key '{key}' in {path}")
+
+          project_id = get_str("project_id")
+          region = get_str("region")
+          artifact_repo_name = get_str("artifact_repo_name")
+          service_name = get_str("service_name")
+          image_name = get_str("image_name", default="gkp")
+
+          out_path = pathlib.Path(os.environ["GITHUB_OUTPUT"])
+          out_path.write_text(
+              "\n".join(
+                  [
+                      f"project_id={project_id}",
+                      f"region={region}",
+                      f"artifact_repo_name={artifact_repo_name}",
+                      f"service_name={service_name}",
+                      f"image_name={image_name}",
+                      "",
+                  ]
+              ),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Set gcloud defaults (project + region)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud config set project "${{ steps.cfg.outputs.project_id }}"
+          gcloud config set run/region "${{ steps.cfg.outputs.region }}"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.4"
+
+      - name: Terraform init (remote state)
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform -chdir="${TF_DIR}" init -reconfigure \
+            -backend-config="backend.hcl"
+
+      - name: Bootstrap infra needed for image push (APIs + AR + runtime SA)
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform -chdir="${TF_DIR}" apply -auto-approve \
+            -target=module.core_services \
+            -target=module.artifact_registry \
+            -target=module.service_accounts \
+            -target=google_artifact_registry_repository_iam_member.cloud_build_writer
+
+      - name: Compute image tag (immutable)
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "image_tag=sha-${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build + push image (Cloud Build)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ARTIFACT_REPO="${{ steps.cfg.outputs.region }}-docker.pkg.dev/${{ steps.cfg.outputs.project_id }}/${{ steps.cfg.outputs.artifact_repo_name }}"
+          IMAGE="${ARTIFACT_REPO}/${{ steps.cfg.outputs.image_name }}:${{ steps.image.outputs.image_tag }}"
+
+          echo "Pushing image: ${IMAGE}"
+
+          # cloudbuild.yaml uses a single substitution:
+          #   _IMAGE = full image URI (including tag)
+          gcloud builds submit \
+            --config cloudbuild.yaml \
+            --substitutions "_IMAGE=${IMAGE}" \
+            .
+
+      - name: Update terraform.tfvars in GCS (image_tag)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TFVARS="${TF_DIR}/terraform.tfvars"
+          NEW_TAG="${{ steps.image.outputs.image_tag }}"
+
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          path = pathlib.Path(os.environ["TFVARS"])
+          new_tag = os.environ["NEW_TAG"]
+          txt = path.read_text(encoding="utf-8")
+
+          # Replace an existing image_tag line, else append one.
+          pat = re.compile(r'^(?P<indent>\s*)image_tag\s*=.*$', re.M)
+          if pat.search(txt):
+              txt = pat.sub(lambda m: f'{m.group("indent")}image_tag = "{new_tag}"', txt)
+          else:
+              if not txt.endswith("\n"):
+                  txt += "\n"
+              txt += f'image_tag = "{new_tag}"\n'
+
+          path.write_text(txt, encoding="utf-8")
+          PY
+
+          echo "Uploading updated terraform.tfvars to: ${TF_CONFIG_GCS_PATH}/terraform.tfvars"
+          gcloud storage cp "${TFVARS}" "${TF_CONFIG_GCS_PATH}/terraform.tfvars"
+        env:
+          TFVARS: ${{ env.TF_DIR }}/terraform.tfvars
+          NEW_TAG: ${{ steps.image.outputs.image_tag }}
+
+      - name: Log bucket lifecycle guard (best-effort)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT_ID="${{ steps.cfg.outputs.project_id }}"
+          BUCKET_ID="${{ steps.cfg.outputs.service_name }}-logs"
+
+          # If the bucket is in DELETE_REQUESTED (soft-delete), Terraform can't modify it yet.
+          STATE="$(gcloud logging buckets describe "${BUCKET_ID}" --project "${PROJECT_ID}" --location global --format='value(lifecycleState)' 2>/dev/null || echo NOT_FOUND)"
+          echo "log_bucket=${BUCKET_ID}"
+          echo "lifecycleState=${STATE}"
+
+          if [ "${STATE}" = "DELETE_REQUESTED" ]; then
+            echo "Undeleting ${BUCKET_ID} so Terraform can proceed..."
+            gcloud logging buckets undelete "${BUCKET_ID}" --project "${PROJECT_ID}" --location global
+
+            until [ "$(gcloud logging buckets describe "${BUCKET_ID}" --project "${PROJECT_ID}" --location global --format='value(lifecycleState)' 2>/dev/null || echo NOT_FOUND)" = "ACTIVE" ]; do
+              echo "waiting for ${BUCKET_ID} to become ACTIVE..."
+              sleep 15
+            done
+          fi
+
+      - name: Terraform apply (deploy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform -chdir="${TF_DIR}" apply -auto-approve
+
+      - name: Verify /health + /api/meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SERVICE_NAME="${{ steps.cfg.outputs.service_name }}"
+          REGION="${{ steps.cfg.outputs.region }}"
+
+          URL="$(gcloud run services describe "${SERVICE_NAME}" --region "${REGION}" --format='value(status.url)')"
+          echo "Service URL: ${URL}"
+
+          curl -fsS "${URL}/health" >/dev/null && echo "OK: /health"
+          curl -fsS "${URL}/api/meta"

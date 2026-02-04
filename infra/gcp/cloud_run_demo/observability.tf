@@ -9,8 +9,8 @@
 # - Notification channels are optional. If you attach none, incidents still show in Monitoring.
 
 locals {
-  cloudrun_base_filter = "resource.type=\"cloud_run_revision\" metric.type=\"run.googleapis.com/request_count\" resource.label.\"service_name\"=\"${var.service_name}\""
-  cloudrun_5xx_filter  = "resource.type=\"cloud_run_revision\" metric.type=\"run.googleapis.com/request_count\" metric.label.\"response_code_class\"=\"5xx\" resource.label.\"service_name\"=\"${var.service_name}\""
+  cloudrun_base_filter    = "resource.type=\"cloud_run_revision\" metric.type=\"run.googleapis.com/request_count\" resource.label.\"service_name\"=\"${var.service_name}\""
+  cloudrun_5xx_filter     = "resource.type=\"cloud_run_revision\" metric.type=\"run.googleapis.com/request_count\" metric.label.\"response_code_class\"=\"5xx\" resource.label.\"service_name\"=\"${var.service_name}\""
   cloudrun_latency_filter = "resource.type=\"cloud_run_revision\" metric.type=\"run.googleapis.com/request_latencies\" resource.label.\"service_name\"=\"${var.service_name}\""
 
   # A small dashboard with four widgets:
