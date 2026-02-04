@@ -5,11 +5,7 @@ on:
     paths:
       - "infra/gcp/**"
       - ".github/workflows/terraform-hygiene.yml"
-  push:
-    branches: ["main"]
-    paths:
-      - "infra/gcp/**"
-      - ".github/workflows/terraform-hygiene.yml"
+  workflow_dispatch:
 
 jobs:
   hygiene:

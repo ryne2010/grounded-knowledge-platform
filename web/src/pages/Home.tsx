@@ -1,7 +1,7 @@
-import React from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
 import { useForm } from '@tanstack/react-form'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import type { ColumnDef } from '@tanstack/react-table'
+import React from 'react'
 import { api, type IngestTextRequest, type QueryCitation, type QueryResponse } from '../api'
 import {
   Badge,
@@ -13,16 +13,16 @@ import {
   CardTitle,
   Checkbox,
   DataTable,
-  Input,
-  Label,
-  Page,
-  RangeSlider,
-  Textarea,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  Input,
+  Label,
+  Page,
+  RangeSlider,
+  Textarea,
 } from '../portfolio-ui'
 
 function formatEpochSeconds(ts: number) {
@@ -277,7 +277,7 @@ export function HomePage() {
 
   return (
     <Page
-      title="Ask"
+      title="Ask about GCP"
       description={
         <span>
           Grounded RAG demo with citations + refusal behavior. Public demo mode defaults to{' '}

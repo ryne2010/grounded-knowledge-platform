@@ -11,6 +11,7 @@ on:
       - "cloudbuild.yaml"
       # Infra changes should redeploy too
       - "infra/gcp/cloud_run_demo/**"
+      - "infra/gcp/modules/**"
       - ".github/workflows/gcp-build-and-deploy.yml"
   workflow_dispatch:
     inputs:
@@ -20,7 +21,112 @@ on:
         default: "dev"
 
 jobs:
+  ci_backend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: python -m pip install --upgrade pip uv
+
+      - name: Install deps (uv)
+        run: uv sync --dev
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Typecheck (mypy)
+        run: uv run mypy app
+
+      - name: "Smoke test: ingest + eval"
+        run: |
+          uv run python -m app.cli ingest-folder data/demo_corpus
+          uv run python -m app.cli eval data/eval/golden.jsonl --k 5
+
+  ci_frontend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install + build
+        working-directory: web
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm build
+
+  terraform_hygiene:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TF_DIR: infra/gcp/cloud_run_demo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.4"
+
+      - name: Terraform fmt (check)
+        run: terraform -chdir=${TF_DIR} fmt -check -recursive
+
+      - name: Terraform init (no backend)
+        run: terraform -chdir=${TF_DIR} init -backend=false
+
+      - name: Terraform validate
+        run: terraform -chdir=${TF_DIR} validate
+
+      - name: tflint (docker)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" -w "/repo/${TF_DIR}" ghcr.io/terraform-linters/tflint:latest --init
+          docker run --rm -v "${{ github.workspace }}:/repo" -w "/repo/${TF_DIR}" ghcr.io/terraform-linters/tflint:latest
+
+      - name: tfsec (docker)
+        run: docker run --rm -v "${{ github.workspace }}:/src" aquasec/tfsec:latest /src/${TF_DIR}
+
+      - name: checkov (docker)
+        run: |
+          # NOTE: These skipped checks are org-policy dependent and are intentionally out of scope for
+          # this public Cloud Run demo stack (cost + complexity tradeoffs).
+          #
+          # - CKV_GCP_84: Artifact Registry CMEK/CSEK enforcement (demo uses Google-managed encryption)
+          # - CKV_GCP_26: VPC Flow Logs for every subnet (network module is optional; default is no VPC)
+          # - CKV2_GCP_18: Require explicit firewall rules (network module is optional; default is no VPC)
+          docker run --rm -v "${{ github.workspace }}:/src" bridgecrew/checkov:latest \
+            -d "/src/${TF_DIR}" \
+            --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18"
+
+      - name: conftest policy (docker)
+        run: |
+          set -euo pipefail
+          # Pass explicit *.tf files so we don't accidentally parse .terraform/** artifacts.
+          docker run --rm -v "${{ github.workspace }}:/project" -w /project openpolicyagent/conftest:latest test \
+            --parser hcl2 \
+            --policy infra/gcp/policy \
+            $(find "${TF_DIR}" -path "${TF_DIR}/.terraform" -prune -o -type f -name "*.tf" -print)
+
   build_deploy:
+    needs:
+      - ci_backend
+      - ci_frontend
+      - terraform_hygiene
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.env || 'dev' }}
     concurrency:

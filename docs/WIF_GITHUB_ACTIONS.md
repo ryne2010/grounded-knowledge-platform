@@ -186,13 +186,14 @@ This repo includes an automated workflow:
 - `.github/workflows/gcp-build-and-deploy.yml`
 
 What it does (high level):
-1. Auths to GCP via WIF (no keys)
-2. Downloads `backend.hcl` + `terraform.tfvars` from `GCP_TF_CONFIG_GCS_PATH`
-3. Bootstraps prerequisite infra (APIs + Artifact Registry + runtime service account)
-4. Builds + pushes an immutable image tag via Cloud Build (`sha-${GITHUB_SHA}`)
-5. Updates `image_tag` in `terraform.tfvars` **in GCS** (single source of truth)
-6. Runs `terraform apply` to deploy to Cloud Run
-7. Verifies `/health` and `/api/meta`
+1. Runs CI + Terraform hygiene checks (fails fast; no deploy if these fail)
+2. Auths to GCP via WIF (no keys)
+3. Downloads `backend.hcl` + `terraform.tfvars` from `GCP_TF_CONFIG_GCS_PATH`
+4. Bootstraps prerequisite infra (APIs + Artifact Registry + runtime service account)
+5. Builds + pushes an immutable image tag via Cloud Build (`sha-${GITHUB_SHA}`)
+6. Updates `image_tag` in `terraform.tfvars` **in GCS** (single source of truth)
+7. Runs `terraform apply` to deploy to Cloud Run
+8. Verifies `/health` and `/api/meta`
 
 Enable it:
 - Set the GitHub Environment variables in section (2)
