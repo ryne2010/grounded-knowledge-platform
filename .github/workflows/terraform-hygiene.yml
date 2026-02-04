@@ -39,8 +39,8 @@ jobs:
 
       - name: tflint (docker)
         run: |
-          docker run --rm -v "${{ github.workspace }}/${TF_DIR}:/workspace" -w /workspace ghcr.io/terraform-linters/tflint:latest --init
-          docker run --rm -v "${{ github.workspace }}/${TF_DIR}:/workspace" -w /workspace ghcr.io/terraform-linters/tflint:latest
+          docker run --rm -v "${{ github.workspace }}:/repo" -w "/repo/${TF_DIR}" ghcr.io/terraform-linters/tflint:latest --init
+          docker run --rm -v "${{ github.workspace }}:/repo" -w "/repo/${TF_DIR}" ghcr.io/terraform-linters/tflint:latest
 
       - name: tfsec (docker)
         run: docker run --rm -v "${{ github.workspace }}:/src" aquasec/tfsec:latest /src/${TF_DIR}
