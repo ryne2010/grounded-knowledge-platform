@@ -75,11 +75,30 @@ class IngestEvent:
     embedding_dim: int
     chunk_size_chars: int
     chunk_overlap_chars: int
-    notes: str | None
+    schema_fingerprint: str | None = None
+    contract_sha256: str | None = None
+    validation_status: str | None = None
+    validation_errors_json: str | None = None
+    schema_drifted: int = 0
+    notes: str | None = None
 
     @property
     def changed_bool(self) -> bool:
         return bool(self.changed)
+
+    @property
+    def schema_drifted_bool(self) -> bool:
+        return bool(self.schema_drifted)
+
+    @property
+    def validation_errors(self) -> list[str]:
+        try:
+            raw = json.loads(self.validation_errors_json or "[]")
+            if isinstance(raw, list):
+                return [str(x) for x in raw]
+        except Exception:
+            pass
+        return []
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -96,6 +115,11 @@ class IngestEvent:
             "embedding_dim": self.embedding_dim,
             "chunk_size_chars": self.chunk_size_chars,
             "chunk_overlap_chars": self.chunk_overlap_chars,
+            "schema_fingerprint": self.schema_fingerprint,
+            "contract_sha256": self.contract_sha256,
+            "validation_status": self.validation_status,
+            "validation_errors": self.validation_errors,
+            "schema_drifted": self.schema_drifted_bool,
             "notes": self.notes,
         }
 
@@ -124,8 +148,13 @@ class IngestEventView:
     embedding_dim: int
     chunk_size_chars: int
     chunk_overlap_chars: int
+    schema_fingerprint: str | None
+    contract_sha256: str | None
+    validation_status: str | None
+    validation_errors_json: str | None
+    schema_drifted: int
 
-    notes: str | None
+    notes: str | None = None
 
     @property
     def tags(self) -> list[str]:
@@ -140,6 +169,20 @@ class IngestEventView:
     @property
     def changed_bool(self) -> bool:
         return bool(self.changed)
+
+    @property
+    def schema_drifted_bool(self) -> bool:
+        return bool(self.schema_drifted)
+
+    @property
+    def validation_errors(self) -> list[str]:
+        try:
+            raw = json.loads(self.validation_errors_json or "[]")
+            if isinstance(raw, list):
+                return [str(x) for x in raw]
+        except Exception:
+            pass
+        return []
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -161,6 +204,11 @@ class IngestEventView:
             "embedding_dim": self.embedding_dim,
             "chunk_size_chars": self.chunk_size_chars,
             "chunk_overlap_chars": self.chunk_overlap_chars,
+            "schema_fingerprint": self.schema_fingerprint,
+            "contract_sha256": self.contract_sha256,
+            "validation_status": self.validation_status,
+            "validation_errors": self.validation_errors,
+            "schema_drifted": self.schema_drifted_bool,
             "notes": self.notes,
         }
 
@@ -264,6 +312,11 @@ def init_db(conn: sqlite3.Connection) -> None:
             embedding_dim INTEGER NOT NULL,
             chunk_size_chars INTEGER NOT NULL,
             chunk_overlap_chars INTEGER NOT NULL,
+            schema_fingerprint TEXT,
+            contract_sha256 TEXT,
+            validation_status TEXT,
+            validation_errors_json TEXT,
+            schema_drifted INTEGER NOT NULL DEFAULT 0,
             notes TEXT,
             FOREIGN KEY(doc_id) REFERENCES docs(doc_id) ON DELETE CASCADE
         );
@@ -313,11 +366,22 @@ def init_db(conn: sqlite3.Connection) -> None:
         except Exception:
             pass
 
+    if "ingest_events" in {
+        r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }:
+        _ensure_column(conn, "ingest_events", "schema_fingerprint", "TEXT")
+        _ensure_column(conn, "ingest_events", "contract_sha256", "TEXT")
+        _ensure_column(conn, "ingest_events", "validation_status", "TEXT")
+        _ensure_column(conn, "ingest_events", "validation_errors_json", "TEXT")
+        _ensure_column(conn, "ingest_events", "schema_drifted", "INTEGER NOT NULL DEFAULT 0")
+
     # --- Indexes ---
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc_idx ON chunks(doc_id, idx)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_doc ON ingest_events(doc_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_doc_ver ON ingest_events(doc_id, doc_version)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ingested_at ON ingest_events(ingested_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_validation_status ON ingest_events(validation_status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_updated_at ON docs(updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_title ON docs(title)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_source ON docs(source)")
@@ -542,15 +606,6 @@ def delete_doc_contents(conn: sqlite3.Connection, doc_id: str) -> None:
             chunk_ids,
         )
 
-        try:
-            conn.execute(
-                f"DELETE FROM chunks_fts WHERE chunk_id IN ({placeholders})",
-                chunk_ids,
-            )
-        except sqlite3.OperationalError:
-            # FTS table may not exist
-            pass
-
     conn.execute("DELETE FROM chunks WHERE doc_id=?", (doc_id,))
 
 
@@ -586,9 +641,10 @@ def insert_ingest_event(conn: sqlite3.Connection, e: IngestEvent) -> None:
           num_chunks,
           embedding_backend, embeddings_model, embedding_dim,
           chunk_size_chars, chunk_overlap_chars,
+          schema_fingerprint, contract_sha256, validation_status, validation_errors_json, schema_drifted,
           notes
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             e.event_id,
@@ -604,6 +660,11 @@ def insert_ingest_event(conn: sqlite3.Connection, e: IngestEvent) -> None:
             int(e.embedding_dim),
             int(e.chunk_size_chars),
             int(e.chunk_overlap_chars),
+            e.schema_fingerprint,
+            e.contract_sha256,
+            e.validation_status,
+            e.validation_errors_json,
+            int(e.schema_drifted),
             e.notes,
         ),
     )
@@ -617,10 +678,11 @@ def list_ingest_events(conn: sqlite3.Connection, doc_id: str, *, limit: int = 50
                num_chunks,
                embedding_backend, embeddings_model, embedding_dim,
                chunk_size_chars, chunk_overlap_chars,
+               schema_fingerprint, contract_sha256, validation_status, validation_errors_json, schema_drifted,
                notes
         FROM ingest_events
         WHERE doc_id=?
-        ORDER BY ingested_at DESC
+        ORDER BY ingested_at DESC, rowid DESC
         LIMIT ?
         """,
         (doc_id, int(limit)),
@@ -661,11 +723,16 @@ def list_recent_ingest_events(
               e.embedding_dim,
               e.chunk_size_chars,
               e.chunk_overlap_chars,
+              e.schema_fingerprint,
+              e.contract_sha256,
+              e.validation_status,
+              e.validation_errors_json,
+              e.schema_drifted,
               e.notes
             FROM ingest_events e
             JOIN docs d ON d.doc_id = e.doc_id
             WHERE e.doc_id=?
-            ORDER BY e.ingested_at DESC
+            ORDER BY e.ingested_at DESC, e.rowid DESC
             LIMIT ?
             """,
             (doc_id, limit),
@@ -692,10 +759,15 @@ def list_recent_ingest_events(
               e.embedding_dim,
               e.chunk_size_chars,
               e.chunk_overlap_chars,
+              e.schema_fingerprint,
+              e.contract_sha256,
+              e.validation_status,
+              e.validation_errors_json,
+              e.schema_drifted,
               e.notes
             FROM ingest_events e
             JOIN docs d ON d.doc_id = e.doc_id
-            ORDER BY e.ingested_at DESC
+            ORDER BY e.ingested_at DESC, e.rowid DESC
             LIMIT ?
             """,
             (limit,),

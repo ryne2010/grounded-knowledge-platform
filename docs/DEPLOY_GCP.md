@@ -86,6 +86,43 @@ See `docs/IAM_STARTER_PACK.md`.
 
 ---
 
+## 3b) (Optional) Private auth on Cloud Run
+
+For private/internal deployments, keep Cloud Run non-public and enable API-key auth in app env:
+
+```hcl
+allow_unauthenticated = false
+```
+
+Set environment variables (Cloud Run service or Terraform module env map):
+
+```bash
+AUTH_MODE=api_key
+API_KEYS_JSON={"reader-key":"reader","editor-key":"editor","admin-key":"admin"}
+PUBLIC_DEMO_MODE=0
+```
+
+Notes:
+- In demo mode (`PUBLIC_DEMO_MODE=1`), auth is always forced off (`AUTH_MODE=none`) and the app stays read-only.
+- Keep keys in Secret Manager for real deployments; do not hard-code in source control.
+
+---
+
+## 3c) (Optional) Cloud SQL Postgres persistence
+
+Set Terraform vars:
+
+```hcl
+enable_cloudsql   = true
+cloudsql_database = "gkp"
+cloudsql_user     = "gkp_app"
+```
+
+On apply, Terraform provisions Cloud SQL resources and injects `DATABASE_URL` into Cloud Run.
+Operational runbook: `docs/RUNBOOKS/CLOUDSQL.md`.
+
+---
+
 ## 4) Verify
 
 ```bash

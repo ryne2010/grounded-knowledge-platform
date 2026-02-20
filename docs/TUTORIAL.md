@@ -56,6 +56,17 @@ Or:
 make dev
 ```
 
+Installable PWA (optional):
+
+1. Open the app in a Chromium browser.
+2. Use "Install app" from the address bar/app menu.
+3. After first load, the app shell is cached for offline navigation.
+
+Offline limitations:
+- API-backed data still needs network.
+- `/api/query` responses are not cached by default.
+- Ask actions are disabled while offline.
+
 Housekeeping:
 
 ```bash
@@ -73,6 +84,7 @@ make dist    # create a clean source ZIP in dist/
 2. Either:
    - Upload a `.md`, `.txt`, `.pdf`, `.csv`, `.tsv`, `.xlsx`, or `.xlsm`, **or**
    - Use **Paste text** for quick notes/runbooks
+   - For tabular files, you can optionally attach a YAML contract file
 
 > Note: For **scanned** PDFs, enable OCR via `OCR_ENABLED=1` and install `tesseract` locally.
 3. Add tags + a classification
@@ -101,6 +113,8 @@ This is how you debug drift:
 
 Tip: the UI shows both the current content SHA and (when available) the previous content SHA per ingest event.
 
+Data-contract reference: `docs/DATA_CONTRACTS.md`
+
 ---
 
 ## Edit doc metadata (private deployments)
@@ -124,6 +138,7 @@ Try questions that should be:
 - **prompt-injection attempts** (should refuse)
 
 In non-demo deployments, enable **Debug retrieval** on the home page.
+For long answers, enable **Streaming mode** on the Ask page to render incremental tokens/citations.
 
 - Ask a question
 - Open **Retrieval** on the answer card to inspect the hybrid retrieval set (BM25 + embeddings)

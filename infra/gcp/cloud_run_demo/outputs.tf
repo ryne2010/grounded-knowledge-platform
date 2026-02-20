@@ -42,3 +42,14 @@ output "alert_policy_latency_name" {
   value       = var.enable_observability ? try(google_monitoring_alert_policy.cloudrun_latency_p95[0].id, null) : null
   description = "Alert policy name for latency p95 (if enabled)."
 }
+
+output "cloudsql_connection_name" {
+  value       = var.enable_cloudsql ? try(google_sql_database_instance.cloudsql[0].connection_name, null) : null
+  description = "Cloud SQL connection name (if Cloud SQL is enabled)."
+}
+
+output "cloudsql_database_url" {
+  value       = var.enable_cloudsql ? local.cloudsql_database_url : null
+  description = "DATABASE_URL injected into Cloud Run (if Cloud SQL is enabled)."
+  sensitive   = true
+}

@@ -6,22 +6,25 @@ import re
 import sqlite3
 import time
 import uuid
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .answering import get_answerer
+from .auth import AuthError, require_role, resolve_auth_context
 from .bootstrap import bootstrap_demo_corpus
 from .config import settings
 from .eval import run_eval
 from .ingestion import ingest_file, ingest_text
 from .metadata import CLASSIFICATIONS, RETENTIONS, normalize_classification, normalize_retention, normalize_tags
+from .otel import setup_otel, span
 from .observability import (
     Timer,
     configure_logging,
@@ -332,6 +335,7 @@ app = FastAPI(
 
 # Configure JSON logging early so Cloud Run/Cloud Logging parses fields.
 configure_logging()
+setup_otel(app)
 
 logger = logging.getLogger("gkp")
 
@@ -380,6 +384,34 @@ async def _request_middleware(request: Request, call_next):
 
     # Cloud Trace correlation (if present).
     trace_id, span_id = parse_cloud_trace_context({k.lower(): v for k, v in request.headers.items()})
+
+    # ---- Auth context (if enabled) ----
+    try:
+        auth_ctx = resolve_auth_context(request)
+    except AuthError as ae:
+        latency_ms = timer.ms()
+        log_http_request(
+            request_id=rid,
+            method=request.method,
+            url=str(request.url),
+            path=request.url.path,
+            status=int(ae.status_code),
+            latency_ms=latency_ms,
+            remote_ip=remote_ip,
+            user_agent=user_agent,
+            trace_id=trace_id,
+            span_id=span_id,
+            error_type="AuthError",
+            severity="WARNING",
+        )
+        return JSONResponse(
+            status_code=ae.status_code,
+            content={"detail": ae.detail},
+            headers={"X-Request-Id": rid},
+        )
+    request.state.auth_context = auth_ctx
+    request.state.principal = auth_ctx.principal
+    request.state.role = auth_ctx.role
 
     # ---- Rate limiting (defense-in-depth) ----
     # In demo mode this is enabled by default; private deployments can opt in via RATE_LIMIT_ENABLED=1.
@@ -630,7 +662,7 @@ def ready() -> dict[str, object]:
 
 
 @app.get("/api/meta")
-def meta() -> dict[str, object]:
+def meta(_auth: Any = Depends(require_role("reader"))) -> dict[str, object]:
     """Small metadata endpoint for the UI and diagnostics."""
     uploads_enabled = bool(settings.allow_uploads and not settings.public_demo_mode)
     eval_enabled = bool(settings.allow_eval and not settings.public_demo_mode)
@@ -656,6 +688,8 @@ def meta() -> dict[str, object]:
     return {
         "version": app.version,
         "public_demo_mode": settings.public_demo_mode,
+        "auth_mode": settings.auth_mode if not settings.public_demo_mode else "none",
+        "database_backend": "postgres" if settings.database_url else "sqlite",
         "uploads_enabled": uploads_enabled,
         "eval_enabled": eval_enabled,
         "chunk_view_enabled": chunk_view_enabled,
@@ -685,7 +719,7 @@ def meta() -> dict[str, object]:
 
 
 @app.get("/api/stats", response_model=StatsResponse)
-def stats_api() -> StatsResponse:
+def stats_api(_auth: Any = Depends(require_role("reader"))) -> StatsResponse:
     """Index-level statistics for dashboards and diagnostics."""
 
     with connect(settings.sqlite_path) as conn:
@@ -740,7 +774,9 @@ def stats_api() -> StatsResponse:
 
 # ---- Maintenance (safe read-only helpers) ----
 @app.get("/api/maintenance/retention/expired", response_model=ExpiredDocsResponse)
-def maintenance_retention_expired(now: int | None = None) -> ExpiredDocsResponse:
+def maintenance_retention_expired(
+    now: int | None = None, _auth: Any = Depends(require_role("reader"))
+) -> ExpiredDocsResponse:
     """List documents whose retention policy has expired.
 
     This endpoint is intentionally **read-only** (no deletes). It powers the UI
@@ -774,7 +810,7 @@ def maintenance_retention_expired(now: int | None = None) -> ExpiredDocsResponse
 
 # ---- Docs ----
 @app.get("/api/docs")
-def docs() -> dict[str, Any]:
+def docs(_auth: Any = Depends(require_role("reader"))) -> dict[str, Any]:
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
         items = list_docs(conn)
@@ -782,7 +818,7 @@ def docs() -> dict[str, Any]:
 
 
 @app.get("/api/docs/{doc_id}")
-def doc_detail(doc_id: str) -> dict[str, Any]:
+def doc_detail(doc_id: str, _auth: Any = Depends(require_role("reader"))) -> dict[str, Any]:
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
         doc = get_doc(conn, doc_id)
@@ -796,7 +832,7 @@ def doc_detail(doc_id: str) -> dict[str, Any]:
 
 
 @app.patch("/api/docs/{doc_id}")
-def doc_update(doc_id: str, req: DocUpdateRequest) -> dict[str, Any]:
+def doc_update(doc_id: str, req: DocUpdateRequest, _auth: Any = Depends(require_role("editor"))) -> dict[str, Any]:
     """Update doc metadata (title/source/classification/retention/tags).
 
     This endpoint is intentionally **disabled** in PUBLIC_DEMO_MODE.
@@ -867,7 +903,11 @@ def doc_update(doc_id: str, req: DocUpdateRequest) -> dict[str, Any]:
 
 
 @app.get("/api/ingest/events")
-def list_ingest_events_api(limit: int = 100, doc_id: str | None = None) -> dict[str, Any]:
+def list_ingest_events_api(
+    limit: int = 100,
+    doc_id: str | None = None,
+    _auth: Any = Depends(require_role("reader")),
+) -> dict[str, Any]:
     """List recent ingest events across docs (audit/lineage view)."""
     limit = max(1, min(int(limit), 500))
     with connect(settings.sqlite_path) as conn:
@@ -877,7 +917,12 @@ def list_ingest_events_api(limit: int = 100, doc_id: str | None = None) -> dict[
 
 
 @app.get("/api/docs/{doc_id}/chunks")
-def doc_chunks(doc_id: str, limit: int = 200, offset: int = 0) -> dict[str, Any]:
+def doc_chunks(
+    doc_id: str,
+    limit: int = 200,
+    offset: int = 0,
+    _auth: Any = Depends(require_role("admin")),
+) -> dict[str, Any]:
     if settings.public_demo_mode or not settings.allow_chunk_view:
         raise HTTPException(status_code=403, detail="Chunk view is disabled in this deployment")
 
@@ -905,7 +950,7 @@ def doc_chunks(doc_id: str, limit: int = 200, offset: int = 0) -> dict[str, Any]
 
 
 @app.get("/api/docs/{doc_id}/text")
-def doc_text(doc_id: str) -> PlainTextResponse:
+def doc_text(doc_id: str, _auth: Any = Depends(require_role("admin"))) -> PlainTextResponse:
     """Export a doc as plain text.
 
     This is useful for debugging and for copying a document out of the system.
@@ -965,7 +1010,7 @@ def doc_text(doc_id: str) -> PlainTextResponse:
 
 
 @app.get("/api/chunks/{chunk_id}")
-def chunk_detail(chunk_id: str) -> dict[str, Any]:
+def chunk_detail(chunk_id: str, _auth: Any = Depends(require_role("admin"))) -> dict[str, Any]:
     if settings.public_demo_mode or not settings.allow_chunk_view:
         raise HTTPException(status_code=403, detail="Chunk view is disabled in this deployment")
 
@@ -989,7 +1034,7 @@ def chunk_detail(chunk_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/search/chunks", response_model=ChunkSearchResponse)
-def search_chunks(q: str, limit: int = 20) -> ChunkSearchResponse:
+def search_chunks(q: str, limit: int = 20, _auth: Any = Depends(require_role("reader"))) -> ChunkSearchResponse:
     """Lightweight chunk search for the UI.
 
     - Uses SQLite FTS5 when available.
@@ -1103,7 +1148,7 @@ def search_chunks(q: str, limit: int = 20) -> ChunkSearchResponse:
 
 
 @app.delete("/api/docs/{doc_id}")
-def delete_doc_api(doc_id: str) -> dict[str, Any]:
+def delete_doc_api(doc_id: str, _auth: Any = Depends(require_role("admin"))) -> dict[str, Any]:
     if settings.public_demo_mode or not settings.allow_doc_delete:
         raise HTTPException(status_code=403, detail="Delete is disabled in this deployment")
 
@@ -1121,7 +1166,7 @@ def delete_doc_api(doc_id: str) -> dict[str, Any]:
 
 # ---- Ingest ----
 @app.post("/api/ingest/text")
-def ingest_text_api(req: IngestTextRequest) -> dict[str, Any]:
+def ingest_text_api(req: IngestTextRequest, _auth: Any = Depends(require_role("editor"))) -> dict[str, Any]:
     if settings.public_demo_mode or not settings.allow_uploads:
         raise HTTPException(status_code=403, detail="Uploads are disabled in this deployment")
 
@@ -1152,12 +1197,14 @@ def ingest_text_api(req: IngestTextRequest) -> dict[str, Any]:
 @app.post("/api/ingest/file")
 async def ingest_file_api(
     file: UploadFile = File(...),
+    contract_file: UploadFile | None = File(None),
     title: str | None = Form(None),
     source: str | None = Form(None),
     classification: str | None = Form(None),
     retention: str | None = Form(None),
     tags: str | None = Form(None),
     notes: str | None = Form(None),
+    _auth: Any = Depends(require_role("editor")),
 ) -> dict[str, Any]:
     if settings.public_demo_mode or not settings.allow_uploads:
         raise HTTPException(status_code=403, detail="Uploads are disabled in this deployment")
@@ -1173,6 +1220,13 @@ async def ingest_file_api(
 
     tmp_dir = Path("/tmp/gkp_uploads")
     tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    contract_bytes: bytes | None = None
+    if contract_file is not None:
+        raw = await contract_file.read()
+        if len(raw) > 64 * 1024:
+            raise HTTPException(status_code=400, detail="Contract file too large (max 65536 bytes)")
+        contract_bytes = bytes(raw)
 
     # Unique temp file path (avoid cross-request collisions).
     stem = Path(safe_name).stem
@@ -1202,6 +1256,7 @@ async def ingest_file_api(
                 retention=retention,
                 tags=tags,
                 notes=notes,
+                contract_bytes=contract_bytes,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -1224,8 +1279,26 @@ async def ingest_file_api(
 
 
 # ---- Query ----
+_STREAM_SENT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _sse_event(event: str, data: Any) -> str:
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+def _stream_text_chunks(text: str) -> list[str]:
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    chunks = [c.strip() for c in _STREAM_SENT_RE.split(raw) if c.strip()]
+    if chunks:
+        return chunks
+    return [raw]
+
+
 @app.post("/api/query")
-def query_api(req: QueryRequest) -> dict[str, Any]:
+def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -> dict[str, Any]:
     """Core query endpoint.
 
     Staff-grade behaviors:
@@ -1247,7 +1320,11 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
     include_retrieval_text = bool(settings.allow_chunk_view) and not settings.public_demo_mode
 
     # --- Prompt-injection/circumvention detection ---
-    inj = detect_prompt_injection(question)
+    with span(
+        "safety.prompt_injection_scan",
+        attributes={"question_length": len(question), "otel_debug_content": bool(settings.otel_debug_content)},
+    ):
+        inj = detect_prompt_injection(question)
     if inj.is_injection:
         return {
             "question": question,
@@ -1259,7 +1336,11 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
         }
 
     # --- Retrieve ---
-    retrieved = retrieve(question, top_k=top_k)
+    with span(
+        "retrieval.retrieve",
+        attributes={"top_k": top_k, "embeddings_backend": settings.embeddings_backend},
+    ):
+        retrieved = retrieve(question, top_k=top_k)
     context = [(r.chunk_id, r.doc_id, r.idx, r.text) for r in retrieved]
 
     if not context:
@@ -1304,7 +1385,14 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
 
     # --- Answer ---
     answerer = get_answerer()
-    ans = answerer.answer(question, context)
+    with span(
+        "generation.answer",
+        attributes={
+            "provider": getattr(answerer, "name", settings.effective_llm_provider),
+            "context_chunks": len(context),
+        },
+    ):
+        ans = answerer.answer(question, context)
 
     # Enrich citations with doc metadata.
     citations_out: list[dict[str, Any]] = []
@@ -1387,9 +1475,160 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
     return out
 
 
+@app.post("/api/query/stream")
+async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -> StreamingResponse:
+    question = (req.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question is required")
+
+    if len(question) > settings.max_question_chars:
+        raise HTTPException(status_code=400, detail=f"Question too long (max {settings.max_question_chars} chars)")
+
+    top_k = max(1, min(int(req.top_k or settings.top_k_default), settings.max_top_k))
+    include_retrieval_text = bool(settings.allow_chunk_view) and not settings.public_demo_mode
+
+    async def _events():
+        try:
+            with span(
+                "safety.prompt_injection_scan",
+                attributes={"question_length": len(question), "otel_debug_content": bool(settings.otel_debug_content)},
+            ):
+                inj = detect_prompt_injection(question)
+            if inj.is_injection:
+                refusal_text = "I can’t help with that request. I can only answer questions using the provided sources."
+                yield _sse_event("token", {"text": refusal_text})
+                yield _sse_event("citations", [])
+                yield _sse_event(
+                    "done",
+                    {
+                        "question": question,
+                        "answer": refusal_text,
+                        "refused": True,
+                        "refusal_reason": f"prompt_injection:{','.join(inj.reasons)}",
+                        "provider": "policy",
+                    },
+                )
+                return
+
+            with span(
+                "retrieval.retrieve",
+                attributes={"top_k": top_k, "embeddings_backend": settings.embeddings_backend},
+            ):
+                retrieved = retrieve(question, top_k=top_k)
+            retrieval_out: list[dict[str, Any]] = []
+            for r in retrieved:
+                item: dict[str, Any] = {
+                    "chunk_id": r.chunk_id,
+                    "doc_id": r.doc_id,
+                    "idx": r.idx,
+                    "score": r.score,
+                    "lexical_score": r.lexical_score,
+                    "vector_score": r.vector_score,
+                    "text_preview": r.text[:240],
+                }
+                if include_retrieval_text:
+                    item["text"] = r.text
+                retrieval_out.append(item)
+            yield _sse_event("retrieval", retrieval_out)
+
+            if not retrieved or _is_unrelated_question(question, retrieved):
+                refusal_text = "I don’t have enough evidence in the indexed sources to answer that."
+                yield _sse_event("token", {"text": refusal_text})
+                yield _sse_event("citations", [])
+                yield _sse_event(
+                    "done",
+                    {
+                        "question": question,
+                        "answer": refusal_text,
+                        "refused": True,
+                        "refusal_reason": "insufficient_evidence",
+                        "provider": "policy",
+                    },
+                )
+                return
+
+            context = [(r.chunk_id, r.doc_id, r.idx, r.text) for r in retrieved]
+            answerer = get_answerer()
+            with span(
+                "generation.answer",
+                attributes={
+                    "provider": getattr(answerer, "name", settings.effective_llm_provider),
+                    "context_chunks": len(context),
+                },
+            ):
+                ans = answerer.answer(question, context)
+
+            with connect(settings.sqlite_path) as conn:
+                init_db(conn)
+                doc_map = {d.doc_id: d for d in list_docs(conn)}
+
+            citations_out: list[dict[str, Any]] = []
+            for c in ans.citations or []:
+                d = doc_map.get(c.doc_id)
+                citations_out.append(
+                    {
+                        "chunk_id": c.chunk_id,
+                        "doc_id": c.doc_id,
+                        "idx": c.idx,
+                        "quote": c.quote,
+                        "doc_title": d.title if d else None,
+                        "doc_source": d.source if d else None,
+                        "doc_version": d.doc_version if d else None,
+                    }
+                )
+
+            refused = bool(getattr(ans, "refused", False))
+            refusal_reason: str | None = "answerer_refused" if refused else None
+            answer_text = ans.text
+            provider = ans.provider
+
+            if bool(settings.citations_required) and not refused and not citations_out:
+                refused = True
+                refusal_reason = "insufficient_evidence"
+                answer_text = "I don’t have enough evidence in the indexed sources to answer that."
+
+            for token in _stream_text_chunks(answer_text):
+                yield _sse_event("token", {"text": token})
+                await asyncio.sleep(0)
+
+            yield _sse_event("citations", citations_out)
+            yield _sse_event(
+                "done",
+                {
+                    "question": question,
+                    "answer": answer_text,
+                    "refused": refused,
+                    "refusal_reason": refusal_reason,
+                    "provider": provider,
+                },
+            )
+        except Exception as e:
+            yield _sse_event("error", {"message": f"{type(e).__name__}: {e}"})
+            yield _sse_event(
+                "done",
+                {
+                    "question": question,
+                    "answer": "I don’t have enough evidence in the indexed sources to answer that.",
+                    "refused": True,
+                    "refusal_reason": "internal_error",
+                    "provider": "policy",
+                },
+            )
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # ---- Eval ----
 @app.post("/api/eval/run")
-def eval_api(req: EvalRequest) -> dict[str, Any]:
+def eval_api(req: EvalRequest, _auth: Any = Depends(require_role("admin"))) -> dict[str, Any]:
     if settings.public_demo_mode or not settings.allow_eval:
         raise HTTPException(status_code=403, detail="Eval endpoint disabled in this deployment")
     res = run_eval(req.golden_path, k=req.k, include_details=req.include_details)

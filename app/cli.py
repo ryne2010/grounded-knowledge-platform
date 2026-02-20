@@ -8,7 +8,13 @@ from .ingestion import ingest_file
 
 
 def cmd_ingest_folder(
-    folder: str, *, classification: str | None, retention: str | None, tags: str | None, notes: str | None
+    folder: str,
+    *,
+    classification: str | None,
+    retention: str | None,
+    tags: str | None,
+    notes: str | None,
+    contract_path: str | None,
 ) -> None:
     folder_path = Path(folder)
     if not folder_path.exists():
@@ -20,15 +26,24 @@ def cmd_ingest_folder(
         print("No supported files found (.md/.txt/.pdf/.csv/.tsv/.xlsx/.xlsm).")
         return
 
+    contract_bytes: bytes | None = None
+    if contract_path:
+        cp = Path(contract_path)
+        if not cp.exists():
+            raise SystemExit(f"Contract file does not exist: {contract_path}")
+        contract_bytes = cp.read_bytes()
+
     errors: list[str] = []
     for p in files:
         try:
+            use_contract = contract_bytes if p.suffix.lower() in {".csv", ".tsv", ".xlsx", ".xlsm"} else None
             res = ingest_file(
                 p,
                 classification=classification,
                 retention=retention,
                 tags=tags,
                 notes=notes,
+                contract_bytes=use_contract,
             )
             drift = "changed" if res.changed else "unchanged"
             print(
@@ -44,6 +59,45 @@ def cmd_ingest_folder(
         for err in errors:
             print(f"- {err}")
         raise SystemExit(1)
+
+
+def cmd_ingest_file(
+    path: str,
+    *,
+    title: str | None,
+    source: str | None,
+    classification: str | None,
+    retention: str | None,
+    tags: str | None,
+    notes: str | None,
+    contract_path: str | None,
+) -> None:
+    file_path = Path(path)
+    if not file_path.exists():
+        raise SystemExit(f"File does not exist: {path}")
+
+    contract_bytes: bytes | None = None
+    if contract_path:
+        cp = Path(contract_path)
+        if not cp.exists():
+            raise SystemExit(f"Contract file does not exist: {contract_path}")
+        contract_bytes = cp.read_bytes()
+
+    res = ingest_file(
+        file_path,
+        title=title,
+        source=source,
+        classification=classification,
+        retention=retention,
+        tags=tags,
+        notes=notes,
+        contract_bytes=contract_bytes,
+    )
+    drift = "changed" if res.changed else "unchanged"
+    print(
+        f"Ingested {file_path.name}: doc_id={res.doc_id} v{res.doc_version} {drift} "
+        f"chunks={res.num_chunks} dim={res.embedding_dim} sha256={res.content_sha256[:10]}…"
+    )
 
 
 def cmd_eval(path: str, k: int) -> None:
@@ -75,12 +129,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="grounded-kp")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    p_file = sub.add_parser("ingest-file", help="Ingest one file (.md/.txt/.pdf/.csv/.tsv/.xlsx/.xlsm).")
+    p_file.add_argument("path", type=str)
+    p_file.add_argument("--title", default=None)
+    p_file.add_argument("--source", default=None)
+    p_file.add_argument("--classification", default=None, help="public|internal|confidential|restricted")
+    p_file.add_argument("--retention", default=None, help="none|30d|90d|1y|indefinite")
+    p_file.add_argument("--tags", default=None, help="Comma-separated tags")
+    p_file.add_argument("--notes", default=None, help="Optional ingest note")
+    p_file.add_argument("--contract", default=None, help="Optional YAML contract for tabular files")
+
     p_ing = sub.add_parser("ingest-folder", help="Ingest all docs in a folder (.md/.txt/.pdf/.csv/.tsv/.xlsx/.xlsm).")
     p_ing.add_argument("folder", type=str)
     p_ing.add_argument("--classification", default=None, help="public|internal|confidential|restricted")
     p_ing.add_argument("--retention", default=None, help="none|30d|90d|1y|indefinite")
     p_ing.add_argument("--tags", default=None, help="Comma-separated tags")
     p_ing.add_argument("--notes", default=None, help="Optional ingest note")
+    p_ing.add_argument("--contract", default=None, help="Optional YAML contract for tabular files")
 
     p_eval = sub.add_parser("eval", help="Run retrieval evaluation on a JSONL golden set.")
     p_eval.add_argument("golden", type=str)
@@ -101,13 +166,25 @@ def main() -> None:
     p_purge.add_argument("--now", type=int, default=None, help="Override 'now' unix timestamp (testing).")
 
     args = parser.parse_args()
-    if args.cmd == "ingest-folder":
+    if args.cmd == "ingest-file":
+        cmd_ingest_file(
+            args.path,
+            title=args.title,
+            source=args.source,
+            classification=args.classification,
+            retention=args.retention,
+            tags=args.tags,
+            notes=args.notes,
+            contract_path=args.contract,
+        )
+    elif args.cmd == "ingest-folder":
         cmd_ingest_folder(
             args.folder,
             classification=args.classification,
             retention=args.retention,
             tags=args.tags,
             notes=args.notes,
+            contract_path=args.contract,
         )
     elif args.cmd == "eval":
         cmd_eval(args.golden, args.k)

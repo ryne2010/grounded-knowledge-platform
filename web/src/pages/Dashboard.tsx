@@ -11,6 +11,7 @@ function formatBool(v: boolean) {
 export function DashboardPage() {
   const metaQuery = useQuery({ queryKey: ['meta'], queryFn: api.meta, staleTime: 30_000 })
   const statsQuery = useQuery({ queryKey: ['stats'], queryFn: api.stats, staleTime: 5_000 })
+  const eventsQuery = useQuery({ queryKey: ['recent-ingest-events'], queryFn: () => api.listIngestEvents(100), staleTime: 5_000 })
 
   const meta = metaQuery.data ?? null
   const stats = statsQuery.data ?? null
@@ -21,8 +22,15 @@ export function DashboardPage() {
     return stats.top_tags.slice(0, 20)
   }, [stats])
 
+  const validationFailures = useMemo(() => {
+    const events = eventsQuery.data?.events ?? []
+    return events
+      .filter((e) => String(e.validation_status ?? '').toLowerCase() === 'fail')
+      .slice(0, 8)
+  }, [eventsQuery.data])
+
   return (
-    <Page title="Dashboard" subtitle="Index health, config flags, and quick diagnostics">
+    <Page title="Dashboard" description="Index health, config flags, and quick diagnostics">
       {error && <div className="text-sm text-red-600">{String(error?.message ?? error)}</div>}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
@@ -209,6 +217,38 @@ export function DashboardPage() {
             </div>
           ) : (
             <div className="text-sm text-muted-foreground">No tags yet.</div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Separator className="my-6" />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent validation failures</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {validationFailures.length ? (
+            <div className="space-y-2 text-sm">
+              {validationFailures.map((e) => (
+                <div key={e.event_id} className="rounded border p-2">
+                  <div className="font-medium">{e.doc_title}</div>
+                  <div className="text-xs text-muted-foreground font-mono">{e.doc_id}</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    <Badge variant="destructive">fail</Badge>
+                    {e.schema_drifted ? <Badge variant="warning">drift</Badge> : null}
+                  </div>
+                  {e.validation_errors?.length ? (
+                    <div className="mt-1 text-xs text-destructive">
+                      {e.validation_errors.slice(0, 2).join(' · ')}
+                      {e.validation_errors.length > 2 ? ' …' : ''}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">No recent validation failures.</div>
           )}
         </CardContent>
       </Card>

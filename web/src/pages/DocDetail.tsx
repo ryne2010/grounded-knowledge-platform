@@ -156,7 +156,28 @@ export function DocDetailPage() {
       {
         header: 'Changed',
         accessorKey: 'changed',
-        cell: (info: any) => (info.getValue() ? <Badge variant="warning">changed</Badge> : <Badge variant="outline">same</Badge>),
+        cell: (info: any) => {
+          const e = info.row.original as IngestEvent
+          return (
+            <div className="flex flex-wrap gap-1">
+              {info.getValue() ? <Badge variant="warning">changed</Badge> : <Badge variant="outline">same</Badge>}
+              {e.schema_drifted ? <Badge variant="destructive">drift</Badge> : null}
+            </div>
+          )
+        },
+      },
+      {
+        header: 'Validation',
+        accessorKey: 'validation_status',
+        cell: (info: any) => {
+          const e = info.row.original as IngestEvent
+          const status = String(info.getValue() ?? '').toLowerCase()
+          if (!status) return <span className="text-xs text-muted-foreground">—</span>
+          if (status === 'pass') return <Badge variant="success">pass</Badge>
+          if (status === 'warn') return <Badge variant="warning">warn</Badge>
+          if (status === 'fail') return <Badge variant="destructive">fail</Badge>
+          return <Badge variant="outline">{status}</Badge>
+        },
       },
       {
         header: 'Content SHA',
@@ -205,7 +226,21 @@ export function DocDetailPage() {
       {
         header: 'Note',
         accessorKey: 'notes',
-        cell: (info: any) => <span className="text-xs">{String(info.getValue() ?? '')}</span>,
+        cell: (info: any) => {
+          const e = info.row.original as IngestEvent
+          const note = String(info.getValue() ?? '')
+          return (
+            <div className="space-y-1">
+              <span className="text-xs">{note}</span>
+              {e.validation_errors?.length ? (
+                <div className="text-[11px] text-destructive">
+                  {e.validation_errors.slice(0, 2).join(' · ')}
+                  {e.validation_errors.length > 2 ? ' …' : ''}
+                </div>
+              ) : null}
+            </div>
+          )
+        },
       },
     ],
     [],

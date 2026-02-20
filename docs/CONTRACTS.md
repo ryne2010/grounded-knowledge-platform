@@ -14,11 +14,31 @@ This document defines the stable external contracts for the Grounded Knowledge P
 
 - `PUBLIC_DEMO_MODE=1`
   - Forces **read-only** mode (no uploads/eval/chunk view/delete)
+  - Forces `AUTH_MODE=none` (anonymous)
   - Forces **extractive** answering (no external LLM calls)
   - Enables rate limiting by default
 
 - `APP_VERSION=...` (optional)
   - Overrides the reported app version (otherwise derived from `pyproject.toml`)
+
+### Authentication / authorization (optional)
+
+- `AUTH_MODE=none|api_key|oidc` (default: `none`)
+  - `none`: anonymous requests (existing behavior)
+  - `api_key`: require `X-API-Key` on non-health endpoints
+  - `oidc`: reserved for Cloud Run/IAP JWT validation (not implemented in this build)
+
+- API key inputs (when `AUTH_MODE=api_key`):
+  - `API_KEYS_JSON` (preferred): JSON map of key -> role
+    - Example: `{"reader-key":"reader","editor-key":"editor","admin-key":"admin"}`
+  - `API_KEYS` (fallback): comma-separated keys, optional role suffix
+    - Example: `reader-key:reader,admin-key:admin`
+  - `API_KEY` (fallback): single key (defaults to `admin`)
+
+Roles:
+- `reader`: read/query endpoints
+- `editor`: ingest endpoints
+- `admin`: delete/chunk-view/eval endpoints
 
 - `RATE_LIMIT_ENABLED=1`
   - Default: enabled in `PUBLIC_DEMO_MODE=1`, disabled otherwise
@@ -102,6 +122,10 @@ OCR is disabled by default. Enable only for private deployments.
 ### Observability
 
 - `LOG_LEVEL=INFO|DEBUG|WARNING|ERROR` (default: `INFO`)
+- `OTEL_ENABLED=0|1` (default: `0`)
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (optional)
+- `OTEL_SERVICE_NAME` (default: `grounded-knowledge-platform`)
+- `OTEL_DEBUG_CONTENT=0|1` (default: `0`)
 
 ---
 
@@ -121,6 +145,8 @@ Returns feature flags and deployment configuration for the UI.
 Shape (stable keys):
 
 - `public_demo_mode: bool`
+- `auth_mode: string`
+- `database_backend: string`
 - `version: string`
 - `uploads_enabled: bool`
 - `eval_enabled: bool`
@@ -163,6 +189,13 @@ Shape (stable keys):
 - `GET /api/docs` → `{ docs: Doc[] }`
 - `GET /api/docs/{doc_id}` → `{ doc: Doc, ingest_events: IngestEvent[] }`
 
+`IngestEvent` includes (in addition to lineage fields):
+- `schema_fingerprint?: string`
+- `contract_sha256?: string`
+- `validation_status?: "pass" | "warn" | "fail"`
+- `validation_errors?: string[]`
+- `schema_drifted?: boolean`
+
 Doc metadata update (requires `ALLOW_UPLOADS=1` and not demo mode):
 
 - `PATCH /api/docs/{doc_id}` → `{ doc: Doc }`
@@ -202,6 +235,7 @@ Request (multipart form):
 
 - required: `file` (.txt/.md/.pdf/.csv/.tsv/.xlsx)
   - Note: `.xlsx/.xlsm` ingestion uses `openpyxl` (included in the default dependency set).
+- optional: `contract_file` (YAML, max 64KB; tabular files only)
 - optional: `title`, `source`, `classification`, `retention`, `tags`, `notes`
 
 Response:
@@ -211,6 +245,7 @@ Response:
 ### Query
 
 - `POST /api/query`
+- `POST /api/query/stream` (SSE)
 
 Request:
 
@@ -227,6 +262,17 @@ Response (stable):
 - `provider: string`
 - `citations: Citation[]`
 - optional: `retrieval: RetrievalDebug[]` (debug-only)
+
+Auth note:
+- when `AUTH_MODE=api_key`, requests must include `X-API-Key: <key>`
+
+Streaming event schema (`/api/query/stream`):
+
+- `retrieval`: `RetrievalDebug[]`
+- `token`: `{ text: string }`
+- `citations`: `Citation[]`
+- `done`: `{ question, answer, refused, refusal_reason, provider }`
+- `error`: `{ message: string }`
 
 `RetrievalDebug` shape:
 

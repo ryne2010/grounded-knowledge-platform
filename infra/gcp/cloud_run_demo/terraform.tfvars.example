@@ -17,3 +17,10 @@ image_tag          = "latest"
 # Optional: demonstrate group-based IAM without Workspace/Cloud Identity.
 # clients_observers_group_email              = "gkp-observers@googlegroups.com"
 # enable_clients_observers_monitoring_viewer = true
+
+# Optional: Cloud SQL (Postgres) persistence
+# enable_cloudsql       = true
+# cloudsql_tier         = "db-custom-1-3840"
+# cloudsql_disk_size_gb = 20
+# cloudsql_database     = "gkp"
+# cloudsql_user         = "gkp_app"

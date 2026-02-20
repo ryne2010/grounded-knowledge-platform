@@ -59,6 +59,7 @@ def _env_bool(name: str, default: bool) -> bool:
 _ALLOWED_LLM_PROVIDERS = {"extractive", "openai", "gemini", "ollama"}
 _ALLOWED_EMBEDDINGS_BACKENDS = {"none", "hash", "sentence-transformers"}
 _ALLOWED_RATE_LIMIT_SCOPES = {"query", "api"}
+_ALLOWED_AUTH_MODES = {"none", "api_key", "oidc"}
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,7 @@ class Settings:
 
     # ---- Safety / demo flags ----
     public_demo_mode: bool
+    auth_mode: str  # none | api_key | oidc
     allow_uploads: bool
     allow_eval: bool
 
@@ -104,8 +106,15 @@ class Settings:
     rate_limit_window_s: int
     rate_limit_max_requests: int
 
+    # ---- OpenTelemetry ----
+    otel_enabled: bool
+    otel_exporter_otlp_endpoint: str | None
+    otel_service_name: str
+    otel_debug_content: bool
+
     # ---- Storage ----
     sqlite_path: str
+    database_url: str | None
 
     # ---- Embeddings ----
     embeddings_backend: str  # none | hash | sentence-transformers
@@ -152,6 +161,9 @@ class Settings:
 def load_settings() -> Settings:
     # Safety-first default: with no env configured, prefer read-only demo mode.
     public_demo_mode = _env_bool("PUBLIC_DEMO_MODE", True)
+    auth_mode = _env_str("AUTH_MODE", "none").lower().strip()
+    if auth_mode not in _ALLOWED_AUTH_MODES:
+        auth_mode = "none"
 
     # These are intentionally opt-in (even in private mode).
     allow_uploads = _env_bool("ALLOW_UPLOADS", False)
@@ -182,8 +194,14 @@ def load_settings() -> Settings:
     rate_limit_window_s = _env_int("RATE_LIMIT_WINDOW_S", 60)
     rate_limit_max_requests = _env_int("RATE_LIMIT_MAX_REQUESTS", 30)
 
+    otel_enabled = _env_bool("OTEL_ENABLED", False)
+    otel_exporter_otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or None
+    otel_service_name = _env_str("OTEL_SERVICE_NAME", "grounded-knowledge-platform")
+    otel_debug_content = _env_bool("OTEL_DEBUG_CONTENT", False)
+
     sqlite_default = "/tmp/index.sqlite" if public_demo_mode else "data/index.sqlite"
     sqlite_path = _env_str("SQLITE_PATH", sqlite_default)
+    database_url = os.getenv("DATABASE_URL") or None
 
     embeddings_backend = _env_str("EMBEDDINGS_BACKEND", "hash").lower().strip()
     if embeddings_backend not in _ALLOWED_EMBEDDINGS_BACKENDS:
@@ -221,6 +239,7 @@ def load_settings() -> Settings:
     s = Settings(
         version=_env_str("APP_VERSION", get_version()),
         public_demo_mode=public_demo_mode,
+        auth_mode=auth_mode,
         allow_uploads=allow_uploads,
         allow_eval=allow_eval,
         allow_chunk_view=allow_chunk_view,
@@ -235,7 +254,12 @@ def load_settings() -> Settings:
         rate_limit_scope=rate_limit_scope,
         rate_limit_window_s=rate_limit_window_s,
         rate_limit_max_requests=rate_limit_max_requests,
+        otel_enabled=otel_enabled,
+        otel_exporter_otlp_endpoint=otel_exporter_otlp_endpoint,
+        otel_service_name=otel_service_name,
+        otel_debug_content=otel_debug_content,
         sqlite_path=sqlite_path,
+        database_url=database_url,
         embeddings_backend=embeddings_backend,
         embeddings_model=embeddings_model,
         embedding_dim=embedding_dim,
@@ -267,6 +291,7 @@ def load_settings() -> Settings:
         return Settings(
             version=s.version,
             public_demo_mode=True,
+            auth_mode="none",
             allow_uploads=False,
             allow_eval=False,
             allow_chunk_view=False,
@@ -281,7 +306,12 @@ def load_settings() -> Settings:
             rate_limit_scope=s.rate_limit_scope,
             rate_limit_window_s=s.rate_limit_window_s,
             rate_limit_max_requests=s.rate_limit_max_requests,
+            otel_enabled=s.otel_enabled,
+            otel_exporter_otlp_endpoint=s.otel_exporter_otlp_endpoint,
+            otel_service_name=s.otel_service_name,
+            otel_debug_content=s.otel_debug_content,
             sqlite_path=s.sqlite_path,
+            database_url=s.database_url,
             embeddings_backend=safe_embed,
             embeddings_model=s.embeddings_model,
             embedding_dim=s.embedding_dim,
