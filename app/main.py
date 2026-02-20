@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sqlite3
 import time
 import uuid
 import asyncio
@@ -24,7 +23,14 @@ from .config import settings
 from .eval import run_eval
 from .ingestion import ingest_file, ingest_text
 from .metadata import CLASSIFICATIONS, RETENTIONS, normalize_classification, normalize_retention, normalize_tags
-from .otel import setup_otel, span
+from .otel import (
+    record_generation_metric,
+    record_http_request_metric,
+    record_retrieval_metric,
+    record_safety_scan_metric,
+    setup_otel,
+    span,
+)
 from .observability import (
     Timer,
     configure_logging,
@@ -390,6 +396,12 @@ async def _request_middleware(request: Request, call_next):
         auth_ctx = resolve_auth_context(request)
     except AuthError as ae:
         latency_ms = timer.ms()
+        record_http_request_metric(
+            method=request.method,
+            path=request.url.path,
+            status_code=int(ae.status_code),
+            latency_ms=latency_ms,
+        )
         log_http_request(
             request_id=rid,
             method=request.method,
@@ -418,6 +430,12 @@ async def _request_middleware(request: Request, call_next):
     if settings.rate_limit_enabled and _should_rate_limit(request.url.path):
         if not _limiter.allow(remote_ip):
             latency_ms = timer.ms()
+            record_http_request_metric(
+                method=request.method,
+                path=request.url.path,
+                status_code=429,
+                latency_ms=latency_ms,
+            )
             log_http_request(
                 request_id=rid,
                 method=request.method,
@@ -443,6 +461,12 @@ async def _request_middleware(request: Request, call_next):
         response = await call_next(request)
     except HTTPException as he:
         latency_ms = timer.ms()
+        record_http_request_metric(
+            method=request.method,
+            path=request.url.path,
+            status_code=int(he.status_code),
+            latency_ms=latency_ms,
+        )
         log_http_request(
             request_id=rid,
             method=request.method,
@@ -460,6 +484,12 @@ async def _request_middleware(request: Request, call_next):
         raise
     except Exception as e:
         latency_ms = timer.ms()
+        record_http_request_metric(
+            method=request.method,
+            path=request.url.path,
+            status_code=500,
+            latency_ms=latency_ms,
+        )
         log_http_request(
             request_id=rid,
             method=request.method,
@@ -500,6 +530,12 @@ async def _request_middleware(request: Request, call_next):
         response.headers.setdefault("Pragma", "no-cache")
 
     latency_ms = timer.ms()
+    record_http_request_metric(
+        method=request.method,
+        path=request.url.path,
+        status_code=int(response.status_code),
+        latency_ms=latency_ms,
+    )
     log_http_request(
         request_id=rid,
         method=request.method,
@@ -1099,7 +1135,7 @@ def search_chunks(q: str, limit: int = 20, _auth: Any = Depends(require_role("re
                 )
 
             return ChunkSearchResponse(query=q, results=results)
-        except sqlite3.OperationalError:
+        except Exception:
             # FTS unavailable; continue to lexical fallback.
             pass
 
@@ -1320,11 +1356,13 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
     include_retrieval_text = bool(settings.allow_chunk_view) and not settings.public_demo_mode
 
     # --- Prompt-injection/circumvention detection ---
+    safety_start = time.perf_counter()
     with span(
         "safety.prompt_injection_scan",
         attributes={"question_length": len(question), "otel_debug_content": bool(settings.otel_debug_content)},
     ):
         inj = detect_prompt_injection(question)
+    record_safety_scan_metric(latency_ms=(time.perf_counter() - safety_start) * 1000.0)
     if inj.is_injection:
         return {
             "question": question,
@@ -1336,11 +1374,17 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
         }
 
     # --- Retrieve ---
+    retrieval_start = time.perf_counter()
     with span(
         "retrieval.retrieve",
         attributes={"top_k": top_k, "embeddings_backend": settings.embeddings_backend},
     ):
         retrieved = retrieve(question, top_k=top_k)
+    record_retrieval_metric(
+        latency_ms=(time.perf_counter() - retrieval_start) * 1000.0,
+        top_k=top_k,
+        backend=settings.embeddings_backend,
+    )
     context = [(r.chunk_id, r.doc_id, r.idx, r.text) for r in retrieved]
 
     if not context:
@@ -1385,6 +1429,7 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
 
     # --- Answer ---
     answerer = get_answerer()
+    generation_start = time.perf_counter()
     with span(
         "generation.answer",
         attributes={
@@ -1393,6 +1438,11 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
         },
     ):
         ans = answerer.answer(question, context)
+    record_generation_metric(
+        latency_ms=(time.perf_counter() - generation_start) * 1000.0,
+        provider=str(getattr(answerer, "name", settings.effective_llm_provider)),
+        streaming=False,
+    )
 
     # Enrich citations with doc metadata.
     citations_out: list[dict[str, Any]] = []
@@ -1489,11 +1539,13 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
 
     async def _events():
         try:
+            safety_start = time.perf_counter()
             with span(
                 "safety.prompt_injection_scan",
                 attributes={"question_length": len(question), "otel_debug_content": bool(settings.otel_debug_content)},
             ):
                 inj = detect_prompt_injection(question)
+            record_safety_scan_metric(latency_ms=(time.perf_counter() - safety_start) * 1000.0)
             if inj.is_injection:
                 refusal_text = "I can’t help with that request. I can only answer questions using the provided sources."
                 yield _sse_event("token", {"text": refusal_text})
@@ -1510,11 +1562,17 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                 )
                 return
 
+            retrieval_start = time.perf_counter()
             with span(
                 "retrieval.retrieve",
                 attributes={"top_k": top_k, "embeddings_backend": settings.embeddings_backend},
             ):
                 retrieved = retrieve(question, top_k=top_k)
+            record_retrieval_metric(
+                latency_ms=(time.perf_counter() - retrieval_start) * 1000.0,
+                top_k=top_k,
+                backend=settings.embeddings_backend,
+            )
             retrieval_out: list[dict[str, Any]] = []
             for r in retrieved:
                 item: dict[str, Any] = {
@@ -1549,18 +1607,93 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
 
             context = [(r.chunk_id, r.doc_id, r.idx, r.text) for r in retrieved]
             answerer = get_answerer()
-            with span(
-                "generation.answer",
-                attributes={
-                    "provider": getattr(answerer, "name", settings.effective_llm_provider),
-                    "context_chunks": len(context),
-                },
-            ):
-                ans = answerer.answer(question, context)
-
             with connect(settings.sqlite_path) as conn:
                 init_db(conn)
                 doc_map = {d.doc_id: d for d in list_docs(conn)}
+
+            provider_name = str(getattr(answerer, "name", settings.effective_llm_provider))
+            stream_fn = getattr(answerer, "stream_answer", None)
+            if callable(stream_fn):
+                stream_citations: list[dict[str, Any]] = []
+                for r in retrieved[: min(3, len(retrieved))]:
+                    d = doc_map.get(r.doc_id)
+                    stream_citations.append(
+                        {
+                            "chunk_id": r.chunk_id,
+                            "doc_id": r.doc_id,
+                            "idx": r.idx,
+                            "quote": r.text[:300],
+                            "doc_title": d.title if d else None,
+                            "doc_source": d.source if d else None,
+                            "doc_version": d.doc_version if d else None,
+                        }
+                    )
+
+                streamed_parts: list[str] = []
+                generation_start = time.perf_counter()
+                with span(
+                    "generation.answer",
+                    attributes={"provider": provider_name, "context_chunks": len(context), "streaming": True},
+                ):
+                    for piece in stream_fn(question, context):
+                        if not piece:
+                            continue
+                        token_text = str(piece)
+                        if not token_text:
+                            continue
+                        streamed_parts.append(token_text)
+                        yield _sse_event("token", {"text": token_text})
+                        await asyncio.sleep(0)
+                record_generation_metric(
+                    latency_ms=(time.perf_counter() - generation_start) * 1000.0,
+                    provider=provider_name,
+                    streaming=True,
+                )
+
+                answer_text = "".join(streamed_parts).strip()
+                refused = False
+                refusal_reason: str | None = None
+
+                if not answer_text:
+                    refused = True
+                    refusal_reason = "insufficient_evidence"
+                    answer_text = "I don’t have enough evidence in the indexed sources to answer that."
+                    stream_citations = []
+
+                if bool(settings.citations_required) and not refused and not stream_citations:
+                    refused = True
+                    refusal_reason = "insufficient_evidence"
+                    answer_text = "I don’t have enough evidence in the indexed sources to answer that."
+                    stream_citations = []
+
+                yield _sse_event("citations", stream_citations)
+                yield _sse_event(
+                    "done",
+                    {
+                        "question": question,
+                        "answer": answer_text,
+                        "refused": refused,
+                        "refusal_reason": refusal_reason,
+                        "provider": provider_name,
+                    },
+                )
+                return
+
+            generation_start = time.perf_counter()
+            with span(
+                "generation.answer",
+                attributes={
+                    "provider": provider_name,
+                    "context_chunks": len(context),
+                    "streaming": False,
+                },
+            ):
+                ans = answerer.answer(question, context)
+            record_generation_metric(
+                latency_ms=(time.perf_counter() - generation_start) * 1000.0,
+                provider=provider_name,
+                streaming=False,
+            )
 
             citations_out: list[dict[str, Any]] = []
             for c in ans.citations or []:
@@ -1578,7 +1711,7 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                 )
 
             refused = bool(getattr(ans, "refused", False))
-            refusal_reason: str | None = "answerer_refused" if refused else None
+            refusal_reason = "answerer_refused" if refused else None
             answer_text = ans.text
             provider = ans.provider
 

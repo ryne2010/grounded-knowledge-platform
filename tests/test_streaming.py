@@ -110,3 +110,48 @@ def test_query_stream_preserves_citations_required_refusal(tmp_path):
 
     citations_event = [payload for name, payload in events if name == "citations"][-1]
     assert citations_event == []
+
+
+def test_query_stream_prefers_provider_native_stream_when_available(tmp_path):
+    main = _reload_app(str(tmp_path / "stream_provider.sqlite"), citations_required=True)
+    client = TestClient(main.app)
+
+    ingest = client.post(
+        "/api/ingest/text",
+        json={
+            "title": "Stream Provider Doc",
+            "source": "unit-test",
+            "text": "Cloud Run is managed and serverless.",
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    class _StreamingProvider:
+        name = "mock-stream-provider"
+
+        def stream_answer(self, question: str, context):
+            yield "Cloud"
+            yield " Run"
+            yield " streams."
+
+        def answer(self, question: str, context):  # pragma: no cover
+            raise AssertionError("stream_answer path should be used")
+
+    main.get_answerer = lambda: _StreamingProvider()
+
+    with client.stream(
+        "POST",
+        "/api/query/stream",
+        json={"question": "What is Cloud Run?", "top_k": 3},
+    ) as r:
+        assert r.status_code == 200
+        body = r.read().decode("utf-8")
+
+    events = _parse_sse(body)
+    token_texts = [str(payload.get("text", "")) for name, payload in events if name == "token" and isinstance(payload, dict)]
+    assert token_texts[:3] == ["Cloud", " Run", " streams."]
+
+    done = events[-1][1]
+    assert isinstance(done, dict)
+    assert done.get("provider") == "mock-stream-provider"
+    assert done.get("refused") is False

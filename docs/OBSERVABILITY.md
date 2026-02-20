@@ -25,6 +25,15 @@ When enabled, spans include:
 - `retrieval.retrieve`
 - `generation.answer`
 
+Metrics (OTEL SDK) include:
+- `gkp.http.server.requests`
+- `gkp.http.server.duration_ms`
+- `gkp.query.safety_scan.duration_ms`
+- `gkp.query.retrieval.duration_ms`
+- `gkp.query.generation.duration_ms`
+
+These are emitted only when `OTEL_ENABLED=1`; otherwise metric recorders are no-ops.
+
 Privacy-by-default:
 - document text and raw user prompts are **not** recorded in span attributes by default
 - `OTEL_DEBUG_CONTENT=1` is reserved for short-lived debugging in private environments

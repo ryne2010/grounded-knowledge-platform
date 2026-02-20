@@ -6,8 +6,11 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Any, Iterable, Iterator
+
+from .config import settings
 
 
 @dataclass(frozen=True)
@@ -217,8 +220,34 @@ def _ensure_parent_dir(sqlite_path: str) -> None:
     Path(os.path.dirname(sqlite_path) or ".").mkdir(parents=True, exist_ok=True)
 
 
+def _is_postgres_conn(conn: Any) -> bool:
+    return "psycopg" in type(conn).__module__
+
+
+def _ph(conn: Any) -> str:
+    return "%s" if _is_postgres_conn(conn) else "?"
+
+
+_PG_SCHEMA_INITIALIZED: set[str] = set()
+
+
 @contextmanager
-def connect(sqlite_path: str) -> Iterator[sqlite3.Connection]:
+def connect(sqlite_path: str) -> Iterator[Any]:
+    if settings.database_url:
+        try:
+            psycopg = import_module("psycopg")
+            rows_mod = import_module("psycopg.rows")
+            dict_row = getattr(rows_mod, "dict_row")
+        except Exception as e:  # pragma: no cover
+            raise RuntimeError("DATABASE_URL is set but psycopg is unavailable. Install with `uv sync --extra cloudsql`.") from e
+
+        conn = psycopg.connect(settings.database_url, row_factory=dict_row)
+        try:
+            yield conn
+        finally:
+            conn.close()
+        return
+
     _ensure_parent_dir(sqlite_path)
     conn = sqlite3.connect(sqlite_path)
     conn.row_factory = sqlite3.Row
@@ -249,12 +278,24 @@ def _ensure_column(conn: sqlite3.Connection, table: str, col: str, col_def: str)
         return
 
 
-def init_db(conn: sqlite3.Connection) -> None:
-    """Initialize (and lightly migrate) the SQLite schema.
+def init_db(conn: Any) -> None:
+    """Initialize and migrate the active backing store schema."""
 
-    This project is intentionally simple (SQLite + single-process cache). To keep upgrades safe,
-    `init_db` includes basic forward-only migrations for additive schema changes.
-    """
+    if _is_postgres_conn(conn):
+        key = settings.database_url or "__postgres__"
+        if key in _PG_SCHEMA_INITIALIZED:
+            return
+        sql_path = Path(__file__).resolve().parent / "migrations" / "postgres" / "001_init.sql"
+        sql = sql_path.read_text(encoding="utf-8")
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        conn.commit()
+        _PG_SCHEMA_INITIALIZED.add(key)
+        return
+
+    # SQLite path:
+    # This project is intentionally simple (SQLite + single-process cache). To keep upgrades safe,
+    # `init_db` includes basic forward-only migrations for additive schema changes.
 
     # --- Base tables (latest schema) ---
     conn.execute(
@@ -484,7 +525,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 
 def upsert_doc(
-    conn: sqlite3.Connection,
+    conn: Any,
     *,
     doc_id: str,
     title: str,
@@ -498,6 +539,45 @@ def upsert_doc(
     doc_version: int = 1,
 ) -> None:
     now = int(time.time())
+    if _is_postgres_conn(conn):
+        conn.execute(
+            """
+            INSERT INTO docs (
+              doc_id, title, source,
+              classification, retention, tags_json,
+              content_sha256, content_bytes, num_chunks, doc_version,
+              created_at, updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT(doc_id) DO UPDATE SET
+              title=excluded.title,
+              source=excluded.source,
+              classification=excluded.classification,
+              retention=excluded.retention,
+              tags_json=excluded.tags_json,
+              content_sha256=excluded.content_sha256,
+              content_bytes=excluded.content_bytes,
+              num_chunks=excluded.num_chunks,
+              doc_version=excluded.doc_version,
+              updated_at=excluded.updated_at;
+            """,
+            (
+                doc_id,
+                title,
+                source,
+                classification,
+                retention,
+                tags_json,
+                content_sha256,
+                int(content_bytes),
+                int(num_chunks),
+                int(doc_version),
+                now,
+                now,
+            ),
+        )
+        return
+
     conn.execute(
         """
         INSERT INTO docs (
@@ -537,7 +617,7 @@ def upsert_doc(
 
 
 def update_doc_metadata(
-    conn: sqlite3.Connection,
+    conn: Any,
     *,
     doc_id: str,
     title: str | None = None,
@@ -557,36 +637,39 @@ def update_doc_metadata(
     sets: list[str] = []
     params: list[object] = []
 
+    ph = _ph(conn)
+
     if title is not None:
-        sets.append("title=?")
+        sets.append(f"title={ph}")
         params.append(title)
     if source is not None:
-        sets.append("source=?")
+        sets.append(f"source={ph}")
         params.append(source)
     if classification is not None:
-        sets.append("classification=?")
+        sets.append(f"classification={ph}")
         params.append(classification)
     if retention is not None:
-        sets.append("retention=?")
+        sets.append(f"retention={ph}")
         params.append(retention)
     if tags_json is not None:
-        sets.append("tags_json=?")
+        sets.append(f"tags_json={ph}")
         params.append(tags_json)
 
     if not sets:
         return
 
     params.append(doc_id)
-    conn.execute(f"UPDATE docs SET {', '.join(sets)} WHERE doc_id=?", params)
+    conn.execute(f"UPDATE docs SET {', '.join(sets)} WHERE doc_id={ph}", params)
 
 
-def get_doc(conn: sqlite3.Connection, doc_id: str) -> Doc | None:
+def get_doc(conn: Any, doc_id: str) -> Doc | None:
+    ph = _ph(conn)
     cur = conn.execute(
-        """
+        f"""
         SELECT doc_id, title, source, classification, retention, tags_json,
                content_sha256, content_bytes, num_chunks, doc_version, created_at, updated_at
         FROM docs
-        WHERE doc_id=?
+        WHERE doc_id={ph}
         """,
         (doc_id,),
     )
@@ -594,45 +677,122 @@ def get_doc(conn: sqlite3.Connection, doc_id: str) -> Doc | None:
     return Doc(**dict(row)) if row is not None else None
 
 
-def delete_doc_contents(conn: sqlite3.Connection, doc_id: str) -> None:
+def delete_doc_contents(conn: Any, doc_id: str) -> None:
     """Remove old chunks/embeddings for re-ingest."""
-    cur = conn.execute("SELECT chunk_id FROM chunks WHERE doc_id=?", (doc_id,))
+    ph = _ph(conn)
+    cur = conn.execute(f"SELECT chunk_id FROM chunks WHERE doc_id={ph}", (doc_id,))
     chunk_ids = [r["chunk_id"] for r in cur.fetchall()]
 
     if chunk_ids:
-        placeholders = ",".join(["?"] * len(chunk_ids))
+        placeholders = ",".join([ph] * len(chunk_ids))
         conn.execute(
             f"DELETE FROM embeddings WHERE chunk_id IN ({placeholders})",
-            chunk_ids,
+            tuple(chunk_ids),
         )
 
-    conn.execute("DELETE FROM chunks WHERE doc_id=?", (doc_id,))
+    conn.execute(f"DELETE FROM chunks WHERE doc_id={ph}", (doc_id,))
 
 
-def delete_doc(conn: sqlite3.Connection, doc_id: str) -> None:
+def delete_doc(conn: Any, doc_id: str) -> None:
     """Delete an entire doc, including chunks, embeddings, and ingest events."""
+    ph = _ph(conn)
     delete_doc_contents(conn, doc_id)
-    conn.execute("DELETE FROM ingest_events WHERE doc_id=?", (doc_id,))
-    conn.execute("DELETE FROM docs WHERE doc_id=?", (doc_id,))
+    conn.execute(f"DELETE FROM ingest_events WHERE doc_id={ph}", (doc_id,))
+    conn.execute(f"DELETE FROM docs WHERE doc_id={ph}", (doc_id,))
 
 
-def insert_chunks(conn: sqlite3.Connection, chunks: Iterable[Chunk]) -> None:
+def insert_chunks(conn: Any, chunks: Iterable[Chunk]) -> None:
+    rows = [(c.chunk_id, c.doc_id, c.idx, c.text) for c in chunks]
+    if not rows:
+        return
+
+    if _is_postgres_conn(conn):
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO chunks (chunk_id, doc_id, idx, text)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (chunk_id) DO UPDATE SET
+                  doc_id=excluded.doc_id,
+                  idx=excluded.idx,
+                  text=excluded.text
+                """,
+                rows,
+            )
+        return
+
     conn.executemany(
         "INSERT OR REPLACE INTO chunks (chunk_id, doc_id, idx, text) VALUES (?, ?, ?, ?)",
-        ((c.chunk_id, c.doc_id, c.idx, c.text) for c in chunks),
+        rows,
     )
 
     # FTS5 index is maintained via triggers when available; do not write to chunks_fts directly.
 
 
-def insert_embeddings(conn: sqlite3.Connection, rows: Iterable[tuple[str, int, bytes]]) -> None:
+def insert_embeddings(conn: Any, rows: Iterable[tuple[str, int, bytes]]) -> None:
+    payload = list(rows)
+    if not payload:
+        return
+
+    if _is_postgres_conn(conn):
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO embeddings (chunk_id, dim, vec)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (chunk_id) DO UPDATE SET
+                  dim=excluded.dim,
+                  vec=excluded.vec
+                """,
+                payload,
+            )
+        return
+
     conn.executemany(
         "INSERT OR REPLACE INTO embeddings (chunk_id, dim, vec) VALUES (?, ?, ?)",
-        rows,
+        payload,
     )
 
 
-def insert_ingest_event(conn: sqlite3.Connection, e: IngestEvent) -> None:
+def insert_ingest_event(conn: Any, e: IngestEvent) -> None:
+    if _is_postgres_conn(conn):
+        conn.execute(
+            """
+            INSERT INTO ingest_events (
+              event_id, doc_id, doc_version, ingested_at,
+              content_sha256, prev_content_sha256, changed,
+              num_chunks,
+              embedding_backend, embeddings_model, embedding_dim,
+              chunk_size_chars, chunk_overlap_chars,
+              schema_fingerprint, contract_sha256, validation_status, validation_errors_json, schema_drifted,
+              notes
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                e.event_id,
+                e.doc_id,
+                int(e.doc_version),
+                int(e.ingested_at),
+                e.content_sha256,
+                e.prev_content_sha256,
+                int(e.changed),
+                int(e.num_chunks),
+                e.embedding_backend,
+                e.embeddings_model,
+                int(e.embedding_dim),
+                int(e.chunk_size_chars),
+                int(e.chunk_overlap_chars),
+                e.schema_fingerprint,
+                e.contract_sha256,
+                e.validation_status,
+                e.validation_errors_json,
+                int(e.schema_drifted),
+                e.notes,
+            ),
+        )
+        return
+
     conn.execute(
         """
         INSERT INTO ingest_events (
@@ -670,7 +830,26 @@ def insert_ingest_event(conn: sqlite3.Connection, e: IngestEvent) -> None:
     )
 
 
-def list_ingest_events(conn: sqlite3.Connection, doc_id: str, *, limit: int = 50) -> list[IngestEvent]:
+def list_ingest_events(conn: Any, doc_id: str, *, limit: int = 50) -> list[IngestEvent]:
+    if _is_postgres_conn(conn):
+        cur = conn.execute(
+            """
+            SELECT event_id, doc_id, doc_version, ingested_at,
+                   content_sha256, prev_content_sha256, changed,
+                   num_chunks,
+                   embedding_backend, embeddings_model, embedding_dim,
+                   chunk_size_chars, chunk_overlap_chars,
+                   schema_fingerprint, contract_sha256, validation_status, validation_errors_json, schema_drifted,
+                   notes
+            FROM ingest_events
+            WHERE doc_id=%s
+            ORDER BY ingested_at DESC, doc_version DESC, event_id DESC
+            LIMIT %s
+            """,
+            (doc_id, int(limit)),
+        )
+        return [IngestEvent(**dict(r)) for r in cur.fetchall()]
+
     cur = conn.execute(
         """
         SELECT event_id, doc_id, doc_version, ingested_at,
@@ -691,7 +870,7 @@ def list_ingest_events(conn: sqlite3.Connection, doc_id: str, *, limit: int = 50
 
 
 def list_recent_ingest_events(
-    conn: sqlite3.Connection,
+    conn: Any,
     *,
     limit: int = 100,
     doc_id: str | None = None,
@@ -702,6 +881,44 @@ def list_recent_ingest_events(
     """
     limit = max(1, min(int(limit), 500))
     if doc_id:
+        if _is_postgres_conn(conn):
+            cur = conn.execute(
+                """
+                SELECT
+                  e.event_id,
+                  e.doc_id,
+                  d.title AS doc_title,
+                  d.source AS doc_source,
+                  d.classification,
+                  d.retention,
+                  d.tags_json,
+                  e.doc_version,
+                  e.ingested_at,
+                  e.content_sha256,
+                  e.prev_content_sha256,
+                  e.changed,
+                  e.num_chunks,
+                  e.embedding_backend,
+                  e.embeddings_model,
+                  e.embedding_dim,
+                  e.chunk_size_chars,
+                  e.chunk_overlap_chars,
+                  e.schema_fingerprint,
+                  e.contract_sha256,
+                  e.validation_status,
+                  e.validation_errors_json,
+                  e.schema_drifted,
+                  e.notes
+                FROM ingest_events e
+                JOIN docs d ON d.doc_id = e.doc_id
+                WHERE e.doc_id=%s
+                ORDER BY e.ingested_at DESC, e.doc_version DESC, e.event_id DESC
+                LIMIT %s
+                """,
+                (doc_id, limit),
+            )
+            return [IngestEventView(**dict(r)) for r in cur.fetchall()]
+
         cur = conn.execute(
             """
             SELECT
@@ -738,6 +955,43 @@ def list_recent_ingest_events(
             (doc_id, limit),
         )
     else:
+        if _is_postgres_conn(conn):
+            cur = conn.execute(
+                """
+                SELECT
+                  e.event_id,
+                  e.doc_id,
+                  d.title AS doc_title,
+                  d.source AS doc_source,
+                  d.classification,
+                  d.retention,
+                  d.tags_json,
+                  e.doc_version,
+                  e.ingested_at,
+                  e.content_sha256,
+                  e.prev_content_sha256,
+                  e.changed,
+                  e.num_chunks,
+                  e.embedding_backend,
+                  e.embeddings_model,
+                  e.embedding_dim,
+                  e.chunk_size_chars,
+                  e.chunk_overlap_chars,
+                  e.schema_fingerprint,
+                  e.contract_sha256,
+                  e.validation_status,
+                  e.validation_errors_json,
+                  e.schema_drifted,
+                  e.notes
+                FROM ingest_events e
+                JOIN docs d ON d.doc_id = e.doc_id
+                ORDER BY e.ingested_at DESC, e.doc_version DESC, e.event_id DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return [IngestEventView(**dict(r)) for r in cur.fetchall()]
+
         cur = conn.execute(
             """
             SELECT
@@ -776,7 +1030,7 @@ def list_recent_ingest_events(
     return [IngestEventView(**dict(r)) for r in cur.fetchall()]
 
 
-def list_docs(conn: sqlite3.Connection) -> list[Doc]:
+def list_docs(conn: Any) -> list[Doc]:
     cur = conn.execute(
         """
         SELECT doc_id, title, source, classification, retention, tags_json,
@@ -788,45 +1042,46 @@ def list_docs(conn: sqlite3.Connection) -> list[Doc]:
     return [Doc(**dict(r)) for r in cur.fetchall()]
 
 
-def list_chunks(conn: sqlite3.Connection) -> list[Chunk]:
+def list_chunks(conn: Any) -> list[Chunk]:
     cur = conn.execute("SELECT chunk_id, doc_id, idx, text FROM chunks ORDER BY doc_id, idx")
     return [Chunk(**dict(r)) for r in cur.fetchall()]
 
 
-def get_chunks_by_ids(conn: sqlite3.Connection, chunk_ids: list[str]) -> list[Chunk]:
+def get_chunks_by_ids(conn: Any, chunk_ids: list[str]) -> list[Chunk]:
     if not chunk_ids:
         return []
-    placeholders = ",".join(["?"] * len(chunk_ids))
+    placeholders = ",".join([_ph(conn)] * len(chunk_ids))
     cur = conn.execute(
         f"SELECT chunk_id, doc_id, idx, text FROM chunks WHERE chunk_id IN ({placeholders})",
-        chunk_ids,
+        tuple(chunk_ids),
     )
     rows = [Chunk(**dict(r)) for r in cur.fetchall()]
     by_id = {c.chunk_id: c for c in rows}
     return [by_id[cid] for cid in chunk_ids if cid in by_id]
 
 
-def get_embeddings_by_ids(conn: sqlite3.Connection, chunk_ids: list[str]) -> list[tuple[str, int, bytes]]:
+def get_embeddings_by_ids(conn: Any, chunk_ids: list[str]) -> list[tuple[str, int, bytes]]:
     if not chunk_ids:
         return []
-    placeholders = ",".join(["?"] * len(chunk_ids))
+    placeholders = ",".join([_ph(conn)] * len(chunk_ids))
     cur = conn.execute(
         f"SELECT chunk_id, dim, vec FROM embeddings WHERE chunk_id IN ({placeholders})",
-        chunk_ids,
+        tuple(chunk_ids),
     )
     rows = [(r["chunk_id"], r["dim"], r["vec"]) for r in cur.fetchall()]
     by_id = {cid: (cid, dim, vec) for cid, dim, vec in rows}
     return [by_id[cid] for cid in chunk_ids if cid in by_id]
 
 
-def get_chunk(conn: sqlite3.Connection, chunk_id: str) -> Chunk | None:
-    cur = conn.execute("SELECT chunk_id, doc_id, idx, text FROM chunks WHERE chunk_id=?", (chunk_id,))
+def get_chunk(conn: Any, chunk_id: str) -> Chunk | None:
+    ph = _ph(conn)
+    cur = conn.execute(f"SELECT chunk_id, doc_id, idx, text FROM chunks WHERE chunk_id={ph}", (chunk_id,))
     row = cur.fetchone()
     return Chunk(**dict(row)) if row is not None else None
 
 
 def list_chunks_for_doc(
-    conn: sqlite3.Connection,
+    conn: Any,
     doc_id: str,
     *,
     limit: int = 200,
@@ -834,15 +1089,21 @@ def list_chunks_for_doc(
 ) -> list[Chunk]:
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
-    cur = conn.execute(
-        "SELECT chunk_id, doc_id, idx, text FROM chunks WHERE doc_id=? ORDER BY idx LIMIT ? OFFSET ?",
-        (doc_id, limit, offset),
-    )
+    if _is_postgres_conn(conn):
+        cur = conn.execute(
+            "SELECT chunk_id, doc_id, idx, text FROM chunks WHERE doc_id=%s ORDER BY idx LIMIT %s OFFSET %s",
+            (doc_id, limit, offset),
+        )
+    else:
+        cur = conn.execute(
+            "SELECT chunk_id, doc_id, idx, text FROM chunks WHERE doc_id=? ORDER BY idx LIMIT ? OFFSET ?",
+            (doc_id, limit, offset),
+        )
     return [Chunk(**dict(r)) for r in cur.fetchall()]
 
 
 def list_all_chunks_for_doc(
-    conn: sqlite3.Connection,
+    conn: Any,
     doc_id: str,
     *,
     limit: int = 5000,
@@ -854,22 +1115,40 @@ def list_all_chunks_for_doc(
     """
 
     limit = max(1, min(int(limit), 20000))
-    cur = conn.execute(
-        "SELECT chunk_id, doc_id, idx, text FROM chunks WHERE doc_id=? ORDER BY idx LIMIT ?",
-        (doc_id, limit),
-    )
+    if _is_postgres_conn(conn):
+        cur = conn.execute(
+            "SELECT chunk_id, doc_id, idx, text FROM chunks WHERE doc_id=%s ORDER BY idx LIMIT %s",
+            (doc_id, limit),
+        )
+    else:
+        cur = conn.execute(
+            "SELECT chunk_id, doc_id, idx, text FROM chunks WHERE doc_id=? ORDER BY idx LIMIT ?",
+            (doc_id, limit),
+        )
     return [Chunk(**dict(r)) for r in cur.fetchall()]
 
 
-def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
-    cur = conn.execute("SELECT value FROM meta WHERE key=?", (key,))
+def get_meta(conn: Any, key: str) -> str | None:
+    ph = _ph(conn)
+    cur = conn.execute(f"SELECT value FROM meta WHERE key={ph}", (key,))
     row = cur.fetchone()
     if row is None:
         return None
     return str(row["value"])
 
 
-def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+def set_meta(conn: Any, key: str, value: str) -> None:
+    if _is_postgres_conn(conn):
+        conn.execute(
+            """
+            INSERT INTO meta(key, value)
+            VALUES(%s, %s)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """,
+            (key, value),
+        )
+        return
+
     conn.execute(
         """
         INSERT INTO meta(key, value)

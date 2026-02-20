@@ -4,6 +4,10 @@
 
 This runbook covers enabling and operating Cloud SQL Postgres for durable storage in Cloud Run deployments.
 
+Runtime behavior:
+- when `DATABASE_URL` is set to a Postgres DSN, API/ingest/retrieval paths use Postgres at runtime
+- when `DATABASE_URL` is unset, the app uses SQLite (`SQLITE_PATH`)
+
 ## Preconditions
 
 - Terraform root: `infra/gcp/cloud_run_demo`
@@ -30,6 +34,7 @@ Expected outcome:
 - Cloud SQL instance + DB + user created
 - Cloud Run mounts Cloud SQL socket at `/cloudsql`
 - `DATABASE_URL` injected into Cloud Run env
+- `/api/meta` reports `"database_backend": "postgres"`
 
 ## Schema bootstrap
 

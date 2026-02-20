@@ -16,6 +16,8 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
   - offline UX banners/states in key pages
 - Data contracts for tabular ingest (`contract_file`) with schema fingerprinting, validation results, and drift tracking in lineage.
 - Optional OpenTelemetry setup for FastAPI with targeted spans for safety scan, retrieval, and answer generation.
+- Provider-native streaming hooks for OpenAI/Gemini in SSE query mode.
+- OTEL metric instruments for request and query-stage latency.
 - Storage repository abstraction with initial Postgres/Cloud SQL scaffolding and local Postgres integration tests.
 - Cloud SQL Terraform module wiring and Cloud Run integration options.
 - New runbook: `docs/RUNBOOKS/CLOUDSQL.md`.
@@ -24,6 +26,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 
 - `/api/meta` now reports auth and storage backend context (`auth_mode`, `database_backend`).
 - Ingest lineage APIs/UI now surface contract validation status, errors, and schema drift indicators.
+- Runtime storage operations now switch to Postgres when `DATABASE_URL` is configured.
 - Docs and deployment guides updated for auth, OTEL, streaming, PWA, data contracts, and Cloud SQL.
 
 ### Fixed

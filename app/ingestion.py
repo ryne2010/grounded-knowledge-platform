@@ -192,7 +192,9 @@ def ingest_text(
 
         # Ensure stored embeddings are compatible with the currently configured backend/model.
         # This prevents "silent" retrieval degradation when settings change but the DB is reused.
-        ensure_index_compatible(conn, embedder)
+        # Postgres path currently uses direct schema migrations and skips this SQLite-specific rebuild flow.
+        if not settings.database_url:
+            ensure_index_compatible(conn, embedder)
 
         existing = get_doc(conn, doc_id)
         prev_hash = existing.content_sha256 if existing is not None else None
