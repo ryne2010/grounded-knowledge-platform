@@ -73,7 +73,7 @@ define require
 	@command -v $(1) >/dev/null 2>&1 || (echo "Missing dependency: $(1)"; exit 1)
 endef
 
-.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify logs destroy lock
+.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify logs destroy lock clean dist
 
 help:
 	@echo "Targets:"
@@ -94,6 +94,17 @@ help:
 	@echo "  destroy           Terraform destroy (does NOT delete tfstate bucket)"
 	@echo "  lock              Generate lockfiles locally (uv.lock + pnpm-lock.yaml)"
 	@echo ""
+	@echo "Local dev / quality:"
+	@echo "  py-install         Install Python deps (dev) via uv"
+	@echo "  web-install        Install web deps via pnpm"
+	@echo "  run-api            Run API locally (http://127.0.0.1:8080)"
+	@echo "  run-ui             Run UI locally (http://127.0.0.1:5173)"
+	@echo "  dev                Run API + UI concurrently"
+	@echo "  dev-doctor         Run full local quality harness"
+	@echo "  dev-ci             Run CI harness locally (same as GitHub Actions)"
+	@echo "  clean              Remove local caches/build artifacts"
+	@echo "  dist               Create a clean source ZIP in dist/"
+	@echo ""
 	@echo "Resolved config (override with VAR=...):"
 	@echo "  PROJECT_ID=$(PROJECT_ID)"
 	@echo "  REGION=$(REGION)"
@@ -107,6 +118,74 @@ help:
 	@echo "  IMAGE=$(IMAGE)"
 	@echo "  TF_STATE_BUCKET=$(TF_STATE_BUCKET)"
 	@echo "  TF_STATE_PREFIX=$(TF_STATE_PREFIX)"
+
+# -----------------------------
+# Local development (no GCP required)
+# -----------------------------
+
+.PHONY: py-install web-install run-api run-ui dev web-build lint typecheck test dev-doctor dev-ci
+
+py-install: ## Install Python deps (dev) via uv
+	uv sync --dev
+
+web-install: ## Install web deps via pnpm
+	cd web && pnpm install --frozen-lockfile
+
+run-api: ## Run API locally (http://127.0.0.1:8080)
+	uv run uvicorn app.main:app --reload --port 8080
+
+run-ui: ## Run UI locally (http://127.0.0.1:5173)
+	cd web && pnpm dev
+
+dev: ## Run API + UI concurrently (two terminals is still recommended for logs)
+	@bash -euo pipefail -c '\
+	  (make run-api) & api_pid=$$!; \
+	  (make run-ui) & ui_pid=$$!; \
+	  trap "kill $$api_pid $$ui_pid 2>/dev/null || true" INT TERM EXIT; \
+	  wait $$api_pid $$ui_pid; \
+	'
+
+web-build: ## Build web bundle into web/dist
+	cd web && pnpm build
+
+lint: ## Lint (ruff)
+	uv run python scripts/harness.py lint
+
+typecheck: ## Typecheck (mypy + tsc)
+	uv run python scripts/harness.py typecheck
+
+test: ## Run unit tests (pytest)
+	uv run python scripts/harness.py test
+
+
+# -----------------------------
+# App CLI shortcuts (eval / safety / maintenance)
+# -----------------------------
+GOLDEN ?= data/eval/golden.jsonl
+SUITE  ?= data/eval/prompt_injection.jsonl
+BASE   ?= http://127.0.0.1:8080
+ENDPOINT ?= /api/query
+K ?= 5
+
+.PHONY: eval safety-eval purge-expired purge-expired-apply
+
+eval: ## Run retrieval evaluation on a golden set (JSONL)
+	uv run python -m app.cli eval $(GOLDEN) --k $(K)
+
+safety-eval: ## Run prompt-injection safety regression (JSONL)
+	uv run python -m app.cli safety-eval $(SUITE) --base $(BASE) --endpoint $(ENDPOINT) --k $(K)
+
+purge-expired: ## Dry-run: list docs whose retention policy has expired
+	uv run python -m app.cli purge-expired
+
+purge-expired-apply: ## Delete docs whose retention policy has expired (DANGEROUS)
+	uv run python -m app.cli purge-expired --apply
+
+dev-doctor: ## Run full local quality harness
+	bash scripts/doctor.sh
+
+dev-ci: ## Run CI harness locally (same as GitHub Actions)
+	bash scripts/ci.sh
 
 # -----------------------------
 # Init (team onboarding)
@@ -384,7 +463,8 @@ apply: tf-init
 # This avoids cross-architecture issues and keeps the workflow consistent.
 build: doctor infra grant-cloudbuild
 	@echo "Building + pushing via Cloud Build: $(IMAGE)"
-	gcloud builds submit --tag "$(IMAGE)" .
+	# Use the repo's cloudbuild.yaml so we don't rely on a root Dockerfile.
+	gcloud builds submit --config cloudbuild.yaml --substitutions "_IMAGE=$(IMAGE)" .
 
 # One-command demo deployment.
 # Safe to run repeatedly; converges infrastructure.
@@ -423,7 +503,7 @@ lock:
 	@echo "Generating uv.lock (Python)"
 	uv lock
 	@echo "Generating pnpm-lock.yaml (web)"
-	cd web && pnpm install
+	cd web && pnpm install --frozen-lockfile
 	@echo "Done. Commit uv.lock and pnpm-lock.yaml for team reproducibility."
 
 
@@ -477,3 +557,15 @@ tf-policy: ## OPA/Conftest policy gate for Terraform (falls back to docker)
 	fi
 
 tf-check: tf-fmt tf-validate tf-lint tf-sec tf-policy ## Run all Terraform hygiene checks
+
+# -----------------------------
+# Packaging / housekeeping
+# -----------------------------
+
+.PHONY: clean dist
+
+clean: ## Remove local caches/build artifacts (safe)
+	bash scripts/clean.sh
+
+dist: ## Create a clean source ZIP in dist/
+	python scripts/package_repo.py

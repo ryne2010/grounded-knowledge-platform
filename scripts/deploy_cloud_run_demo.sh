@@ -10,12 +10,20 @@ set -euo pipefail
 : "${GCP_REGION:=us-central1}"
 : "${ENV:=dev}"
 : "${SERVICE_NAME:=gkp-${ENV}}"
+: "${IMAGE:=gcr.io/${GCP_PROJECT}/${SERVICE_NAME}:latest}"
 
 # Recommended: keep your CLI pointed at the right project to avoid mistakes.
 gcloud config set project "$GCP_PROJECT" >/dev/null
 
+echo "Building + pushing image via Cloud Build: $IMAGE"
+gcloud builds submit \
+  --config cloudbuild.yaml \
+  --substitutions "_IMAGE=$IMAGE" \
+  .
+
+echo "Deploying to Cloud Run: $SERVICE_NAME"
 gcloud run deploy "$SERVICE_NAME" \
-  --source . \
+  --image "$IMAGE" \
   --region "$GCP_REGION" \
   --allow-unauthenticated \
   --cpu=1 \

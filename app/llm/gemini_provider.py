@@ -1,13 +1,31 @@
 from __future__ import annotations
 
 import json
+import importlib
 from typing import Any
-
-from google import genai  # type: ignore
-from google.genai import types  # type: ignore
 
 from ..config import settings
 from .base import Answer, Citation
+
+
+def _require_google_genai() -> Any:
+    try:
+        return importlib.import_module("google.genai")
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError(
+            "Gemini provider requires the 'google-genai' package. Install with `uv sync --extra providers` "
+            "(or `pip install google-genai`)."
+        ) from e
+
+
+def _require_google_genai_types() -> Any:
+    try:
+        return importlib.import_module("google.genai.types")
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError(
+            "Gemini provider requires the 'google-genai' package. Install with `uv sync --extra providers` "
+            "(or `pip install google-genai`)."
+        ) from e
 
 
 class GeminiAnswerer:
@@ -17,6 +35,8 @@ class GeminiAnswerer:
         # Gemini Developer API key. Vertex AI auth can be added later.
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY is not set")
+        genai = _require_google_genai()
+        self._types: Any = _require_google_genai_types()
         self.client = genai.Client(api_key=settings.gemini_api_key)
 
     def answer(self, question: str, context: list[tuple[str, str, int, str]]) -> Answer:
@@ -30,9 +50,7 @@ class GeminiAnswerer:
 
         sources = []
         for chunk_id, doc_id, idx, text in context[: settings.max_context_chunks]:
-            sources.append(
-                {"chunk_id": chunk_id, "doc_id": doc_id, "idx": idx, "text": text}
-            )
+            sources.append({"chunk_id": chunk_id, "doc_id": doc_id, "idx": idx, "text": text})
 
         system = (
             "You are a careful assistant. Answer ONLY using the provided sources. "
@@ -48,16 +66,14 @@ class GeminiAnswerer:
             "required_output_schema": {
                 "answer": "string",
                 "refused": "boolean",
-                "citations": [
-                    {"chunk_id": "string", "doc_id": "string", "idx": "integer", "quote": "string"}
-                ],
+                "citations": [{"chunk_id": "string", "doc_id": "string", "idx": "integer", "quote": "string"}],
             },
         }
 
         resp = self.client.models.generate_content(
             model=settings.gemini_model,
-            contents=types.Part.from_text(text=json.dumps(prompt)),
-            config=types.GenerateContentConfig(temperature=0),
+            contents=self._types.Part.from_text(text=json.dumps(prompt)),
+            config=self._types.GenerateContentConfig(temperature=0),
         )
 
         text = getattr(resp, "text", None) or ""

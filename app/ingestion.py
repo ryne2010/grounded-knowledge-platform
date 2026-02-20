@@ -1,24 +1,47 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import json
 import re
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 
 import numpy as np
 
 from .config import settings
 from .embeddings import Embedder, HashEmbedder, NoEmbedder, SentenceTransformerEmbedder
+from .index_maintenance import ensure_index_compatible
+from .metadata import normalize_classification, normalize_retention, normalize_tags
 from .ocr import extract_text_from_pdf
 from .storage import (
     Chunk,
+    IngestEvent,
     connect,
     delete_doc_contents,
+    get_doc,
     init_db,
     insert_chunks,
     insert_embeddings,
+    insert_ingest_event,
     upsert_doc,
 )
+logger = logging.getLogger(__name__)
+
+
+# ---- tabular ingestion limits (CSV/TSV/XLSX)
+#
+# These are intentionally conservative:
+# - uploads are already size-limited at the API layer
+# - tabular files can expand when rendered as text
+# - we want predictable chunk counts + latency
+_TABULAR_MAX_ROWS = 2_000
+_TABULAR_MAX_COLS = 60
+_TABULAR_MAX_CELL_CHARS = 240
+_TABULAR_MAX_TOTAL_CHARS = 1_000_000
 
 
 def _slugify(text: str) -> str:
@@ -75,31 +98,74 @@ def chunk_text(text: str, chunk_size_chars: int, chunk_overlap_chars: int) -> li
 @dataclass(frozen=True)
 class IngestResult:
     doc_id: str
+    doc_version: int
     num_chunks: int
     embedding_dim: int
+    content_sha256: str
+    changed: bool
+
 
 _embedder_singleton: Embedder | None = None
+_embedder_lock = Lock()
+
 
 def _get_embedder() -> Embedder:
     global _embedder_singleton
-    if _embedder_singleton is None:
+    if _embedder_singleton is not None:
+        return _embedder_singleton
+
+    with _embedder_lock:
+        if _embedder_singleton is not None:
+            return _embedder_singleton
+
         backend = settings.embeddings_backend
-        if backend == "none":
-            _embedder_singleton = NoEmbedder()
-        elif backend == "hash":
+        try:
+            if backend == "none":
+                _embedder_singleton = NoEmbedder()
+            elif backend == "hash":
+                _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
+            elif backend == "sentence-transformers":
+                _embedder_singleton = SentenceTransformerEmbedder(settings.embeddings_model)
+            else:
+                _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
+        except Exception as e:  # pragma: no cover
+            # Optional dependency might be missing or model download may fail.
+            logger.warning("Failed to initialize embedder backend=%s; falling back to hash. error=%s", backend, e)
             _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
-        elif backend == "sentence-transformers":
-            _embedder_singleton = SentenceTransformerEmbedder(settings.embeddings_model)
-        else:
-            # Safety default: avoid network/model downloads.
-            _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
-    return _embedder_singleton
+
+        return _embedder_singleton
 
 
+def ingest_text(
+    *,
+    title: str,
+    source: str,
+    text: str,
+    doc_id: str | None = None,
+    classification: str | None = None,
+    retention: str | None = None,
+    tags: str | list[str] | None = None,
+    notes: str | None = None,
+) -> IngestResult:
+    """Ingest a text blob.
 
-def ingest_text(*, title: str, source: str, text: str, doc_id: str | None = None) -> IngestResult:
+    This method is designed to be replayable/idempotent at the doc_id layer:
+    - doc_id defaults to a stable hash of (title, source)
+    - ingestion records an ingest_events lineage row capturing content hash and settings
+    """
+
     embedder = _get_embedder()
     doc_id = doc_id or stable_doc_id(title, source)
+
+    # Compute content fingerprint for drift tracking.
+    text_bytes = text.encode("utf-8", errors="replace")
+    content_sha256 = hashlib.sha256(text_bytes).hexdigest()
+    content_bytes = len(text_bytes)
+
+    cls = normalize_classification(classification)
+    ret = normalize_retention(retention)
+    tag_list = normalize_tags(tags)
+    tags_json = json.dumps(tag_list, ensure_ascii=False)
 
     chunks = chunk_text(text, settings.chunk_size_chars, settings.chunk_overlap_chars)
     chunk_objs: list[Chunk] = []
@@ -108,20 +174,283 @@ def ingest_text(*, title: str, source: str, text: str, doc_id: str | None = None
         chunk_objs.append(Chunk(chunk_id=chunk_id, doc_id=doc_id, idx=i, text=c))
 
     embs = embedder.embed([c.text for c in chunk_objs])  # (n, dim)
-    rows = [(chunk.chunk_id, int(embs.shape[1]), vec.astype(np.float32).tobytes()) for chunk, vec in zip(chunk_objs, embs, strict=True)]
+    rows = [
+        (chunk.chunk_id, int(embs.shape[1]), vec.astype(np.float32).tobytes())
+        for chunk, vec in zip(chunk_objs, embs, strict=True)
+    ]
 
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
-        upsert_doc(conn, doc_id=doc_id, title=title, source=source)
+
+        # Ensure stored embeddings are compatible with the currently configured backend/model.
+        # This prevents "silent" retrieval degradation when settings change but the DB is reused.
+        ensure_index_compatible(conn, embedder)
+
+        existing = get_doc(conn, doc_id)
+        prev_hash = existing.content_sha256 if existing is not None else None
+        prev_version = existing.doc_version if existing is not None else 0
+        doc_version = prev_version + 1 if existing is not None else 1
+        changed = prev_hash is None or prev_hash != content_sha256
+
+        upsert_doc(
+            conn,
+            doc_id=doc_id,
+            title=title,
+            source=source,
+            classification=cls,
+            retention=ret,
+            tags_json=tags_json,
+            content_sha256=content_sha256,
+            content_bytes=content_bytes,
+            num_chunks=len(chunk_objs),
+            doc_version=doc_version,
+        )
+
+        # Re-ingest replaces doc contents.
         delete_doc_contents(conn, doc_id)
         insert_chunks(conn, chunk_objs)
         insert_embeddings(conn, rows)
+
+        # Lineage artifact for drift/audit.
+        evt = IngestEvent(
+            event_id=str(uuid.uuid4()),
+            doc_id=doc_id,
+            doc_version=doc_version,
+            ingested_at=int(time.time()),
+            content_sha256=content_sha256,
+            prev_content_sha256=prev_hash,
+            changed=1 if changed else 0,
+            num_chunks=len(chunk_objs),
+            embedding_backend=settings.embeddings_backend,
+            embeddings_model=settings.embeddings_model,
+            embedding_dim=int(embs.shape[1]),
+            chunk_size_chars=settings.chunk_size_chars,
+            chunk_overlap_chars=settings.chunk_overlap_chars,
+            notes=(notes or None),
+        )
+        insert_ingest_event(conn, evt)
+
         conn.commit()
 
-    return IngestResult(doc_id=doc_id, num_chunks=len(chunk_objs), embedding_dim=int(embs.shape[1]))
+    return IngestResult(
+        doc_id=doc_id,
+        doc_version=doc_version,
+        num_chunks=len(chunk_objs),
+        embedding_dim=int(embs.shape[1]),
+        content_sha256=content_sha256,
+        changed=changed,
+    )
 
 
-def ingest_file(path: str | Path, *, title: str | None = None, source: str | None = None) -> IngestResult:
+def _truncate_cell(value: object, *, max_chars: int) -> str:
+    """Normalize a cell value into a bounded string.
+
+    We intentionally keep this simple and deterministic.
+    """
+
+    if value is None:
+        s = ""
+    else:
+        s = str(value)
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    s = s.strip()
+    if len(s) > max_chars:
+        s = s[: max_chars - 1].rstrip() + "…"
+    return s
+
+
+def _csv_to_text(path: Path) -> tuple[str, str]:
+    """Convert a CSV/TSV into a retrieval-friendly text representation.
+
+    Returns: (text, notes)
+    """
+
+    import csv
+
+    # Default delimiter based on extension.
+    default_delim = "\t" if path.suffix.lower() == ".tsv" else ","
+
+    delimiter = default_delim
+
+    # Read a small sample for dialect sniffing.
+    sample: str
+    with path.open("r", encoding="utf-8", errors="replace", newline="") as f:
+        sample = f.read(4096)
+        f.seek(0)
+
+        try:
+            sniffed = csv.Sniffer().sniff(sample)
+            # Only accept a small set of safe delimiters.
+            if sniffed.delimiter in {",", "\t", ";", "|"}:
+                delimiter = sniffed.delimiter
+        except Exception:
+            # Fallback is fine.
+            delimiter = default_delim
+
+        reader = csv.reader(f, delimiter=delimiter)
+        rows: list[list[str]] = []
+        truncated = False
+        for i, row in enumerate(reader):
+            if i >= _TABULAR_MAX_ROWS:
+                truncated = True
+                break
+            # Cap columns.
+            if len(row) > _TABULAR_MAX_COLS:
+                row = row[:_TABULAR_MAX_COLS]
+                truncated = True
+            rows.append([_truncate_cell(c, max_chars=_TABULAR_MAX_CELL_CHARS) for c in row])
+
+    if not rows:
+        return "", "csv rows=0"
+
+    # Determine header.
+    header = rows[0]
+    data_rows = rows[1:]
+    # If header looks empty, synthesize.
+    if not any(h.strip() for h in header):
+        header = [f"col_{i + 1}" for i in range(len(rows[0]))]
+        data_rows = rows
+
+    col_count = len(header)
+
+    # Render as deterministic, paragraph-separated rows.
+    # This works well with the chunker (splits on blank lines).
+    lines: list[str] = []
+    lines.append(f"Spreadsheet ingestion ({path.name})")
+    lines.append(f"Format: CSV-like (delimiter='{delimiter}')")
+    lines.append(f"Columns ({col_count}): {', '.join(h or f'col_{i + 1}' for i, h in enumerate(header))}")
+    lines.append("")
+
+    total_chars = sum(len(x) for x in lines)
+    emitted = 0
+    for r_idx, row in enumerate(data_rows, start=1):
+        if emitted >= _TABULAR_MAX_ROWS:
+            truncated = True
+            break
+        # Normalize row length to header.
+        if len(row) < col_count:
+            row = row + [""] * (col_count - len(row))
+        if len(row) > col_count:
+            row = row[:col_count]
+
+        lines.append(f"Row {r_idx}:")
+        for c_idx, (h, v) in enumerate(zip(header, row, strict=False)):
+            key = h or f"col_{c_idx + 1}"
+            lines.append(f"- {key}: {v}")
+        lines.append("")
+        emitted += 1
+        total_chars += sum(len(x) for x in lines[-(col_count + 2) :])
+        if total_chars >= _TABULAR_MAX_TOTAL_CHARS:
+            truncated = True
+            break
+
+    if truncated:
+        lines.append("(truncated)")
+
+    notes = f"csv rows_emitted={emitted} cols={col_count} truncated={1 if truncated else 0}"
+    return "\n".join(lines).strip() + "\n", notes
+
+
+def _xlsx_to_text(path: Path) -> tuple[str, str]:
+    """Convert an XLSX/XLSM workbook into text.
+
+    This uses `openpyxl` (included in the default dependency set for this repo).
+    """
+
+    try:
+        import openpyxl  # type: ignore
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError(
+            "XLSX ingestion requires 'openpyxl'. Install it in your environment and retry. "
+            "E.g. `uv sync` (default deps) or `uv pip install openpyxl`. "
+            f"(import error: {e})"
+        )
+
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    sheet_names = wb.sheetnames
+    max_sheets = min(len(sheet_names), 5)
+
+    lines: list[str] = []
+    lines.append(f"Spreadsheet ingestion ({path.name})")
+    lines.append(f"Format: XLSX (sheets={len(sheet_names)}; processed={max_sheets})")
+    lines.append("")
+
+    total_chars = sum(len(x) for x in lines)
+    truncated = False
+    emitted_rows_total = 0
+
+    for s_idx, name in enumerate(sheet_names[:max_sheets], start=1):
+        ws = wb[name]
+
+        # Read up to max rows and max cols.
+        rows: list[list[str]] = []
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i >= _TABULAR_MAX_ROWS:
+                truncated = True
+                break
+            vals = [_truncate_cell(c, max_chars=_TABULAR_MAX_CELL_CHARS) for c in row[:_TABULAR_MAX_COLS]]
+            if len(row) > _TABULAR_MAX_COLS:
+                truncated = True
+            rows.append(vals)
+        if not rows:
+            continue
+
+        header = rows[0]
+        data_rows = rows[1:]
+        if not any(h.strip() for h in header):
+            header = [f"col_{i + 1}" for i in range(len(rows[0]))]
+            data_rows = rows
+
+        col_count = len(header)
+        lines.append(f"Sheet {s_idx}: {name}")
+        lines.append(f"Columns ({col_count}): {', '.join(h or f'col_{i + 1}' for i, h in enumerate(header))}")
+        lines.append("")
+
+        for r_idx, row in enumerate(data_rows, start=1):
+            if emitted_rows_total >= _TABULAR_MAX_ROWS:
+                truncated = True
+                break
+            if len(row) < col_count:
+                row = row + [""] * (col_count - len(row))
+            if len(row) > col_count:
+                row = row[:col_count]
+
+            lines.append(f"Row {r_idx}:")
+            for c_idx, (h, v) in enumerate(zip(header, row, strict=False)):
+                key = h or f"col_{c_idx + 1}"
+                lines.append(f"- {key}: {v}")
+            lines.append("")
+            emitted_rows_total += 1
+
+            total_chars += sum(len(x) for x in lines[-(col_count + 2) :])
+            if total_chars >= _TABULAR_MAX_TOTAL_CHARS:
+                truncated = True
+                break
+
+        if total_chars >= _TABULAR_MAX_TOTAL_CHARS:
+            truncated = True
+            break
+
+    if truncated:
+        lines.append("(truncated)")
+
+    notes = (
+        f"xlsx sheets={len(sheet_names)} processed={max_sheets} rows_emitted={emitted_rows_total} "
+        f"truncated={1 if truncated else 0}"
+    )
+    return "\n".join(lines).strip() + "\n", notes
+
+
+def ingest_file(
+    path: str | Path,
+    *,
+    title: str | None = None,
+    source: str | None = None,
+    classification: str | None = None,
+    retention: str | None = None,
+    tags: str | list[str] | None = None,
+    notes: str | None = None,
+) -> IngestResult:
     path = Path(path)
     title = title or path.stem
     # Use filename as the default source so doc_ids are stable across machines.
@@ -129,13 +458,63 @@ def ingest_file(path: str | Path, *, title: str | None = None, source: str | Non
 
     if path.suffix.lower() in {".md", ".txt"}:
         text = path.read_text(encoding="utf-8")
-        return ingest_text(title=title, source=source, text=text)
+        return ingest_text(
+            title=title,
+            source=source,
+            text=text,
+            classification=classification,
+            retention=retention,
+            tags=tags,
+            notes=notes,
+        )
+
+    if path.suffix.lower() in {".csv", ".tsv"}:
+        text, auto_notes = _csv_to_text(path)
+        if not text.strip():
+            raise RuntimeError("No text could be extracted from CSV/TSV")
+        merged_notes = auto_notes if not notes else f"{notes}\n{auto_notes}"
+        return ingest_text(
+            title=title,
+            source=source,
+            text=text,
+            classification=classification,
+            retention=retention,
+            tags=tags,
+            notes=merged_notes,
+        )
+
+    if path.suffix.lower() in {".xlsx", ".xlsm"}:
+        text, auto_notes = _xlsx_to_text(path)
+        if not text.strip():
+            raise RuntimeError("No text could be extracted from XLSX/XLSM")
+        merged_notes = auto_notes if not notes else f"{notes}\n{auto_notes}"
+        return ingest_text(
+            title=title,
+            source=source,
+            text=text,
+            classification=classification,
+            retention=retention,
+            tags=tags,
+            notes=merged_notes,
+        )
 
     if path.suffix.lower() == ".pdf":
         # Robust extraction via PyMuPDF; optionally OCR scanned pages with Tesseract.
         res = extract_text_from_pdf(path)
         if not res.text.strip():
             raise RuntimeError("No text could be extracted from PDF (is it scanned? enable OCR_ENABLED=1).")
-        return ingest_text(title=title, source=source, text=res.text)
+        auto_notes = f"pdf pages={res.pages} ocr_pages={res.ocr_pages}"
+        if res.warnings:
+            auto_notes = auto_notes + " warnings=" + ";".join(res.warnings[:5])
+        merged_notes = auto_notes if not notes else f"{notes}\n{auto_notes}"
+        return ingest_text(
+            title=title,
+            source=source,
+            text=res.text,
+            classification=classification,
+            retention=retention,
+            tags=tags,
+            notes=merged_notes,
+        )
 
-    raise ValueError(f"Unsupported file type: {path.suffix}. Use .md, .txt, or .pdf")
+    raise ValueError(f"Unsupported file type: {path.suffix}. Use .md, .txt, .pdf, .csv, .tsv, .xlsx, .xlsm")

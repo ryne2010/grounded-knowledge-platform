@@ -1,0 +1,63 @@
+[project]
+name = "grounded-knowledge-platform"
+description = "Citations-first, eval-driven grounded knowledge (RAG) reference implementation with Cloud Run deployment."
+
+[harness]
+# Fail fast stops on first failing step. Set false to run everything and summarize.
+fail_fast = true
+
+[autodetect]
+# Preferred runners.
+python_runner = "uv"
+node_runner = "pnpm"
+
+# This repo is not a Node workspace at repo root.
+node_recursive = false
+
+# If "auto", Go/Rust advanced linters run only when their tool/config is present.
+go_use_golangci_lint = "auto"
+rust_use_clippy = "auto"
+
+# If true, missing tools/config produce SKIP (non-fatal). Use --strict to treat SKIP as failure.
+skip_missing_tools = true
+
+[autodetect.python]
+# We use mypy (not pyright) today.
+linter = "ruff"
+formatter = "ruff"
+typechecker = "mypy"
+testrunner = "pytest"
+
+[commands]
+# Explicit commands (preferred) so the harness works even though the UI lives in ./web.
+# Keep these aligned with CI and with docs/WORKFLOW.md.
+
+# Format is intentionally conservative: ruff format + ruff check.
+fmt = [
+  "uv run ruff format .",
+  "uv run ruff check .",
+]
+
+lint = [
+  "uv run ruff check .",
+  "cd web && pnpm run typecheck",
+]
+
+typecheck = [
+  "uv run mypy app",
+  "cd web && pnpm run typecheck",
+]
+
+test = [
+  "uv run pytest",
+]
+
+build = [
+  "cd web && pnpm install --frozen-lockfile",
+  "cd web && pnpm run build",
+]
+
+[paths]
+source = ["app", "web/src"]
+tests = ["tests"]
+docs = ["docs"]

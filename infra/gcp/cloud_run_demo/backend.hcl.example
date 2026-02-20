@@ -1,0 +1,9 @@
+# Example Terraform backend config (GCS remote state)
+#
+# Copy to backend.hcl (gitignored) or store in GCS for CI:
+#   gs://<YOUR_CONFIG_BUCKET>/gkp/<env>/backend.hcl
+#
+# NOTE: bucket names are global.
+
+bucket = "YOUR_PROJECT_ID-tfstate"
+prefix = "gkp/dev"

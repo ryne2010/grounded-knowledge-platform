@@ -72,8 +72,9 @@ make verify
    ```bash
    make logs
    ```
-2. Look for `request_id` in structured JSON logs.
-3. Confirm demo-safe settings are active (Terraform sets these by default):
+2. If the UI shows an error like `[req <id>] HTTP 500: ...`, use that request id to locate the log entry.
+3. Look for `request_id` in structured JSON logs.
+4. Confirm demo-safe settings are active (Terraform sets these by default):
    - `PUBLIC_DEMO_MODE=1`
    - `LLM_PROVIDER=extractive`
    - `SQLITE_PATH=/tmp/index.sqlite`

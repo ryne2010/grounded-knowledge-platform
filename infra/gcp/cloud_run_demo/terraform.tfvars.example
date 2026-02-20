@@ -1,0 +1,19 @@
+# Example terraform.tfvars (gitignored)
+#
+# This repo's Makefile passes variables via -var flags, so this file is optional
+# for local use. It's mainly used by CI workflows that download tfvars from GCS.
+#
+# Copy to terraform.tfvars (gitignored) or store in GCS for CI:
+#   gs://<YOUR_CONFIG_BUCKET>/gkp/<env>/terraform.tfvars
+
+project_id         = "YOUR_PROJECT_ID"
+region             = "us-central1"
+env                = "dev"
+service_name       = "gkp-dev"
+artifact_repo_name = "gkp"
+image_name         = "gkp"
+image_tag          = "latest"
+
+# Optional: demonstrate group-based IAM without Workspace/Cloud Identity.
+# clients_observers_group_email              = "gkp-observers@googlegroups.com"
+# enable_clients_observers_monitoring_viewer = true

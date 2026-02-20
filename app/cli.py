@@ -7,17 +7,43 @@ from .eval import run_eval
 from .ingestion import ingest_file
 
 
-def cmd_ingest_folder(folder: str) -> None:
+def cmd_ingest_folder(
+    folder: str, *, classification: str | None, retention: str | None, tags: str | None, notes: str | None
+) -> None:
     folder_path = Path(folder)
     if not folder_path.exists():
         raise SystemExit(f"Folder does not exist: {folder}")
-    files = sorted([p for p in folder_path.rglob("*") if p.is_file() and p.suffix.lower() in {".md", ".txt", ".pdf"}])
+
+    supported = {".md", ".txt", ".pdf", ".csv", ".tsv", ".xlsx", ".xlsm"}
+    files = sorted([p for p in folder_path.rglob("*") if p.is_file() and p.suffix.lower() in supported])
     if not files:
-        print("No supported files found (.md/.txt/.pdf).")
+        print("No supported files found (.md/.txt/.pdf/.csv/.tsv/.xlsx/.xlsm).")
         return
+
+    errors: list[str] = []
     for p in files:
-        res = ingest_file(p)
-        print(f"Ingested {p.name}: doc_id={res.doc_id} chunks={res.num_chunks} dim={res.embedding_dim}")
+        try:
+            res = ingest_file(
+                p,
+                classification=classification,
+                retention=retention,
+                tags=tags,
+                notes=notes,
+            )
+            drift = "changed" if res.changed else "unchanged"
+            print(
+                f"Ingested {p.name}: doc_id={res.doc_id} v{res.doc_version} {drift} "
+                f"chunks={res.num_chunks} dim={res.embedding_dim} sha256={res.content_sha256[:10]}…"
+            )
+        except Exception as e:
+            errors.append(f"{p}: {type(e).__name__}: {e}")
+            print(f"ERROR ingesting {p.name}: {type(e).__name__}: {e}")
+
+    if errors:
+        print("\nOne or more files failed to ingest:")
+        for err in errors:
+            print(f"- {err}")
+        raise SystemExit(1)
 
 
 def cmd_eval(path: str, k: int) -> None:
@@ -25,12 +51,36 @@ def cmd_eval(path: str, k: int) -> None:
     print(f"examples={res.n} hit@{k}={res.hit_at_k:.3f} mrr={res.mrr:.3f}")
 
 
+def cmd_purge_expired(*, apply: bool, now: int | None) -> None:
+    """Purge docs whose retention policy has expired (dry-run by default)."""
+    from .config import settings
+    from .maintenance import purge_expired_docs
+    from .storage import connect, init_db
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        ids = purge_expired_docs(conn, now=now, apply=apply)
+
+    if not ids:
+        print("No expired docs.")
+        return
+
+    action = "Deleted" if apply else "Would delete"
+    print(f"{action} {len(ids)} doc(s):")
+    for doc_id in ids:
+        print(f"  - {doc_id}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="grounded-kp")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_ing = sub.add_parser("ingest-folder", help="Ingest all docs in a folder (.md/.txt/.pdf).")
+    p_ing = sub.add_parser("ingest-folder", help="Ingest all docs in a folder (.md/.txt/.pdf/.csv/.tsv/.xlsx/.xlsm).")
     p_ing.add_argument("folder", type=str)
+    p_ing.add_argument("--classification", default=None, help="public|internal|confidential|restricted")
+    p_ing.add_argument("--retention", default=None, help="none|30d|90d|1y|indefinite")
+    p_ing.add_argument("--tags", default=None, help="Comma-separated tags")
+    p_ing.add_argument("--notes", default=None, help="Optional ingest note")
 
     p_eval = sub.add_parser("eval", help="Run retrieval evaluation on a JSONL golden set.")
     p_eval.add_argument("golden", type=str)
@@ -40,22 +90,34 @@ def main() -> None:
     p_safe = sub.add_parser("safety-eval", help="Run prompt-injection safety regression on a JSONL suite.")
     p_safe.add_argument("suite", help="Path to JSONL safety suite.")
     p_safe.add_argument("--endpoint", default="/api/query", help="Query endpoint path (default: /api/query).")
-    p_safe.add_argument("--base", default="http://127.0.0.1:8080", help="API base URL (default: http://127.0.0.1:8080).")
+    p_safe.add_argument(
+        "--base", default="http://127.0.0.1:8080", help="API base URL (default: http://127.0.0.1:8080)."
+    )
     p_safe.add_argument("--k", type=int, default=5, help="Top-k retrieval (default: 5).")
 
-
+    # --- Maintenance (retention purge) ---
+    p_purge = sub.add_parser("purge-expired", help="Delete docs whose retention policy has expired.")
+    p_purge.add_argument("--apply", action="store_true", help="Actually delete expired docs (default: dry-run).")
+    p_purge.add_argument("--now", type=int, default=None, help="Override 'now' unix timestamp (testing).")
 
     args = parser.parse_args()
     if args.cmd == "ingest-folder":
-        cmd_ingest_folder(args.folder)
+        cmd_ingest_folder(
+            args.folder,
+            classification=args.classification,
+            retention=args.retention,
+            tags=args.tags,
+            notes=args.notes,
+        )
     elif args.cmd == "eval":
         cmd_eval(args.golden, args.k)
+    elif args.cmd == "purge-expired":
+        cmd_purge_expired(apply=bool(args.apply), now=args.now)
     elif args.cmd == "safety-eval":
         from app.safety_eval import run_safety_eval
+
         ok = run_safety_eval(args.suite, api_base=args.base, endpoint_path=args.endpoint, top_k=args.k)
         raise SystemExit(0 if ok else 2)
-
-
 
 
 if __name__ == "__main__":

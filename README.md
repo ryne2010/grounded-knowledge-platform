@@ -1,260 +1,209 @@
-# Grounded Knowledge Platform (RAG) — citations-first, eval-driven
+# Grounded Knowledge Platform
 
-## Quickstart (team workflow)
+A small, safety-minded, citation-first **RAG** (retrieval augmented generation) reference app.
 
-Run a prerequisite/config check (recommended first step):
+- **FastAPI** backend + **React (Vite)** frontend
+- **SQLite** for doc/chunk storage + embeddings
+- **Hybrid retrieval** (lexical + vector)
+- **Grounding enforced**: answers must be supported by retrieved sources (or the system refuses)
+- **Public demo mode**: read-only + extractive answering + rate limiting
 
-```bash
-make doctor
-```
+This repo is intentionally designed to run well:
 
-For a team-friendly GCP demo deploy (one-time setup, then deploy):
-
-```bash
-make init GCLOUD_CONFIG=personal-portfolio PROJECT_ID=YOUR_PROJECT_ID REGION=us-central1
-make auth    # only needed once per machine/user
-make deploy
-```
-
-- Local dev: `make` is optional — see the README sections below for `uv`/`pnpm` commands.
-- GCP demo deploy (safe defaults): `make deploy`
-
-A small, production-minded reference implementation of a **grounded knowledge system**.
-
-**Design goals**
-- **Grounded answers:** every claim should be backed by retrieved sources.
-- **Citations by default:** answers are returned with clickable citations.
-- **Refusal mode:** if evidence is weak, the system returns *"I don't have enough information in the provided sources"*.
-- **Eval-driven:** track retrieval quality over time with a tiny regression harness.
-- **Deployable:** single FastAPI service that can run locally or on Cloud Run.
-
-> This repo ships with a small **safe demo corpus** you can replace with your own documents.
+- on an **M2 Max MacBook Pro** for development
+- on **Cloud Run** for production
 
 ---
 
+## Quickstart (M2 Max MacBook Pro)
 
-## UI stack
+Full setup notes: `docs/DEV_SETUP_MACOS.md`.
 
-- **Vite + React**
-- **TanStack**: Router, Query, Table, **Virtual**, **Pacer**, **Ranger**
-- **Tailwind + shadcn-style components** (vendored in `web/src/portfolio-ui` and intended to be kept in sync via git subtree)
+Prereqs:
 
-## Quick start (local)
+- Python **3.11+**
+- [`uv`](https://github.com/astral-sh/uv)
+- Node **20+**
+- `pnpm`
 
-This repo uses:
-- **uv** for Python dependency management
-- **pnpm** for the React UI (`web/`)
-
-### 1) Install Python deps
+### 1) Configure env
 
 ```bash
-uv sync --dev
+cp .env.example .env
 ```
 
-### 2) Run the API
+By default `.env.example` enables `PUBLIC_DEMO_MODE=1` (read-only). For local/private development, disable it and enable uploads:
 
 ```bash
-uv run uvicorn app.main:app --reload --port 8080
+# .env
+PUBLIC_DEMO_MODE=0
+ALLOW_UPLOADS=1
+ALLOW_EVAL=1
+ALLOW_CHUNK_VIEW=1
+ALLOW_DOC_DELETE=1
+CITATIONS_REQUIRED=1
+BOOTSTRAP_DEMO_CORPUS=1
 ```
 
-Open: http://localhost:8080
-
-### 3) Run the UI (React + TanStack)
-
-In a second terminal:
+### 2) Install deps
 
 ```bash
-cd web
-corepack enable
-pnpm install
-pnpm dev
+make py-install
+make web-install
 ```
 
-Open: http://localhost:5173
+### 3) Run (two terminals)
 
-### 4) Ingest demo docs (optional)
-
-The repo includes a small demo corpus in `data/demo_corpus/`.
-
-If you're running in **PUBLIC_DEMO_MODE=1**, the server will automatically bootstrap the demo corpus on startup.
-
-If you want to ingest manually (local/dev):
+Backend:
 
 ```bash
-uv run python -m app.cli ingest-folder data/demo_corpus
+make run-api
 ```
 
-### 5) Ask questions
-
-Use the web UI or:
+Frontend:
 
 ```bash
-curl -s http://localhost:8080/api/query \
-  -H 'content-type: application/json' \
-  -d '{"question":"What is this project?","top_k":5}' | jq
+make run-ui
+```
+
+Or run both concurrently:
+
+```bash
+make dev
+```
+
+Open:
+
+- UI: http://127.0.0.1:5173
+- API: http://127.0.0.1:8080
+
+---
+
+## Key concepts
+
+- **Doc**: top-level document record (title, source, metadata)
+- **Chunk**: character-based chunking of doc text
+- **Embedding**: vector representation per chunk (hash / sentence-transformers / none; sentence-transformers is an optional extra)
+- **Ingest event**: lineage record for every ingest (content hash, settings, version)
+- **Citation**: chunk quote returned alongside an answer
+
+---
+
+## Safety / deployment modes
+
+### PUBLIC_DEMO_MODE (recommended for public URLs)
+
+`PUBLIC_DEMO_MODE=1` forces:
+
+- no uploads
+- no eval endpoints
+- **extractive** answering only
+- rate limiting on `/api/query`
+- citations-required behavior forced on
+- chunk viewing disabled
+
+### Private deployment toggles
+
+These are **dangerous** on a public URL, but useful for private/internal deployments:
+
+- `ALLOW_UPLOADS=1` – enables ingestion endpoints (and doc metadata edits)
+- `ALLOW_EVAL=1` – enables `/api/eval/run`
+- `ALLOW_CHUNK_VIEW=1` – allows full chunk text viewing via `/api/chunks/*`
+- `ALLOW_DOC_DELETE=1` – enables `DELETE /api/docs/{doc_id}`
+
+Defense in depth:
+
+- `MAX_UPLOAD_BYTES=10000000` (10MB default)
+
+---
+
+## Ingesting documents
+
+### UI
+
+Use the **Upload file** / **Paste text** cards on the **Ingest** page.
+
+Supported file uploads:
+
+- `.txt`, `.md`
+- `.pdf` (optional OCR when `OCR_ENABLED=1`; requires `tesseract` locally)
+- `.csv`, `.tsv` (tabular ingestion is rendered into retrieval-friendly text)
+- `.xlsx` / `.xlsm` (uses `openpyxl`, included in the default dependency set)
+
+To ingest docs and inspect ingest lineage across all docs, open the **Ingest** page.
+
+For index/config health, open the **Dashboard** page.
+
+You can attach metadata:
+
+- classification: `public|internal|confidential|restricted`
+- retention: `none|30d|90d|1y|indefinite`
+- tags: comma-separated
+- notes: recorded in ingest lineage
+
+### CLI
+
+```bash
+uv run python -m app.cli ingest-folder data/demo_corpus --classification internal --tags "runbook,platform"
 ```
 
 ---
 
-## Public demo mode (safe, read-only)
+## Cloud Run deployment
 
-To run a **public-facing** demo safely:
+This repo ships a production Dockerfile that builds the UI and serves it from the FastAPI container.
 
-```bash
-PUBLIC_DEMO_MODE=1 uv run uvicorn app.main:app --port 8080
-```
+High level:
 
-When enabled, the service:
-- disables uploads and eval endpoints
-- forces **extractive-only** answering (no external API calls)
-- enables basic in-app rate limiting + clamps query knobs
-- emits structured JSON request logs (request_id, status, latency) and returns `X-Request-Id`
-
-## LLM providers (optional)
-
-By default, the system uses a **local extractive answerer** (no API keys required). You can optionally enable an LLM:
-
-### OpenAI
-
-```bash
-export LLM_PROVIDER=openai
-export OPENAI_API_KEY=...
-export OPENAI_MODEL=gpt-4.1-mini # example
-```
-
-### Gemini (Google GenAI SDK)
-
-```bash
-export LLM_PROVIDER=gemini
-export GEMINI_API_KEY=...
-export GEMINI_MODEL=gemini-2.0-flash # example
-```
-
-If no provider is configured, the API falls back to extractive answers that still include citations.
-
-### Ollama (local open models)
-
-For sensitive/on-prem use cases, you can run an open model locally via **Ollama**.
-
-1) Install Ollama and pull a model:
-
-```bash
-ollama pull llama3.1:8b
-```
-
-2) Run the app with:
-
-```bash
-export LLM_PROVIDER=ollama
-export OLLAMA_MODEL=llama3.1:8b
-export OLLAMA_BASE_URL=http://localhost:11434
-```
-
-If Ollama is not reachable, the service gracefully falls back to the local extractive answerer.
-
----
-
-## Embeddings backends
-
-Default is `hash` (no downloads). You can also disable embeddings entirely (`none`) for a minimal footprint.
-
-For better retrieval quality, enable `sentence-transformers`:
-
-```bash
-export EMBEDDINGS_BACKEND=sentence-transformers
-export EMBEDDINGS_MODEL=all-MiniLM-L6-v2
-```
-
-> For sensitive data cases, prefer **local embeddings** (e.g., `sentence-transformers`) and a **local LLM** (Ollama) so that document content never leaves your environment.
-
----
-
-## OCR (optional, open source, fully local)
-
-For scanned PDFs, enable OCR:
-
-```bash
-export OCR_ENABLED=1
-export OCR_MAX_PAGES=10
-export OCR_DPI=200
-```
-
-OCR uses **Tesseract** via `pytesseract` and stays fully local.
-
-## Evaluation (retrieval quality)
-
-Edit `data/eval/golden.jsonl` and run:
-
-```bash
-uv run python -m app.cli eval data/eval/golden.jsonl --k 5
-```
-
-Outputs hit@k and MRR.
-
----
-
-## Deploy (Docker)
-
-```bash
-docker build -t grounded-kp -f docker/Dockerfile .
-docker run -p 8080:8080 grounded-kp
-```
-
-## Deploy to GCP Cloud Run (team-ready, IaC-first)
-
-Cloud Run can scale to zero and has a generous free tier. You can typically keep a personal demo at or near $0/month,
-but you should still set budgets/alerts.
-
-This repo includes a **staff-level Makefile workflow** that:
-- uses **remote Terraform state** (GCS)
-- builds images via **Cloud Build** (consistent, macOS-friendly)
-- deploys Cloud Run with **safe demo defaults** (`PUBLIC_DEMO_MODE=1`)
-- supports **plan/apply separation**
-
-### One-time: set gcloud defaults
-
-```bash
-gcloud auth login
-gcloud auth application-default login
-gcloud config set project YOUR_PROJECT_ID
-gcloud config set run/region us-central1
-```
-
-### Deploy (one command)
-
-```bash
-make deploy
-```
-
-### Plan/apply separation
-
-```bash
-make plan
-make apply
-```
+- build container
+- deploy to Cloud Run
+- set env vars (and secrets)
 
 See:
-- `docs/DEPLOY_GCP.md`
-- `docs/TEAM_WORKFLOW.md`
 
-
-### Safety checklist
-
-Before exposing a public URL, review:
-- `docs/public-demo-checklist.md`
+- `infra/gcp/README.md`
+- `Makefile` targets: `make build`, `make deploy`
 
 ---
 
-## Repo layout
+## Developer workflow
 
-- `app/` FastAPI service, ingestion, retrieval, eval harness
-- `web/` static single-page UI served by FastAPI
-- `data/` demo corpus and evaluation set
-- `docs/` public demo checklist
-- `infra/` Terraform examples (Cloud Run)
+Run the full local quality harness:
+
+```bash
+make dev-doctor
+```
+
+Or run specific checks:
+
+```bash
+make lint
+make typecheck
+make test
+make eval
+make safety-eval
+```
+
+(See `scripts/harness.py` for what runs.)
+
+Housekeeping:
+
+```bash
+make clean   # remove local caches/build artifacts
+make dist    # create a clean source ZIP in dist/
+```
 
 ---
 
-## License
+## Maintenance (private deployments)
 
-MIT
+Retention purge is available for persisted/private deployments:
+
+```bash
+make purge-expired         # dry-run
+make purge-expired-apply   # delete expired docs
+```
+
+The web UI also includes a **Maintenance** page that lists currently-expired docs (read-only).
+
+See `docs/RUNBOOKS/MAINTENANCE.md`.

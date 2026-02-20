@@ -1,23 +1,27 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
+import logging
 import re
+import sqlite3
+import time
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
-from fastapi.responses import JSONResponse
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .bootstrap import bootstrap_demo_corpus
 from .answering import get_answerer
+from .bootstrap import bootstrap_demo_corpus
 from .config import settings
 from .eval import run_eval
 from .ingestion import ingest_file, ingest_text
-from .ratelimit import SlidingWindowRateLimiter
-from .retrieval import invalidate_cache, retrieve
-from .storage import connect, init_db, list_docs
+from .metadata import CLASSIFICATIONS, RETENTIONS, normalize_classification, normalize_retention, normalize_tags
 from .observability import (
     Timer,
     configure_logging,
@@ -25,37 +29,221 @@ from .observability import (
     parse_cloud_trace_context,
     request_id_from_headers,
 )
-
-# NEW: lightweight injection/circumvention detection
+from .ratelimit import SlidingWindowRateLimiter
+from .retrieval import invalidate_cache, retrieve
 from .safety import detect_prompt_injection
+from .storage import (
+    connect,
+    delete_doc,
+    get_chunk,
+    get_doc,
+    get_meta,
+    init_db,
+    update_doc_metadata,
+    list_all_chunks_for_doc,
+    list_chunks_for_doc,
+    list_docs,
+    list_ingest_events,
+    list_recent_ingest_events,
+)
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
 _STOPWORDS = {
-    "a", "an", "the", "and", "or", "but", "if", "then", "else", "when", "while",
-    "to", "of", "for", "in", "on", "at", "by", "with", "about", "against",
-    "between", "into", "through", "during", "before", "after", "above", "below",
-    "from", "up", "down", "out", "over", "under", "again", "further", "once",
-    "here", "there", "all", "any", "both", "each", "few", "more", "most", "other",
-    "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too",
-    "very", "can", "will", "just", "should", "could", "would", "may", "might", "must",
-    "do", "does", "did", "doing", "done", "is", "are", "was", "were", "be", "been",
-    "being", "have", "has", "had", "having",
-    "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them",
-    "my", "your", "yours", "his", "hers", "its", "our", "their",
-    "what", "which", "who", "whom", "whose", "where", "when", "why", "how",
-    "tell", "show", "explain", "describe", "list", "give", "summarize", "summarise",
-    "define", "meaning", "mean", "means", "stand", "stands", "refers", "refer",
-    "related", "relation", "relate", "about", "information", "info", "source",
-    "sources", "provided", "provide", "using", "use", "used", "usage",
-    "vs", "versus", "example", "examples", "please", "thanks", "thank",
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "if",
+    "then",
+    "else",
+    "when",
+    "while",
+    "to",
+    "of",
+    "for",
+    "in",
+    "on",
+    "at",
+    "by",
+    "with",
+    "about",
+    "against",
+    "between",
+    "into",
+    "through",
+    "during",
+    "before",
+    "after",
+    "above",
+    "below",
+    "from",
+    "up",
+    "down",
+    "out",
+    "over",
+    "under",
+    "again",
+    "further",
+    "once",
+    "here",
+    "there",
+    "all",
+    "any",
+    "both",
+    "each",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "no",
+    "nor",
+    "not",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "can",
+    "will",
+    "just",
+    "should",
+    "could",
+    "would",
+    "may",
+    "might",
+    "must",
+    "do",
+    "does",
+    "did",
+    "doing",
+    "done",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "having",
+    "i",
+    "you",
+    "he",
+    "she",
+    "it",
+    "we",
+    "they",
+    "me",
+    "him",
+    "her",
+    "us",
+    "them",
+    "my",
+    "your",
+    "yours",
+    "his",
+    "hers",
+    "its",
+    "our",
+    "their",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "where",
+    "when",
+    "why",
+    "how",
+    "tell",
+    "show",
+    "explain",
+    "describe",
+    "list",
+    "give",
+    "summarize",
+    "summarise",
+    "define",
+    "meaning",
+    "mean",
+    "means",
+    "stand",
+    "stands",
+    "refers",
+    "refer",
+    "related",
+    "relation",
+    "relate",
+    "about",
+    "information",
+    "info",
+    "source",
+    "sources",
+    "provided",
+    "provide",
+    "using",
+    "use",
+    "used",
+    "usage",
+    "vs",
+    "versus",
+    "example",
+    "examples",
+    "please",
+    "thanks",
+    "thank",
 }
 
 _RELATIONSHIP_TERMS = {
-    "related", "relationship", "relate", "between", "compare", "comparison",
-    "difference", "different", "vs", "versus", "associate", "associated",
-    "link", "linked", "connection", "connected",
+    "related",
+    "relationship",
+    "relate",
+    "between",
+    "compare",
+    "comparison",
+    "difference",
+    "different",
+    "vs",
+    "versus",
+    "associate",
+    "associated",
+    "link",
+    "linked",
+    "connection",
+    "connected",
 }
+
+
+# ---- Security headers ----
+_CSP_STRICT = (
+    "default-src 'self'; img-src 'self' data:; connect-src 'self'; "
+    "script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+)
+
+_CSP_SWAGGER = (
+    # Swagger UI needs inline/eval for its bundled scripts/styles.
+    "default-src 'self'; img-src 'self' data:; connect-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; "
+    "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+)
+
+
+def _csp_for_path(path: str) -> str:
+    p = path or ""
+    # Swagger/Redoc need a looser CSP (inline/eval) to run correctly.
+    if p.startswith(("/api/swagger", "/api/redoc", "/api/openapi")):
+        return _CSP_SWAGGER
+    return _CSP_STRICT
 
 
 def _term_variants(term: str) -> list[str]:
@@ -116,10 +304,39 @@ APP_DIR = Path(__file__).resolve().parent
 WEB_DIR = (APP_DIR.parent / "web").resolve()
 DIST_DIR = (WEB_DIR / "dist").resolve()
 
-app = FastAPI(title="Grounded Knowledge Platform", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """FastAPI lifespan.
+
+    FastAPI deprecated `@app.on_event("startup")` in favor of lifespan handlers.
+    We keep startup logic here so it runs for both TestClient and production.
+    """
+
+    # Ensure DB schema exists and (optionally) bootstrap a demo corpus.
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+    bootstrap_demo_corpus()
+
+    yield
+
+
+app = FastAPI(
+    title="Grounded Knowledge Platform",
+    version=settings.version,
+    docs_url="/api/swagger",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+    lifespan=lifespan,
+)
 
 # Configure JSON logging early so Cloud Run/Cloud Logging parses fields.
 configure_logging()
+
+logger = logging.getLogger("gkp")
+
+# Lightweight compression for JSON responses and static assets.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 _limiter = SlidingWindowRateLimiter(
     window_s=settings.rate_limit_window_s,
@@ -127,17 +344,30 @@ _limiter = SlidingWindowRateLimiter(
 )
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    # Ensure DB schema exists and (optionally) bootstrap a demo corpus.
-    with connect(settings.sqlite_path) as conn:
-        init_db(conn)
-    bootstrap_demo_corpus()
+def _should_rate_limit(path: str) -> bool:
+    """Decide whether to apply rate limiting for a given path.
+
+    In public demo mode we default to limiting the expensive `/api/query` endpoint,
+    but allow operators to expand the limiter to all API routes.
+    """
+
+    p = path or ""
+    scope = (settings.rate_limit_scope or "query").strip().lower()
+    if scope == "api":
+        if not p.startswith("/api/"):
+            return False
+        # Don't rate limit API docs; they can be chatty (assets + schema fetches).
+        if p.startswith(("/api/swagger", "/api/redoc", "/api/openapi")):
+            return False
+        return True
+
+    # Default: only the query endpoint.
+    return p == "/api/query"
 
 
 @app.middleware("http")
 async def _request_middleware(request: Request, call_next):
-    """Attach a request ID, enforce demo safety controls, and emit structured logs."""
+    """Attach request ID, enforce demo safety controls, emit structured logs."""
 
     timer = Timer()
     rid = request_id_from_headers({k.lower(): v for k, v in request.headers.items()})
@@ -145,16 +375,15 @@ async def _request_middleware(request: Request, call_next):
 
     # Prefer X-Forwarded-For in managed environments (Cloud Run).
     xff = request.headers.get("x-forwarded-for")
-    remote_ip = (xff.split(",")[0].strip() if xff else None) or (
-        request.client.host if request.client else "unknown"
-    )
+    remote_ip = (xff.split(",")[0].strip() if xff else None) or (request.client.host if request.client else "unknown")
     user_agent = request.headers.get("user-agent", "")
 
     # Cloud Trace correlation (if present).
     trace_id, span_id = parse_cloud_trace_context({k.lower(): v for k, v in request.headers.items()})
 
-    # ---- Demo safety controls (defense-in-depth) ----
-    if settings.public_demo_mode and settings.rate_limit_enabled and request.url.path == "/api/query":
+    # ---- Rate limiting (defense-in-depth) ----
+    # In demo mode this is enabled by default; private deployments can opt in via RATE_LIMIT_ENABLED=1.
+    if settings.rate_limit_enabled and _should_rate_limit(request.url.path):
         if not _limiter.allow(remote_ip):
             latency_ms = timer.ms()
             log_http_request(
@@ -217,6 +446,27 @@ async def _request_middleware(request: Request, call_next):
 
     # Attach request ID for client correlation.
     response.headers["X-Request-Id"] = rid
+
+    # Basic security headers (safe defaults for a SPA + JSON API).
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), payment=()",
+    )
+    response.headers.setdefault("Content-Security-Policy", _csp_for_path(request.url.path))
+
+    # Only set HSTS when we're actually behind HTTPS.
+    if request.headers.get("x-forwarded-proto") == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
+    # Avoid caching API responses in browsers/proxies.
+    # (Useful for private deployments where responses may contain sensitive snippets.)
+    if request.url.path.startswith("/api/") or request.url.path in ("/health", "/ready"):
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("Pragma", "no-cache")
+
     latency_ms = timer.ms()
     log_http_request(
         request_id=rid,
@@ -236,17 +486,45 @@ async def _request_middleware(request: Request, call_next):
 
 @app.exception_handler(HTTPException)
 async def _http_exception_handler(request: Request, exc: HTTPException):
-    """Ensure error responses include X-Request-Id for correlation."""
+    """Ensure error responses include X-Request-Id and basic security headers."""
     rid = getattr(request.state, "request_id", None)
-    headers = {"X-Request-Id": rid} if rid else None
+    headers: dict[str, str] = {}
+    if rid:
+        headers["X-Request-Id"] = rid
+    headers["X-Content-Type-Options"] = "nosniff"
+    headers["X-Frame-Options"] = "DENY"
+    headers["Referrer-Policy"] = "no-referrer"
+    headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+    headers["Content-Security-Policy"] = _csp_for_path(request.url.path)
+    if request.headers.get("x-forwarded-proto") == "https":
+        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+    if request.url.path.startswith("/api/") or request.url.path in ("/health", "/ready"):
+        headers["Cache-Control"] = "no-store"
+        headers["Pragma"] = "no-cache"
+
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=headers)
 
 
 @app.exception_handler(Exception)
 async def _unhandled_exception_handler(request: Request, exc: Exception):
-    """Return a safe JSON 500 (and keep request correlation)."""
+    """Return a safe JSON 500 (and keep request correlation + security headers)."""
     rid = getattr(request.state, "request_id", None)
-    headers = {"X-Request-Id": rid} if rid else None
+    headers: dict[str, str] = {}
+    if rid:
+        headers["X-Request-Id"] = rid
+    headers["X-Content-Type-Options"] = "nosniff"
+    headers["X-Frame-Options"] = "DENY"
+    headers["Referrer-Policy"] = "no-referrer"
+    headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+    headers["Content-Security-Policy"] = _csp_for_path(request.url.path)
+    if request.headers.get("x-forwarded-proto") == "https":
+        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+    if request.url.path.startswith("/api/") or request.url.path in ("/health", "/ready"):
+        headers["Cache-Control"] = "no-store"
+        headers["Pragma"] = "no-cache"
+
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"}, headers=headers)
 
 
@@ -256,6 +534,18 @@ class IngestTextRequest(BaseModel):
     source: str = Field(..., description="A source label/URL/path")
     text: str = Field(..., description="Document content")
     doc_id: str | None = Field(None, description="Optional stable id")
+    classification: str | None = Field(None, description="public|internal|confidential|restricted")
+    retention: str | None = Field(None, description="none|30d|90d|1y|indefinite")
+    tags: list[str] | None = Field(None, description="Optional tags")
+    notes: str | None = Field(None, description="Optional ingest note")
+
+
+class DocUpdateRequest(BaseModel):
+    title: str | None = Field(None, description="Optional new title")
+    source: str | None = Field(None, description="Optional new source label/URL/path")
+    classification: str | None = Field(None, description="public|internal|confidential|restricted")
+    retention: str | None = Field(None, description="none|30d|90d|1y|indefinite")
+    tags: list[str] | None = Field(None, description="Optional tags")
 
 
 class QueryRequest(BaseModel):
@@ -267,6 +557,51 @@ class QueryRequest(BaseModel):
 class EvalRequest(BaseModel):
     golden_path: str = "data/eval/golden.jsonl"
     k: int = 5
+    include_details: bool = False
+
+
+class ChunkSearchResult(BaseModel):
+    chunk_id: str
+    doc_id: str
+    idx: int
+    score: float | None = None
+    text_preview: str
+    doc_title: str
+    doc_source: str
+    classification: str
+    tags: list[str]
+
+
+class ChunkSearchResponse(BaseModel):
+    query: str
+    results: list[ChunkSearchResult]
+
+
+class TopTagStat(BaseModel):
+    tag: str
+    count: int
+
+
+class StatsResponse(BaseModel):
+    docs: int
+    chunks: int
+    embeddings: int
+    ingest_events: int
+    by_classification: dict[str, int]
+    by_retention: dict[str, int]
+    top_tags: list[TopTagStat]
+
+
+class ExpiredDoc(BaseModel):
+    doc_id: str
+    title: str
+    retention: str
+    updated_at: int
+
+
+class ExpiredDocsResponse(BaseModel):
+    now: int
+    expired: list[ExpiredDoc]
 
 
 # ---- Health ----
@@ -275,17 +610,166 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/ready")
+def ready() -> dict[str, object]:
+    """Readiness probe.
+
+    Checks that the app can open the backing store and run a trivial query.
+    Returns 503 if initialization fails.
+    """
+
+    try:
+        with connect(settings.sqlite_path) as conn:
+            init_db(conn)
+            conn.execute("SELECT 1").fetchone()
+    except Exception as e:
+        logger.exception("Readiness probe failed")
+        raise HTTPException(status_code=503, detail=f"not ready: {e}") from e
+
+    return {"ready": True, "version": app.version, "public_demo_mode": settings.public_demo_mode}
+
+
 @app.get("/api/meta")
 def meta() -> dict[str, object]:
     """Small metadata endpoint for the UI and diagnostics."""
+    uploads_enabled = bool(settings.allow_uploads and not settings.public_demo_mode)
+    eval_enabled = bool(settings.allow_eval and not settings.public_demo_mode)
+    chunk_view_enabled = bool(settings.allow_chunk_view and not settings.public_demo_mode)
+    doc_delete_enabled = bool(settings.allow_doc_delete and not settings.public_demo_mode)
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        doc_count = int(conn.execute("SELECT COUNT(1) AS n FROM docs").fetchone()["n"])
+        chunk_count = int(conn.execute("SELECT COUNT(1) AS n FROM chunks").fetchone()["n"])
+        embedding_rows = int(conn.execute("SELECT COUNT(1) AS n FROM embeddings").fetchone()["n"])
+
+        sig_keys = [
+            "index.embeddings_backend",
+            "index.embeddings_model",
+            "index.embedding_dim",
+            "index.hash_embedder_version",
+            "index.chunk_size_chars",
+            "index.chunk_overlap_chars",
+        ]
+        index_signature = {k: get_meta(conn, k) for k in sig_keys}
+
     return {
+        "version": app.version,
         "public_demo_mode": settings.public_demo_mode,
-        "uploads_enabled": bool(settings.allow_uploads and not settings.public_demo_mode),
-        "eval_enabled": bool(settings.allow_eval and not settings.public_demo_mode),
+        "uploads_enabled": uploads_enabled,
+        "eval_enabled": eval_enabled,
+        "chunk_view_enabled": chunk_view_enabled,
+        "doc_delete_enabled": doc_delete_enabled,
+        "citations_required": bool(settings.citations_required),
+        "rate_limit_enabled": bool(settings.rate_limit_enabled),
+        "rate_limit_scope": settings.rate_limit_scope,
+        "rate_limit_window_s": settings.rate_limit_window_s,
+        "rate_limit_max_requests": settings.rate_limit_max_requests,
+        "api_docs_url": "/api/swagger",
+        "max_upload_bytes": settings.max_upload_bytes,
+        "max_top_k": settings.max_top_k,
+        "top_k_default": settings.top_k_default,
+        "max_question_chars": settings.max_question_chars,
         "llm_provider": settings.effective_llm_provider,
         "embeddings_backend": settings.embeddings_backend,
         "ocr_enabled": settings.ocr_enabled,
+        "stats": {
+            "docs": doc_count,
+            "chunks": chunk_count,
+            "embeddings": embedding_rows,
+        },
+        "index_signature": index_signature,
+        "doc_classifications": list(CLASSIFICATIONS),
+        "doc_retentions": list(RETENTIONS),
     }
+
+
+@app.get("/api/stats", response_model=StatsResponse)
+def stats_api() -> StatsResponse:
+    """Index-level statistics for dashboards and diagnostics."""
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+
+        docs = int(conn.execute("SELECT COUNT(1) AS n FROM docs").fetchone()["n"])
+        chunks = int(conn.execute("SELECT COUNT(1) AS n FROM chunks").fetchone()["n"])
+        embeddings = int(conn.execute("SELECT COUNT(1) AS n FROM embeddings").fetchone()["n"])
+        ingest_events = int(conn.execute("SELECT COUNT(1) AS n FROM ingest_events").fetchone()["n"])
+
+        by_classification: dict[str, int] = {}
+        cur = conn.execute("SELECT classification, COUNT(1) AS n FROM docs GROUP BY classification")
+        for r in cur.fetchall():
+            by_classification[str(r["classification"])] = int(r["n"])
+
+        by_retention: dict[str, int] = {}
+        cur = conn.execute("SELECT retention, COUNT(1) AS n FROM docs GROUP BY retention")
+        for r in cur.fetchall():
+            by_retention[str(r["retention"])] = int(r["n"])
+
+        # Tags are stored as JSON text; SQLite json1 is not always available,
+        # so compute in Python.
+        tag_counts: dict[str, int] = {}
+        cur = conn.execute("SELECT tags_json FROM docs")
+        for r in cur.fetchall():
+            try:
+                tags = json.loads(r["tags_json"] or "[]")
+            except Exception:
+                tags = []
+            if not isinstance(tags, list):
+                continue
+            for t in tags:
+                k = str(t).strip().lower()
+                if not k:
+                    continue
+                tag_counts[k] = tag_counts.get(k, 0) + 1
+
+        top_tags = [
+            TopTagStat(tag=t, count=c) for t, c in sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)[:25]
+        ]
+
+    return StatsResponse(
+        docs=docs,
+        chunks=chunks,
+        embeddings=embeddings,
+        ingest_events=ingest_events,
+        by_classification=by_classification,
+        by_retention=by_retention,
+        top_tags=top_tags,
+    )
+
+
+# ---- Maintenance (safe read-only helpers) ----
+@app.get("/api/maintenance/retention/expired", response_model=ExpiredDocsResponse)
+def maintenance_retention_expired(now: int | None = None) -> ExpiredDocsResponse:
+    """List documents whose retention policy has expired.
+
+    This endpoint is intentionally **read-only** (no deletes). It powers the UI
+    maintenance page and helps operators confirm what would be purged.
+
+    For actual deletes, use the CLI:
+      - `uv run python -m app.cli purge-expired` (dry-run)
+      - `uv run python -m app.cli purge-expired --apply`
+    """
+
+    now_i = int(now) if now is not None else int(time.time())
+    from .maintenance import find_expired_docs
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        expired = find_expired_docs(conn, now=now_i)
+
+    return ExpiredDocsResponse(
+        now=now_i,
+        expired=[
+            ExpiredDoc(
+                doc_id=d.doc_id,
+                title=d.title,
+                retention=str(d.retention),
+                updated_at=int(d.updated_at),
+            )
+            for d in expired
+        ],
+    )
 
 
 # ---- Docs ----
@@ -294,50 +778,462 @@ def docs() -> dict[str, Any]:
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
         items = list_docs(conn)
-    return {"docs": [item.__dict__ for item in items]}
+    return {"docs": [d.to_dict() for d in items]}
+
+
+@app.get("/api/docs/{doc_id}")
+def doc_detail(doc_id: str) -> dict[str, Any]:
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        doc = get_doc(conn, doc_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Doc not found")
+        events = list_ingest_events(conn, doc_id, limit=20)
+    return {
+        "doc": doc.to_dict(),
+        "ingest_events": [e.to_dict() for e in events],
+    }
+
+
+@app.patch("/api/docs/{doc_id}")
+def doc_update(doc_id: str, req: DocUpdateRequest) -> dict[str, Any]:
+    """Update doc metadata (title/source/classification/retention/tags).
+
+    This endpoint is intentionally **disabled** in PUBLIC_DEMO_MODE.
+    In private deployments it is gated behind ALLOW_UPLOADS=1 (same trust boundary as ingest).
+    """
+
+    if settings.public_demo_mode or not settings.allow_uploads:
+        raise HTTPException(status_code=403, detail="Doc edit endpoint disabled in this deployment")
+
+    def _clean_required(v: str | None, field: str) -> str | None:
+        if v is None:
+            return None
+        vv = str(v).strip()
+        if not vv:
+            raise HTTPException(status_code=400, detail=f"{field} must be non-empty")
+        return vv
+
+    title = _clean_required(req.title, "title")
+    source = _clean_required(req.source, "source")
+
+    classification: str | None = None
+    if req.classification is not None:
+        if not str(req.classification).strip():
+            raise HTTPException(status_code=400, detail="classification must be non-empty")
+        try:
+            classification = normalize_classification(req.classification)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    retention: str | None = None
+    if req.retention is not None:
+        if not str(req.retention).strip():
+            raise HTTPException(status_code=400, detail="retention must be non-empty")
+        try:
+            retention = normalize_retention(req.retention)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    tags_json: str | None = None
+    if req.tags is not None:
+        try:
+            tags_json = json.dumps(normalize_tags(req.tags))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid tags: {e}") from e
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        doc = get_doc(conn, doc_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Doc not found")
+
+        update_doc_metadata(
+            conn,
+            doc_id=doc_id,
+            title=title,
+            source=source,
+            classification=classification,
+            retention=retention,
+            tags_json=tags_json,
+        )
+        conn.commit()
+
+        updated = get_doc(conn, doc_id)
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Doc not found")
+
+    return {"doc": updated.to_dict()}
+
+
+@app.get("/api/ingest/events")
+def list_ingest_events_api(limit: int = 100, doc_id: str | None = None) -> dict[str, Any]:
+    """List recent ingest events across docs (audit/lineage view)."""
+    limit = max(1, min(int(limit), 500))
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        events = list_recent_ingest_events(conn, limit=limit, doc_id=doc_id)
+    return {"events": [e.to_dict() for e in events]}
+
+
+@app.get("/api/docs/{doc_id}/chunks")
+def doc_chunks(doc_id: str, limit: int = 200, offset: int = 0) -> dict[str, Any]:
+    if settings.public_demo_mode or not settings.allow_chunk_view:
+        raise HTTPException(status_code=403, detail="Chunk view is disabled in this deployment")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        doc = get_doc(conn, doc_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Doc not found")
+        chunks = list_chunks_for_doc(conn, doc_id, limit=limit, offset=offset)
+
+    return {
+        "doc": doc.to_dict(),
+        "chunks": [
+            {
+                "chunk_id": c.chunk_id,
+                "doc_id": c.doc_id,
+                "idx": c.idx,
+                "text_preview": c.text[:240],
+            }
+            for c in chunks
+        ],
+        "limit": max(1, min(int(limit), 500)),
+        "offset": max(0, int(offset)),
+    }
+
+
+@app.get("/api/docs/{doc_id}/text")
+def doc_text(doc_id: str) -> PlainTextResponse:
+    """Export a doc as plain text.
+
+    This is useful for debugging and for copying a document out of the system.
+    It is gated behind the same flag as chunk viewing.
+
+    Note: because we store overlapped chunks for retrieval, export attempts to
+    *de-overlap* using the latest ingest event's chunk_overlap_chars.
+    """
+
+    if settings.public_demo_mode or not settings.allow_chunk_view:
+        raise HTTPException(status_code=403, detail="Doc export is disabled in this deployment")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        doc = get_doc(conn, doc_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Doc not found")
+
+        events = list_ingest_events(conn, doc_id, limit=1)
+        overlap = int(events[0].chunk_overlap_chars) if events else int(settings.chunk_overlap_chars)
+
+        chunks = list_all_chunks_for_doc(conn, doc_id, limit=doc.num_chunks)
+
+    # Reconstruct in a best-effort way.
+    out_parts: list[str] = []
+    prev_text: str | None = None
+    truncated = len(chunks) < doc.num_chunks
+    for c in chunks:
+        txt = c.text
+        if prev_text is not None and overlap > 0:
+            prev_tail = prev_text[-overlap:]
+            if txt.startswith(prev_tail + "\n"):
+                txt = txt[len(prev_tail) + 1 :]
+            elif txt.startswith(prev_tail):
+                txt = txt[len(prev_tail) :]
+                txt = txt.lstrip("\n")
+        out_parts.append(txt.strip())
+        prev_text = c.text
+
+    body = "\n\n".join([p for p in out_parts if p])
+    header_lines = [
+        f"Title: {doc.title}",
+        f"Doc ID: {doc.doc_id}",
+        f"Source: {doc.source}",
+        f"Version: {doc.doc_version}",
+        f"Classification: {doc.classification}",
+        f"Retention: {doc.retention}",
+        f"Tags: {', '.join(doc.tags) if doc.tags else ''}",
+        f"Export overlap_chars={overlap}",
+    ]
+    if truncated:
+        header_lines.append(f"WARNING: export truncated at {len(chunks)}/{doc.num_chunks} chunks")
+    header_lines.append("")
+
+    text = "\n".join(header_lines) + body + "\n"
+    return PlainTextResponse(text, media_type="text/plain")
+
+
+@app.get("/api/chunks/{chunk_id}")
+def chunk_detail(chunk_id: str) -> dict[str, Any]:
+    if settings.public_demo_mode or not settings.allow_chunk_view:
+        raise HTTPException(status_code=403, detail="Chunk view is disabled in this deployment")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        c = get_chunk(conn, chunk_id)
+        if c is None:
+            raise HTTPException(status_code=404, detail="Chunk not found")
+        doc = get_doc(conn, c.doc_id)
+
+    return {
+        "chunk": {
+            "chunk_id": c.chunk_id,
+            "doc_id": c.doc_id,
+            "idx": c.idx,
+            "text": c.text,
+            "doc_title": doc.title if doc else None,
+            "doc_source": doc.source if doc else None,
+        }
+    }
+
+
+@app.get("/api/search/chunks", response_model=ChunkSearchResponse)
+def search_chunks(q: str, limit: int = 20) -> ChunkSearchResponse:
+    """Lightweight chunk search for the UI.
+
+    - Uses SQLite FTS5 when available.
+    - Falls back to a simple lexical overlap score.
+    """
+
+    limit = max(1, min(int(limit), 50))
+    tokens = [t.lower() for t in _TOKEN_RE.findall(q) if t.lower() not in _STOPWORDS]
+    if not tokens:
+        return ChunkSearchResponse(query=q, results=[])
+
+    fts_query = " ".join(tokens)
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+
+        results: list[ChunkSearchResult] = []
+
+        # Prefer FTS5 if available.
+        try:
+            cur = conn.execute(
+                """
+                SELECT
+                    c.chunk_id,
+                    c.doc_id,
+                    c.idx,
+                    substr(c.text, 1, 240) AS preview,
+                    bm25(chunks_fts) AS bm,
+                    d.title AS doc_title,
+                    d.source AS doc_source,
+                    d.classification AS classification,
+                    d.tags_json AS tags_json
+                FROM chunks_fts
+                JOIN chunks c ON chunks_fts.chunk_id = c.chunk_id
+                JOIN docs d ON c.doc_id = d.doc_id
+                WHERE chunks_fts MATCH ?
+                ORDER BY bm
+                LIMIT ?
+                """,
+                (fts_query, limit),
+            )
+            for r in cur.fetchall():
+                try:
+                    tags = json.loads(r["tags_json"] or "[]")
+                except Exception:
+                    tags = []
+                # bm25: smaller is better; expose a "higher is better" score.
+                bm = float(r["bm"])
+                score = -bm
+                results.append(
+                    ChunkSearchResult(
+                        chunk_id=str(r["chunk_id"]),
+                        doc_id=str(r["doc_id"]),
+                        idx=int(r["idx"]),
+                        score=score,
+                        text_preview=str(r["preview"] or ""),
+                        doc_title=str(r["doc_title"]),
+                        doc_source=str(r["doc_source"]),
+                        classification=str(r["classification"]),
+                        tags=[str(t) for t in tags] if isinstance(tags, list) else [],
+                    )
+                )
+
+            return ChunkSearchResponse(query=q, results=results)
+        except sqlite3.OperationalError:
+            # FTS unavailable; continue to lexical fallback.
+            pass
+
+        # Lexical fallback (token overlap).
+        cur = conn.execute(
+            """
+            SELECT c.chunk_id, c.doc_id, c.idx, c.text,
+                   d.title AS doc_title, d.source AS doc_source,
+                   d.classification AS classification, d.tags_json AS tags_json
+            FROM chunks c
+            JOIN docs d ON c.doc_id = d.doc_id
+            ORDER BY d.updated_at DESC, c.idx ASC
+            """
+        )
+        scored: list[tuple[float, ChunkSearchResult]] = []
+        tokset = set(tokens)
+        for r in cur.fetchall():
+            text = str(r["text"] or "")
+            ctoks = {t.lower() for t in _TOKEN_RE.findall(text)}
+            overlap = len(tokset & ctoks)
+            if overlap == 0:
+                continue
+            try:
+                tags = json.loads(r["tags_json"] or "[]")
+            except Exception:
+                tags = []
+            scored.append(
+                (
+                    float(overlap),
+                    ChunkSearchResult(
+                        chunk_id=str(r["chunk_id"]),
+                        doc_id=str(r["doc_id"]),
+                        idx=int(r["idx"]),
+                        score=float(overlap),
+                        text_preview=text[:240],
+                        doc_title=str(r["doc_title"]),
+                        doc_source=str(r["doc_source"]),
+                        classification=str(r["classification"]),
+                        tags=[str(t) for t in tags] if isinstance(tags, list) else [],
+                    ),
+                )
+            )
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return ChunkSearchResponse(query=q, results=[r for _, r in scored[:limit]])
+
+
+@app.delete("/api/docs/{doc_id}")
+def delete_doc_api(doc_id: str) -> dict[str, Any]:
+    if settings.public_demo_mode or not settings.allow_doc_delete:
+        raise HTTPException(status_code=403, detail="Delete is disabled in this deployment")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        doc = get_doc(conn, doc_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Doc not found")
+        delete_doc(conn, doc_id)
+        conn.commit()
+
+    invalidate_cache()
+    return {"deleted": True, "doc_id": doc_id}
 
 
 # ---- Ingest ----
 @app.post("/api/ingest/text")
 def ingest_text_api(req: IngestTextRequest) -> dict[str, Any]:
-    if not settings.allow_uploads or settings.public_demo_mode:
+    if settings.public_demo_mode or not settings.allow_uploads:
         raise HTTPException(status_code=403, detail="Uploads are disabled in this deployment")
-    res = ingest_text(title=req.title, source=req.source, text=req.text, doc_id=req.doc_id)
+
+    try:
+        res = ingest_text(
+            title=req.title,
+            source=req.source,
+            text=req.text,
+            doc_id=req.doc_id,
+            classification=req.classification,
+            retention=req.retention,
+            tags=req.tags,
+            notes=req.notes,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     invalidate_cache()
-    return {"doc_id": res.doc_id, "num_chunks": res.num_chunks, "embedding_dim": res.embedding_dim}
+    return {
+        "doc_id": res.doc_id,
+        "doc_version": res.doc_version,
+        "changed": res.changed,
+        "num_chunks": res.num_chunks,
+        "embedding_dim": res.embedding_dim,
+        "content_sha256": res.content_sha256,
+    }
 
 
 @app.post("/api/ingest/file")
-async def ingest_file_api(file: UploadFile = File(...)) -> dict[str, Any]:
-    if not settings.allow_uploads or settings.public_demo_mode:
+async def ingest_file_api(
+    file: UploadFile = File(...),
+    title: str | None = Form(None),
+    source: str | None = Form(None),
+    classification: str | None = Form(None),
+    retention: str | None = Form(None),
+    tags: str | None = Form(None),
+    notes: str | None = Form(None),
+) -> dict[str, Any]:
+    if settings.public_demo_mode or not settings.allow_uploads:
         raise HTTPException(status_code=403, detail="Uploads are disabled in this deployment")
-    suffix = Path(file.filename or "upload.txt").suffix.lower()
-    if suffix not in {".txt", ".md", ".pdf"}:
-        raise HTTPException(status_code=400, detail="Only .txt, .md, .pdf supported")
+
+    orig_name = file.filename or "upload.txt"
+    safe_name = Path(orig_name).name
+    # Best-effort sanitization (defense-in-depth against weird filenames).
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", safe_name)
+
+    suffix = Path(safe_name).suffix.lower()
+    if suffix not in {".txt", ".md", ".pdf", ".csv", ".tsv", ".xlsx", ".xlsm"}:
+        raise HTTPException(status_code=400, detail="Only .txt, .md, .pdf, .csv, .tsv, .xlsx, .xlsm supported")
 
     tmp_dir = Path("/tmp/gkp_uploads")
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    tmp_path = tmp_dir / (file.filename or "upload.txt")
 
-    data = await file.read()
-    tmp_path.write_bytes(data)
+    # Unique temp file path (avoid cross-request collisions).
+    stem = Path(safe_name).stem
+    tmp_path = tmp_dir / f"{stem}_{uuid.uuid4().hex}{suffix}"
 
-    res = ingest_file(tmp_path)
+    # Stream upload to disk with size limit.
+    total = 0
+    try:
+        with tmp_path.open("wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > settings.max_upload_bytes:
+                    raise HTTPException(
+                        status_code=413, detail=f"File too large (max {settings.max_upload_bytes} bytes)"
+                    )
+                f.write(chunk)
+
+        try:
+            res = ingest_file(
+                tmp_path,
+                title=title,
+                source=source,
+                classification=classification,
+                retention=retention,
+                tags=tags,
+                notes=notes,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except RuntimeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
     invalidate_cache()
-    return {"doc_id": res.doc_id, "num_chunks": res.num_chunks, "embedding_dim": res.embedding_dim}
+    return {
+        "doc_id": res.doc_id,
+        "doc_version": res.doc_version,
+        "changed": res.changed,
+        "num_chunks": res.num_chunks,
+        "embedding_dim": res.embedding_dim,
+        "content_sha256": res.content_sha256,
+    }
 
 
 # ---- Query ----
 @app.post("/api/query")
 def query_api(req: QueryRequest) -> dict[str, Any]:
-    """
-    Core query endpoint.
+    """Core query endpoint.
 
     Staff-grade behaviors:
       - prompt injection / circumvention refusal (defense-in-depth)
       - citations-required grounding (refuse if no evidence)
       - stable response contract (answer/refused/refusal_reason/citations/provider)
     """
+
     question = (req.question or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question is required")
@@ -348,6 +1244,7 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
     # Clamp knobs for public demos.
     top_k = max(1, min(int(req.top_k or settings.top_k_default), settings.max_top_k))
     debug = bool(req.debug) and not settings.public_demo_mode
+    include_retrieval_text = bool(settings.allow_chunk_view) and not settings.public_demo_mode
 
     # --- Prompt-injection/circumvention detection ---
     inj = detect_prompt_injection(question)
@@ -365,7 +1262,6 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
     retrieved = retrieve(question, top_k=top_k)
     context = [(r.chunk_id, r.doc_id, r.idx, r.text) for r in retrieved]
 
-    # If nothing retrieved, refuse (no hallucinations).
     if not context:
         out_no_context: dict[str, Any] = {
             "question": question,
@@ -379,7 +1275,6 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
             out_no_context["retrieval"] = []
         return out_no_context
 
-    # If the retrieved chunks don't cover the question terms, treat as unrelated.
     if _is_unrelated_question(question, retrieved):
         out_unrelated: dict[str, Any] = {
             "question": question,
@@ -390,8 +1285,9 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
             "citations": [],
         }
         if debug:
-            out_unrelated["retrieval"] = [
-                {
+            retrieval_out: list[dict[str, Any]] = []
+            for r in retrieved:
+                item: dict[str, Any] = {
                     "chunk_id": r.chunk_id,
                     "doc_id": r.doc_id,
                     "idx": r.idx,
@@ -399,21 +1295,41 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
                     "lexical_score": r.lexical_score,
                     "vector_score": r.vector_score,
                     "text_preview": r.text[:240],
-                    "text": r.text,
                 }
-                for r in retrieved
-            ]
+                if include_retrieval_text:
+                    item["text"] = r.text
+                retrieval_out.append(item)
+            out_unrelated["retrieval"] = retrieval_out
         return out_unrelated
 
     # --- Answer ---
     answerer = get_answerer()
     ans = answerer.answer(question, context)
 
-    citations = [c.__dict__ for c in (ans.citations or [])]
+    # Enrich citations with doc metadata.
+    citations_out: list[dict[str, Any]] = []
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        doc_map = {d.doc_id: d for d in list_docs(conn)}
+
+    for c in ans.citations or []:
+        d = doc_map.get(c.doc_id)
+        citations_out.append(
+            {
+                "chunk_id": c.chunk_id,
+                "doc_id": c.doc_id,
+                "idx": c.idx,
+                "quote": c.quote,
+                "doc_title": d.title if d else None,
+                "doc_source": d.source if d else None,
+                "doc_version": d.doc_version if d else None,
+            }
+        )
 
     # Enforce grounding (citations required).
-    # In public demo mode we are intentionally conservative: no citations => refuse.
-    if settings.public_demo_mode and not citations:
+    # - In PUBLIC_DEMO_MODE this is always on.
+    # - In private mode it is controlled by CITATIONS_REQUIRED (default: true).
+    if bool(settings.citations_required) and (not bool(getattr(ans, "refused", False))) and not citations_out:
         out_no_citations: dict[str, Any] = {
             "question": question,
             "answer": "I don’t have enough evidence in the indexed sources to answer that.",
@@ -423,8 +1339,9 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
             "citations": [],
         }
         if debug:
-            out_no_citations["retrieval"] = [
-                {
+            retrieval_out2: list[dict[str, Any]] = []
+            for r in retrieved:
+                item = {
                     "chunk_id": r.chunk_id,
                     "doc_id": r.doc_id,
                     "idx": r.idx,
@@ -432,16 +1349,14 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
                     "lexical_score": r.lexical_score,
                     "vector_score": r.vector_score,
                     "text_preview": r.text[:240],
-                    "text": r.text,
                 }
-                for r in retrieved
-            ]
+                if include_retrieval_text:
+                    item["text"] = r.text
+                retrieval_out2.append(item)
+            out_no_citations["retrieval"] = retrieval_out2
         return out_no_citations
 
-    # If the answerer itself refused, provide a reason for consistent contract.
-    refusal_reason = None
-    if bool(getattr(ans, "refused", False)):
-        refusal_reason = "answerer_refused"
+    refusal_reason = "answerer_refused" if bool(getattr(ans, "refused", False)) else None
 
     out: dict[str, Any] = {
         "question": question,
@@ -449,12 +1364,13 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
         "refused": bool(ans.refused),
         "refusal_reason": refusal_reason,
         "provider": ans.provider,
-        "citations": citations,
+        "citations": citations_out,
     }
 
     if debug:
-        out["retrieval"] = [
-            {
+        retrieval_out3: list[dict[str, Any]] = []
+        for r in retrieved:
+            item = {
                 "chunk_id": r.chunk_id,
                 "doc_id": r.doc_id,
                 "idx": r.idx,
@@ -462,10 +1378,11 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
                 "lexical_score": r.lexical_score,
                 "vector_score": r.vector_score,
                 "text_preview": r.text[:240],
-                "text": r.text,
             }
-            for r in retrieved
-        ]
+            if include_retrieval_text:
+                item["text"] = r.text
+            retrieval_out3.append(item)
+        out["retrieval"] = retrieval_out3
 
     return out
 
@@ -473,10 +1390,10 @@ def query_api(req: QueryRequest) -> dict[str, Any]:
 # ---- Eval ----
 @app.post("/api/eval/run")
 def eval_api(req: EvalRequest) -> dict[str, Any]:
-    if not settings.allow_eval or settings.public_demo_mode:
+    if settings.public_demo_mode or not settings.allow_eval:
         raise HTTPException(status_code=403, detail="Eval endpoint disabled in this deployment")
-    res = run_eval(req.golden_path, k=req.k)
-    return {"examples": res.n, "hit_at_k": res.hit_at_k, "mrr": res.mrr}
+    res = run_eval(req.golden_path, k=req.k, include_details=req.include_details)
+    return res.to_dict(include_details=req.include_details)
 
 
 # ---- Frontend (React build served by FastAPI) ----
@@ -507,12 +1424,20 @@ def ui_index() -> Any:
 @app.get("/{path:path}")
 def ui_fallback(path: str) -> Any:
     # Don't mask API/Swagger endpoints.
-    if path.startswith(("api", "docs", "openapi", "redoc", "health")):
+    if path.startswith(("api", "openapi", "redoc", "health")):
         raise HTTPException(status_code=404)
 
     # Serve file if it exists at dist root (e.g., favicon.svg).
-    candidate = DIST_DIR / path
-    if candidate.exists() and candidate.is_file():
+    #
+    # SECURITY: Prevent path traversal (e.g. /../../pyproject.toml).
+    root = DIST_DIR
+    try:
+        candidate = (DIST_DIR / path).resolve()
+        candidate.relative_to(root)
+    except Exception:
+        candidate = None
+
+    if candidate and candidate.exists() and candidate.is_file():
         return FileResponse(str(candidate))
 
     # SPA fallback

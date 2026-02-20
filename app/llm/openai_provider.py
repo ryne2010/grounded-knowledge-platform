@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import json
+import importlib
 from typing import Any
-
-from openai import OpenAI  # type: ignore
 
 from ..config import settings
 from .base import Answer, Citation
@@ -15,6 +14,16 @@ class OpenAIAnswerer:
     def __init__(self) -> None:
         if not settings.openai_api_key:
             raise RuntimeError("OPENAI_API_KEY is not set")
+
+        try:
+            mod = importlib.import_module("openai")
+            OpenAI = getattr(mod, "OpenAI")
+        except Exception as e:  # pragma: no cover
+            raise RuntimeError(
+                "OpenAI provider requires the 'openai' package. Install with `uv sync --extra providers` "
+                "(or `pip install openai`)."
+            ) from e
+
         self.client = OpenAI(api_key=settings.openai_api_key)
 
     def answer(self, question: str, context: list[tuple[str, str, int, str]]) -> Answer:

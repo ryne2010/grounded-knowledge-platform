@@ -1,0 +1,282 @@
+# Contracts
+
+This document defines the stable external contracts for the Grounded Knowledge Platform:
+
+- environment variables
+- API endpoints
+- response shapes
+
+---
+
+## Environment variables
+
+### Mode and safety
+
+- `PUBLIC_DEMO_MODE=1`
+  - Forces **read-only** mode (no uploads/eval/chunk view/delete)
+  - Forces **extractive** answering (no external LLM calls)
+  - Enables rate limiting by default
+
+- `APP_VERSION=...` (optional)
+  - Overrides the reported app version (otherwise derived from `pyproject.toml`)
+
+- `RATE_LIMIT_ENABLED=1`
+  - Default: enabled in `PUBLIC_DEMO_MODE=1`, disabled otherwise
+  - When enabled, the limiter applies to `/api/query` by default (see `RATE_LIMIT_SCOPE`).
+- `RATE_LIMIT_SCOPE=query|api` (default: `query`)
+- `RATE_LIMIT_WINDOW_S` (default: `60`)
+- `RATE_LIMIT_MAX_REQUESTS` (default: `30`)
+
+### Grounding
+
+- `CITATIONS_REQUIRED=1` (default: `1`)
+  - If enabled, the API will **refuse** any non-refusal answer that does not include citations.
+  - In `PUBLIC_DEMO_MODE=1`, this is forced on.
+
+### Feature gates
+
+These should be **off for public URLs**.
+
+- `ALLOW_UPLOADS=1`
+  - Also enables doc metadata edits via `PATCH /api/docs/{doc_id}`
+- `ALLOW_EVAL=1`
+- `ALLOW_CHUNK_VIEW=1`
+- `ALLOW_DOC_DELETE=1`
+
+### Storage
+
+- `SQLITE_PATH`
+  - Default in private mode: `data/index.sqlite`
+  - Default in public demo mode: `/tmp/index.sqlite`
+
+> Cloud Run note: the filesystem is ephemeral. For persistence, migrate to Cloud SQL or a managed store.
+
+### Retrieval
+
+- `TOP_K_DEFAULT` (default: `5`)
+- `MAX_TOP_K` (default: `8`)
+- `MAX_QUESTION_CHARS` (default: `2000`)
+
+### Upload hardening
+
+- `MAX_UPLOAD_BYTES` (default: `10_000_000`)
+
+### Embeddings
+
+- `EMBEDDINGS_BACKEND=hash|sentence-transformers|none`
+- `EMBEDDINGS_MODEL` (only for `sentence-transformers`)
+- `EMBEDDING_DIM` (only for `hash`)
+- `HASH_EMBEDDER_VERSION` (default: `1`)
+
+> Dependency note: `sentence-transformers` is an optional extra. Install with `uv sync --extra embeddings`.
+
+### LLM providers
+
+- `LLM_PROVIDER=extractive|openai|gemini|ollama`
+
+> Dependency note: OpenAI/Gemini client libraries are optional extras. Install with `uv sync --extra providers`.
+
+Provider-specific:
+
+- OpenAI:
+  - `OPENAI_API_KEY`
+  - `OPENAI_MODEL` (default: `gpt-4.1-mini`)
+
+- Gemini:
+  - `GEMINI_API_KEY`
+  - `GEMINI_MODEL` (default: `gemini-2.0-flash`)
+
+- Ollama:
+  - `OLLAMA_BASE_URL` (default: `http://localhost:11434`)
+  - `OLLAMA_MODEL` (default: `llama3.1:8b`)
+
+### Optional OCR
+
+OCR is disabled by default. Enable only for private deployments.
+
+- `OCR_ENABLED=1`
+- `OCR_MAX_PAGES` (default: `10`)
+- `OCR_DPI` (default: `200`)
+- `OCR_LANG` (default: `eng`)
+
+### Observability
+
+- `LOG_LEVEL=INFO|DEBUG|WARNING|ERROR` (default: `INFO`)
+
+---
+
+## API endpoints
+
+### Health
+
+- `GET /health` → `{ "status": "ok" }`
+- `GET /ready` → `{ "ready": true, "version": string, "public_demo_mode": bool }`
+
+### Meta
+
+- `GET /api/meta`
+
+Returns feature flags and deployment configuration for the UI.
+
+Shape (stable keys):
+
+- `public_demo_mode: bool`
+- `version: string`
+- `uploads_enabled: bool`
+- `eval_enabled: bool`
+- `chunk_view_enabled: bool`
+- `doc_delete_enabled: bool`
+- `citations_required: bool`
+- `rate_limit_enabled: bool`
+- `rate_limit_scope: string`
+- `rate_limit_window_s: number`
+- `rate_limit_max_requests: number`
+- `api_docs_url: string`
+- `max_upload_bytes: number`
+- `llm_provider: string`
+- `embeddings_backend: string`
+- `ocr_enabled: bool`
+- `max_question_chars: number`
+- `stats: { docs: number, chunks: number, embeddings: number }`
+- `index_signature: Record<string,string|null>`
+- `doc_classifications: string[]`
+- `doc_retentions: string[]`
+
+### Stats
+
+- `GET /api/stats`
+
+Returns aggregated index statistics for dashboards and diagnostics.
+
+Shape (stable keys):
+
+- `docs: number`
+- `chunks: number`
+- `embeddings: number`
+- `ingest_events: number`
+- `by_classification: Record<string, number>`
+- `by_retention: Record<string, number>`
+- `top_tags: { tag: string, count: number }[]`
+
+### Docs
+
+- `GET /api/docs` → `{ docs: Doc[] }`
+- `GET /api/docs/{doc_id}` → `{ doc: Doc, ingest_events: IngestEvent[] }`
+
+Doc metadata update (requires `ALLOW_UPLOADS=1` and not demo mode):
+
+- `PATCH /api/docs/{doc_id}` → `{ doc: Doc }`
+  - body: any of `{ title?, source?, classification?, retention?, tags? }`
+
+Global ingest/audit view:
+
+- `GET /api/ingest/events?limit=100&doc_id=<optional>` → `{ events: IngestEventView[] }`
+
+Chunk browsing (requires `ALLOW_CHUNK_VIEW=1` and not demo mode):
+
+- `GET /api/docs/{doc_id}/chunks?limit=200&offset=0`
+- `GET /api/chunks/{chunk_id}`
+
+Doc export (requires `ALLOW_CHUNK_VIEW=1` and not demo mode):
+
+- `GET /api/docs/{doc_id}/text` → (text/plain)
+
+Doc delete (requires `ALLOW_DOC_DELETE=1` and not demo mode):
+
+- `DELETE /api/docs/{doc_id}` → `{ deleted: true, doc_id }`
+
+### Ingest
+
+Uploads are disabled in demo mode.
+
+- `POST /api/ingest/text`
+
+Request (JSON):
+
+- `title`, `source`, `text`
+- optional: `doc_id`, `classification`, `retention`, `tags`, `notes`
+
+- `POST /api/ingest/file`
+
+Request (multipart form):
+
+- required: `file` (.txt/.md/.pdf/.csv/.tsv/.xlsx)
+  - Note: `.xlsx/.xlsm` ingestion uses `openpyxl` (included in the default dependency set).
+- optional: `title`, `source`, `classification`, `retention`, `tags`, `notes`
+
+Response:
+
+- `{ doc_id, doc_version, changed, num_chunks, embedding_dim, content_sha256 }`
+
+### Query
+
+- `POST /api/query`
+
+Request:
+
+- `question: string`
+- `top_k?: number`
+- `debug?: boolean` (ignored in demo mode)
+
+Response (stable):
+
+- `question: string`
+- `answer: string`
+- `refused: boolean`
+- `refusal_reason: string | null`
+- `provider: string`
+- `citations: Citation[]`
+- optional: `retrieval: RetrievalDebug[]` (debug-only)
+
+`RetrievalDebug` shape:
+
+- `chunk_id: string`
+- `doc_id: string`
+- `idx: number`
+- `score: number`
+- `lexical_score: number`
+- `vector_score: number`
+- `text_preview: string`
+- optional: `text: string`
+  - included only when **chunk viewing is enabled** (`ALLOW_CHUNK_VIEW=1`) and not in demo mode
+
+### Eval
+
+- `POST /api/eval/run` (requires `ALLOW_EVAL=1` and not demo mode)
+
+Request:
+
+- `golden_path: string`
+- `k: number`
+- `include_details?: boolean` (default: `false`)
+
+Response:
+
+- `{ examples, hit_at_k, mrr }`
+  - When `include_details=true`, response also includes `details: EvalExample[]` with per-example hits/ranks and the retrieved top-k list.
+
+### Maintenance
+
+These endpoints are **read-only** helpers intended for operators.
+
+- `GET /api/maintenance/retention/expired?now=<optional unix_ts>`
+
+Returns docs whose retention policy has expired.
+
+Shape (stable keys):
+
+- `now: number`
+- `expired: { doc_id: string, title: string, retention: string, updated_at: number }[]`
+
+---
+
+## Error semantics
+
+- `400` invalid input
+- `403` gated endpoint (demo mode / feature disabled)
+- `404` missing doc/chunk
+- `413` upload too large
+- `429` rate limit exceeded
+- `500` unexpected server error
+
+All responses include `X-Request-Id` for correlation.

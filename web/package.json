@@ -1,13 +1,15 @@
 {
   "name": "gkp-web",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.10.0",
   "type": "module",
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "pnpm run typecheck"
   },
   "dependencies": {
     "react": "^18.3.1",

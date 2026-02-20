@@ -1,21 +1,27 @@
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from dataclasses import dataclass
+from threading import Lock
 from typing import Optional
 
 import numpy as np
 
 from .config import settings
 from .embeddings import Embedder, HashEmbedder, NoEmbedder, SentenceTransformerEmbedder, cosine_sim
+from .index_maintenance import ensure_index_compatible
 from .storage import Chunk, connect, get_embeddings_by_ids, init_db, list_chunks
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
+logger = logging.getLogger(__name__)
+
 # Simple in-process cache (good enough for a reference implementation).
 _CACHE: dict[str, object] = {}
 _CACHE_VERSION: int = 0
+_CACHE_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -30,22 +36,33 @@ class RetrievedChunk:
 
 
 _embedder_singleton: Embedder | None = None
+_embedder_lock = Lock()
+
 
 def _get_embedder() -> Embedder:
     global _embedder_singleton
-    if _embedder_singleton is None:
-        backend = settings.embeddings_backend
-        if backend == "none":
-            _embedder_singleton = NoEmbedder()
-        elif backend == "hash":
-            _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
-        elif backend == "sentence-transformers":
-            _embedder_singleton = SentenceTransformerEmbedder(settings.embeddings_model)
-        else:
-            # Safety default: avoid network/model downloads.
-            _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
-    return _embedder_singleton
+    if _embedder_singleton is not None:
+        return _embedder_singleton
 
+    with _embedder_lock:
+        if _embedder_singleton is not None:
+            return _embedder_singleton
+
+        backend = settings.embeddings_backend
+        try:
+            if backend == "none":
+                _embedder_singleton = NoEmbedder()
+            elif backend == "hash":
+                _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
+            elif backend == "sentence-transformers":
+                _embedder_singleton = SentenceTransformerEmbedder(settings.embeddings_model)
+            else:
+                _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
+        except Exception as e:  # pragma: no cover
+            logger.warning("Failed to initialize embedder backend=%s; falling back to hash. error=%s", backend, e)
+            _embedder_singleton = HashEmbedder(dim=settings.embedding_dim)
+
+        return _embedder_singleton
 
 
 def _tokenize(text: str) -> list[str]:
@@ -54,17 +71,30 @@ def _tokenize(text: str) -> list[str]:
 
 def invalidate_cache() -> None:
     global _CACHE_VERSION
-    _CACHE.clear()
-    _CACHE_VERSION += 1
+    with _CACHE_LOCK:
+        _CACHE.clear()
+        _CACHE_VERSION += 1
 
 
 def _load_corpus(conn: sqlite3.Connection) -> tuple[list[Chunk], np.ndarray, list[list[str]]]:
-    """
-    Returns (chunks, embeddings_matrix, tokenized_chunks).
+    """Returns (chunks, embeddings_matrix, tokenized_chunks).
+
     embeddings_matrix has shape (n, dim) float32.
     """
-    key = f"corpus::{settings.sqlite_path}::{_CACHE_VERSION}"
-    cached = _CACHE.get(key)
+
+    key = "::".join(
+        [
+            "corpus",
+            settings.sqlite_path,
+            settings.embeddings_backend,
+            settings.embeddings_model,
+            str(settings.embedding_dim),
+            str(_CACHE_VERSION),
+        ]
+    )
+
+    with _CACHE_LOCK:
+        cached = _CACHE.get(key)
     if cached is not None:
         return cached  # type: ignore[return-value]
 
@@ -92,15 +122,19 @@ def _load_corpus(conn: sqlite3.Connection) -> tuple[list[Chunk], np.ndarray, lis
             mat = np.stack(mats, axis=0).astype(np.float32) if mats else np.zeros((0, dim), dtype=np.float32)
 
     tokenized = [_tokenize(c.text) for c in chunks]
-    _CACHE[key] = (chunks, mat, tokenized)
+
+    with _CACHE_LOCK:
+        _CACHE[key] = (chunks, mat, tokenized)
+
     return chunks, mat, tokenized
 
 
 def _lexical_scores_fts(conn: sqlite3.Connection, query: str, limit: int) -> Optional[dict[str, float]]:
-    """
-    Returns dict chunk_id -> lexical_score in [0,1] (higher is better),
+    """Returns dict chunk_id -> lexical_score in [0,1] (higher is better),
+
     or None if FTS unavailable.
     """
+
     try:
         toks = _tokenize(query)
         if not toks:
@@ -125,17 +159,18 @@ def _lexical_scores_fts(conn: sqlite3.Connection, query: str, limit: int) -> Opt
 
 
 def _lexical_scores_bm25(tokenized_chunks: list[list[str]], query: str) -> dict[int, float]:
-    """
-    Fallback lexical scorer: BM25 via rank_bm25 over all chunks.
+    """Fallback lexical scorer: BM25 via rank_bm25 over all chunks.
+
     Returns dict chunk_index -> lexical_score in [0,1].
     """
+
     try:
         from rank_bm25 import BM25Okapi  # type: ignore[import-untyped]
     except Exception:
         q = set(_tokenize(query))
         if not q:
             return {}
-        scores = {}
+        scores: dict[int, float] = {}
         for i, toks in enumerate(tokenized_chunks):
             if not toks:
                 continue
@@ -170,18 +205,25 @@ def retrieve(
     lexical_limit: int = 40,
     vector_limit: int = 40,
 ) -> list[RetrievedChunk]:
+    """Hybrid retrieval:
+
+    - lexical: FTS5 BM25 (preferred) or BM25Okapi fallback
+    - vector: cosine similarity
+    - combine: average of normalized lexical + vector
     """
-    Hybrid retrieval:
-      - lexical: FTS5 BM25 (preferred) or BM25Okapi fallback
-      - vector: cosine similarity
-      - combine: average of normalized lexical + vector
-    """
+
     top_k = top_k or settings.top_k_default
     use_vector = settings.embeddings_backend != "none"
     embedder = _get_embedder()
 
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
+
+        # If settings changed (backend/model/dim), rebuild stored embeddings so retrieval stays valid.
+        rebuilt = ensure_index_compatible(conn, embedder)
+        conn.commit()
+        if rebuilt:
+            invalidate_cache()
         chunks, emb_mat, tokenized = _load_corpus(conn)
 
         if not chunks:

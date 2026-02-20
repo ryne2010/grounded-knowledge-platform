@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Protocol
@@ -7,6 +8,20 @@ from typing import Protocol
 import numpy as np
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+
+# Bump this if the HashEmbedder algorithm changes.
+HASH_EMBEDDER_VERSION = 2
+
+
+def _stable_token_hash(token: str) -> int:
+    """Return a deterministic integer hash for a token.
+
+    NOTE: Python's built-in `hash()` is salted per-process, which makes persisted embeddings
+    unstable across restarts. We use a stable cryptographic hash (blake2b) instead.
+    """
+
+    digest = hashlib.blake2b(token.encode("utf-8", errors="ignore"), digest_size=8).digest()
+    return int.from_bytes(digest, "little", signed=False)
 
 
 class Embedder(Protocol):
@@ -46,7 +61,7 @@ class HashEmbedder:
         for t in texts:
             v = np.zeros(self.dim, dtype=np.float32)
             for tok in _TOKEN_RE.findall(t.lower()):
-                v[hash(tok) % self.dim] += 1.0
+                v[_stable_token_hash(tok) % self.dim] += 1.0
             norm = float(np.linalg.norm(v))
             if norm > 0:
                 v /= norm
@@ -60,7 +75,16 @@ class SentenceTransformerEmbedder:
     """Higher-quality embeddings (requires downloading a model)."""
 
     def __init__(self, model_name: str):
-        from sentence_transformers import SentenceTransformer  # lazy import
+        import importlib
+
+        try:
+            st = importlib.import_module("sentence_transformers")
+            SentenceTransformer = getattr(st, "SentenceTransformer")
+        except Exception as e:  # pragma: no cover
+            raise RuntimeError(
+                "sentence-transformers is required for EMBEDDINGS_BACKEND=sentence-transformers. "
+                "Install with `uv sync --extra embeddings` (or `pip install sentence-transformers`)."
+            ) from e
 
         self.model = SentenceTransformer(model_name)
         try:

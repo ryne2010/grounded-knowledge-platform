@@ -12,6 +12,7 @@ class ExtractiveAnswerer:
     No-LLM fallback.
     Produces a short answer by selecting sentences from the top sources.
     """
+
     name = "extractive"
 
     def answer(self, question: str, context: list[tuple[str, str, int, str]]) -> Answer:

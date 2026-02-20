@@ -60,12 +60,7 @@ def _cloud_trace_resource(trace_id: Optional[str]) -> Optional[str]:
 
     if not trace_id:
         return None
-    project = (
-        os.getenv("GOOGLE_CLOUD_PROJECT")
-        or os.getenv("GCP_PROJECT")
-        or os.getenv("PROJECT_ID")
-        or ""
-    ).strip()
+    project = (os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT") or os.getenv("PROJECT_ID") or "").strip()
     if not project:
         return None
     return f"projects/{project}/traces/{trace_id}"

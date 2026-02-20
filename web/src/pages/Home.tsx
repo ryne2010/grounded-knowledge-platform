@@ -1,8 +1,8 @@
-import { useForm } from '@tanstack/react-form'
+import * as React from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import type { ColumnDef } from '@tanstack/react-table'
-import React from 'react'
-import { api, type IngestTextRequest, type QueryCitation, type QueryResponse } from '../api'
+import { Link } from '@tanstack/react-router'
+
+import { api, type QueryResponse, type RetrievalDebug } from '../api'
 import {
   Badge,
   Button,
@@ -18,615 +18,635 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  Input,
+  DialogTrigger,
   Label,
   Page,
   RangeSlider,
+  Separator,
   Textarea,
 } from '../portfolio-ui'
 
-function formatEpochSeconds(ts: number) {
-  const d = new Date(ts * 1000)
-  return d.toLocaleString()
+const EXAMPLES = [
+  'What is this project and what are its safety guarantees?',
+  'How does hybrid retrieval (BM25 + embeddings) work in this app?',
+  'What are the deploy steps for Cloud Run demo mode?',
+  'What safeguards exist against prompt injection?',
+]
+
+type ChatTurn = {
+  id: string
+  created_at: string
+  question: string
+  top_k: number
+  debug: boolean
+  response?: QueryResponse
+  error?: string
+}
+
+const STORAGE_KEY = 'gkp.chat.v1'
+const MAX_TURNS = 20
+
+function loadTurns(): ChatTurn[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed as ChatTurn[]
+  } catch {
+    return []
+  }
+}
+
+function saveTurns(turns: ChatTurn[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(turns))
+  } catch {
+    // Ignore storage failures (private browsing, quota, etc.)
+  }
+}
+
+function exportTurnsMarkdown(turns: ChatTurn[]): string {
+  const lines: string[] = []
+  lines.push('# Grounded Knowledge Platform — Conversation Export')
+  lines.push('')
+  lines.push(`Exported: ${new Date().toISOString()}`)
+  lines.push('')
+
+  const ordered = [...turns].sort((a, b) => a.created_at.localeCompare(b.created_at))
+  for (const t of ordered) {
+    lines.push('---')
+    lines.push('')
+    lines.push(`## Q: ${t.question}`)
+    lines.push('')
+
+    if (t.error) {
+      lines.push(`**Error:** ${t.error}`)
+      lines.push('')
+      continue
+    }
+
+    const ans = t.response?.answer
+    if (!ans) {
+      lines.push('_No answer captured._')
+      lines.push('')
+      continue
+    }
+
+    lines.push(ans)
+    lines.push('')
+
+    if (t.response?.refused && t.response?.refusal_reason) {
+      lines.push(`> Refusal reason: \`${t.response.refusal_reason}\``)
+      lines.push('')
+    }
+
+    const citations = t.response?.citations ?? []
+    if (citations.length) {
+      lines.push('### Citations')
+      lines.push('')
+      for (const c of citations) {
+        const title = c.doc_title ?? c.doc_id
+        const source = c.doc_source ? ` (${c.doc_source})` : ''
+        lines.push(`- **${title}**${source}`)
+        if (c.quote) {
+          lines.push(`  - Quote: “${c.quote.replace(/\n+/g, ' ').trim()}”`)
+        }
+      }
+      lines.push('')
+    }
+
+    const retrieval = t.response?.retrieval ?? []
+    if (retrieval.length) {
+      lines.push(`_Retrieval debug: ${retrieval.length} chunks returned._`)
+      lines.push('')
+    }
+  }
+
+  return lines.join('\n')
+}
+
+function downloadText(filename: string, text: string) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 export function HomePage() {
-  const metaQ = useQuery({ queryKey: ['meta'], queryFn: api.meta })
+  const metaQuery = useQuery({ queryKey: ['meta'], queryFn: api.meta, staleTime: 30_000 })
+  const docsQuery = useQuery({ queryKey: ['docs'], queryFn: api.listDocs, staleTime: 30_000 })
+  const meta = metaQuery.data
 
-  const mutation = useMutation({
-    mutationFn: api.query,
-  })
-
-  const fileMutation = useMutation({
-    mutationFn: api.ingestFile,
-  })
-
-  const textMutation = useMutation({
-    mutationFn: api.ingestText,
-  })
-
-  const form = useForm({
-    defaultValues: {
-      question: '',
-      top_k: 6,
-      debug: false,
-    },
-    onSubmit: async ({ value }) => {
-      await mutation.mutateAsync(value)
-    },
-  })
-
-
-  const [chunkOpen, setChunkOpen] = React.useState(false)
-  const [selectedChunk, setSelectedChunk] = React.useState<{
-    chunk: NonNullable<QueryResponse['retrieval']>[number] | null
-    citation: QueryCitation | null
-  } | null>(null)
-
-  const [uploadFile, setUploadFile] = React.useState<File | null>(null)
-  const [textTitle, setTextTitle] = React.useState('')
-  const [textSource, setTextSource] = React.useState('')
-  const [textBody, setTextBody] = React.useState('')
-  const [textDocId, setTextDocId] = React.useState('')
-  const fileInputRef = React.useRef<HTMLInputElement>(null)
-
-  const citations = mutation.data?.citations ?? []
-  const retrieval = mutation.data?.retrieval ?? []
-  const showEvidence = Boolean(mutation.data && !mutation.data.refused)
-
-  // Highlight retrieved chunks that were actually cited in the final answer.
-  // This improves transparency: "what did we retrieve" vs "what did we rely on".
-  const citedChunkIds = React.useMemo(() => {
-    return new Set((citations ?? []).map((c) => c.chunk_id))
-  }, [citations])
-
-  const citationByChunkId = React.useMemo(() => {
-    const map = new Map<string, QueryCitation>()
-    for (const c of citations) map.set(c.chunk_id, c)
-    return map
-  }, [citations])
-
-  const openChunkFromRetrieval = React.useCallback(
-    (hit: NonNullable<QueryResponse['retrieval']>[number]) => {
-      setSelectedChunk({ chunk: hit, citation: citationByChunkId.get(hit.chunk_id) ?? null })
-      setChunkOpen(true)
-    },
-    [citationByChunkId],
-  )
-
-  const openChunkFromCitation = React.useCallback(
-    (citation: QueryCitation) => {
-      const hit =
-        retrieval.find((r) => r.chunk_id === citation.chunk_id) ??
-        retrieval.find((r) => r.doc_id === citation.doc_id && r.idx === citation.idx) ??
-        null
-      setSelectedChunk({ chunk: hit, citation })
-      setChunkOpen(true)
-    },
-    [retrieval],
-  )
-
-  const findQuoteSpan = React.useCallback((text: string, quote: string) => {
-    const cleanedQuote = quote.trim().replace(/\s+/g, ' ').toLowerCase()
-    if (!cleanedQuote) return null
-
-    let normalized = ''
-    const map: number[] = []
-    let inWs = false
-    for (let i = 0; i < text.length; i += 1) {
-      const ch = text[i]
-      if (/\s/.test(ch)) {
-        if (!inWs) {
-          normalized += ' '
-          map.push(i)
-          inWs = true
-        }
-        continue
-      }
-      normalized += ch.toLowerCase()
-      map.push(i)
-      inWs = false
+  const docsById = React.useMemo(() => {
+    const m = new Map<string, { title: string; source: string }>()
+    for (const d of docsQuery.data?.docs ?? []) {
+      m.set(d.doc_id, { title: d.title ?? d.doc_id, source: d.source ?? '' })
     }
+    return m
+  }, [docsQuery.data])
 
-    const idx = normalized.indexOf(cleanedQuote)
-    if (idx === -1) return null
-    const start = map[idx] ?? 0
-    const end = (map[idx + cleanedQuote.length - 1] ?? start) + 1
-    return [start, end] as const
-  }, [])
-
-  const renderHighlighted = React.useCallback(
-    (text: string, quote?: string) => {
-      if (!quote) return text
-      const needle = quote.trim()
-      if (!needle) return text
-
-      const lowerText = text.toLowerCase()
-      const lowerNeedle = needle.toLowerCase()
-      let start = lowerText.indexOf(lowerNeedle)
-      let end = start === -1 ? -1 : start + needle.length
-
-      if (start === -1) {
-        const span = findQuoteSpan(text, needle)
-        if (span) {
-          ;[start, end] = span
-        }
-      }
-
-      if (start === -1) return text
-
-      return (
-        <>
-          {text.slice(0, start)}
-          <mark className="rounded bg-amber-200/70 px-1 text-foreground">
-            {text.slice(start, end)}
-          </mark>
-          {text.slice(end)}
-        </>
-      )
-    },
-    [findQuoteSpan],
-  )
-
-  const citationCols = React.useMemo<ColumnDef<QueryCitation>[]>(() => {
-    return [
+  const retrievalColumns = React.useMemo(
+    () => [
       {
-        header: '',
-        id: 'view',
-        meta: { width: 96 },
-        cell: ({ row }) => (
-          <Button variant="outline" size="sm" onClick={() => openChunkFromCitation(row.original)}>
-            View
-          </Button>
-        ),
-      },
-      { header: 'Doc', accessorKey: 'doc_id' },
-      { header: 'Chunk', accessorKey: 'idx' },
-      {
-        header: 'Quote',
-        accessorKey: 'quote',
-        cell: (info) => {
-          const v = String(info.getValue() ?? '')
-          return v ? (
-            <span className="text-muted-foreground">{v.slice(0, 50)}{v.length > 50 ? '…' : ''}</span>
-          ) : (
-            <span className="text-muted-foreground">—</span>
+        header: 'Doc',
+        accessorKey: 'doc_id',
+        cell: (info: any) => {
+          const r = info.row.original as RetrievalDebug
+          const d = docsById.get(r.doc_id)
+          const title = d?.title ?? r.doc_id
+          const source = d?.source ?? ''
+          return (
+            <div className="space-y-1">
+              <div className="font-medium">
+                <Link to="/docs/$docId" params={{ docId: r.doc_id }} className="hover:underline">
+                  {title}
+                </Link>
+              </div>
+              {source ? <div className="text-xs text-muted-foreground">{source}</div> : null}
+            </div>
           )
         },
+        meta: { minWidth: 220, maxWidth: 320 },
       },
       {
-        header: 'Chunk ID',
-        accessorKey: 'chunk_id',
-        cell: (info) => (
-          <span className="font-mono text-xs text-muted-foreground">{String(info.getValue())}</span>
-        ),
+        header: 'Chunk',
+        accessorKey: 'idx',
+        cell: (info: any) => {
+          const r = info.row.original as RetrievalDebug
+          return (
+            <div className="space-y-1">
+              <div className="font-mono text-xs">#{r.idx}</div>
+              <div className="font-mono text-[11px] text-muted-foreground">{r.chunk_id.slice(0, 10)}…</div>
+            </div>
+          )
+        },
+        meta: { width: 110 },
       },
-    ]
-  }, [openChunkFromCitation])
-
-  const retrievalCols = React.useMemo<ColumnDef<NonNullable<QueryResponse['retrieval']>[number]>[]>(() => {
-    return [
-      {
-        header: '',
-        id: 'view',
-        meta: { width: 96 },
-        cell: ({ row }) => (
-          <Button variant="outline" size="sm" onClick={() => openChunkFromRetrieval(row.original)}>
-            View
-          </Button>
-        ),
-      },
-      { header: 'Doc', accessorKey: 'doc_id' },
-      { header: 'Chunk', accessorKey: 'idx' },
       {
         header: 'Score',
         accessorKey: 'score',
-        cell: (info) => <span className="font-mono text-xs">{Number(info.getValue()).toFixed(4)}</span>,
+        cell: (info: any) => <span className="font-mono text-xs">{Number(info.getValue() ?? 0).toFixed(3)}</span>,
+        meta: { width: 90 },
       },
       {
         header: 'Lex',
         accessorKey: 'lexical_score',
-        cell: (info) => {
-          const v = info.getValue() as any
-          return v == null ? (
-            <span className="text-muted-foreground">—</span>
-          ) : (
-            <span className="font-mono text-xs">{Number(v).toFixed(4)}</span>
-          )
-        },
+        cell: (info: any) => <span className="font-mono text-xs">{Number(info.getValue() ?? 0).toFixed(3)}</span>,
+        meta: { width: 80 },
       },
       {
         header: 'Vec',
         accessorKey: 'vector_score',
-        cell: (info) => {
-          const v = info.getValue() as any
-          return v == null ? (
-            <span className="text-muted-foreground">—</span>
-          ) : (
-            <span className="font-mono text-xs">{Number(v).toFixed(4)}</span>
-          )
-        },
+        cell: (info: any) => <span className="font-mono text-xs">{Number(info.getValue() ?? 0).toFixed(3)}</span>,
+        meta: { width: 80 },
       },
       {
         header: 'Preview',
         accessorKey: 'text_preview',
-        cell: (info) => {
-          const v = String(info.getValue() ?? '')
-          return v ? (
-            <span className="text-muted-foreground">{v.slice(0, 50)}{v.length > 50 ? '…' : ''}</span>
-          ) : (
-            <span className="text-muted-foreground">—</span>
-          )
-        },
+        cell: (info: any) => <div className="whitespace-pre-wrap text-xs">{String(info.getValue() ?? '')}</div>,
+        meta: { minWidth: 420 },
       },
-    ]
-  }, [openChunkFromRetrieval])
+    ],
+    [docsById],
+  )
 
-  const meta = metaQ.data
-  const uploadsEnabled = Boolean(meta?.uploads_enabled)
+  const [question, setQuestion] = React.useState('')
+  const [topK, setTopK] = React.useState(5)
+  const [debug, setDebug] = React.useState(false)
 
-  const _didInitDebug = React.useRef(false)
+  const [turns, setTurns] = React.useState<ChatTurn[]>(() => (typeof window === 'undefined' ? [] : loadTurns()))
+
   React.useEffect(() => {
-    if (!meta) return
-    if (meta.public_demo_mode) return
-    if (_didInitDebug.current) return
-    // In local/private mode, default to debug=true for transparency.
-    form.setFieldValue('debug', true)
-    _didInitDebug.current = true
-  }, [meta])
+    if (meta?.top_k_default && Number.isFinite(meta.top_k_default)) {
+      setTopK(meta.top_k_default)
+    }
+  }, [meta?.top_k_default])
+
+  React.useEffect(() => {
+    saveTurns(turns)
+  }, [turns])
+
+  const queryMutation = useMutation({
+    mutationFn: (vars: { question: string; top_k: number; debug: boolean }) =>
+      api.query(vars.question, vars.top_k, vars.debug),
+  })
+
+  async function onAsk() {
+    const q = question.trim()
+    if (!q) return
+
+    const id = crypto.randomUUID()
+    const created_at = new Date().toISOString()
+
+    const next: ChatTurn = {
+      id,
+      created_at,
+      question: q,
+      top_k: topK,
+      debug,
+    }
+
+    setTurns((prev) => [...prev, next].slice(-MAX_TURNS))
+
+    try {
+      const res = await queryMutation.mutateAsync({ question: q, top_k: topK, debug })
+      setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, response: res } : t)))
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, error: msg } : t)))
+    }
+  }
+
+  const maxTopK = typeof meta?.max_top_k === 'number' ? meta.max_top_k : 8
+
+  const actions = (
+    <>
+      <Button
+        variant="outline"
+        onClick={() => {
+          const md = exportTurnsMarkdown(turns)
+          downloadText(`gkp-conversation-${new Date().toISOString().slice(0, 10)}.md`, md)
+        }}
+        disabled={!turns.length}
+      >
+        Export
+      </Button>
+      <Button
+        variant="destructive"
+        onClick={() => {
+          if (confirm('Clear conversation history?')) setTurns([])
+        }}
+        disabled={!turns.length}
+      >
+        Clear
+      </Button>
+    </>
+  )
 
   return (
     <Page
-      title="Ask about GCP"
+      title="Ask"
       description={
-        <span>
-          Grounded RAG demo with citations + refusal behavior. Public demo mode defaults to{' '}
-          <Badge variant="secondary">extractive-only</Badge> and disables uploads.
-        </span>
+        meta?.public_demo_mode
+          ? 'Public demo mode: read-only, citations-first.'
+          : 'Private mode: uploads/evals may be enabled via environment flags.'
       }
-      actions={
-        meta ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={meta.public_demo_mode ? 'success' : 'secondary'}>
-              {meta.public_demo_mode ? 'PUBLIC_DEMO_MODE=1' : 'demo'}
-            </Badge>
-            <Badge variant="outline">LLM: {meta.llm_provider}</Badge>
-            <Badge variant="outline">Embeddings: {meta.embeddings_backend}</Badge>
-            <Badge variant={meta.ocr_enabled ? 'secondary' : 'outline'}>OCR: {meta.ocr_enabled ? 'on' : 'off'}</Badge>
-            <Badge variant={meta.uploads_enabled ? 'secondary' : 'outline'}>
-              Uploads: {meta.uploads_enabled ? 'on' : 'off'}
-            </Badge>
-          </div>
-        ) : null
-      }
+      actions={actions}
     >
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="space-y-6">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="space-y-4 lg:col-span-2">
           <Card>
             <CardHeader>
               <CardTitle>Question</CardTitle>
-              <CardDescription>Submit a question. The answer will include citations, or refuse when unsupported.</CardDescription>
+              <CardDescription>
+                Ask a question about what’s in the index. The system will refuse if it can’t cite enough evidence.
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  form.handleSubmit()
-                }}
-                className="space-y-4"
-              >
-                <form.Field
-                  name="question"
-                  validators={{
-                    onSubmit: ({ value }) => (!value?.trim() ? 'Question is required' : undefined),
-                  }}
-                >
-                  {(field) => (
-                    <div className="space-y-2">
-                      <Label htmlFor={field.name}>Question</Label>
-                      <Textarea
-                        id={field.name}
-                        value={field.state.value}
-                        onChange={(e) => field.handleChange(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key !== 'Enter') return
-                          if (e.shiftKey) return
-                          if (e.nativeEvent.isComposing) return
-                          e.preventDefault()
-                          form.handleSubmit()
-                        }}
-                        placeholder="e.g., What does the demo say about PUBLIC_DEMO_MODE?"
-                      />
-                      {field.state.meta.errors?.length ? (
-                        <div className="text-xs text-destructive">{field.state.meta.errors.join(', ')}</div>
-                      ) : null}
-                    </div>
-                  )}
-                </form.Field>
+              <div className="space-y-2">
+                <Label htmlFor="question">Question</Label>
+                <Textarea
+                  id="question"
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  placeholder="Ask a question…"
+                  rows={4}
+                />
+              </div>
 
-                <form.Field name="top_k">
-                  {(field) => (
-                    <RangeSlider
-                      min={2}
-                      max={12}
-                      step={1}
-                      value={field.state.value}
-                      onChange={(v) => field.handleChange(v)}
-                      label="Top-K chunks"
-                      format={(n) => `${n}`}
-                    />
-                  )}
-                </form.Field>
-                {meta?.public_demo_mode ? null : (
-                  <form.Field name="debug">
-                    {(field) => (
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          checked={field.state.value}
-                          onChange={(e) => field.handleChange((e.target as HTMLInputElement).checked)}
-                          disabled={Boolean(meta?.public_demo_mode)}
-                        />
-                        <Label>
-                          Include retrieval debug{' '}
-                          {meta?.public_demo_mode ? <span className="text-muted-foreground">(disabled in public demo)</span> : null}
-                        </Label>
-                      </div>
-                    )}
-                  </form.Field>
-                )}
+              <div className="grid gap-4 md:grid-cols-2">
+                <RangeSlider
+                  label="top_k"
+                  min={1}
+                  max={Math.max(1, maxTopK)}
+                  step={1}
+                  value={topK}
+                  onChange={setTopK}
+                />
 
-                <Button type="submit" disabled={mutation.isPending} className="w-full">
-                  {mutation.isPending ? 'Running…' : 'Ask'}
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="debug"
+                    checked={debug}
+                    onCheckedChange={(v) => setDebug(Boolean(v))}
+                    disabled={Boolean(meta?.public_demo_mode)}
+                  />
+                  <Label htmlFor="debug">Debug retrieval</Label>
+                  {meta?.public_demo_mode ? (
+                    <span className="text-xs text-muted-foreground">(disabled in demo)</span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {EXAMPLES.map((ex) => (
+                  <Button key={ex} variant="outline" size="sm" onClick={() => setQuestion(ex)}>
+                    {ex}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button onClick={onAsk} disabled={!question.trim() || queryMutation.isPending}>
+                  {queryMutation.isPending ? 'Asking…' : 'Ask'}
                 </Button>
-              </form>
-
-              {mutation.isError ? (
-                <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
-                  <div className="font-medium">Request failed</div>
-                  <div className="text-muted-foreground">{(mutation.error as Error).message}</div>
-                </div>
-              ) : null}
-
-              {mutation.data ? (
-                <div className="text-xs text-muted-foreground">
-                  Provider: <span className="font-mono">{mutation.data.provider}</span> •{' '}
-                  {meta?.public_demo_mode ? 'Public demo mode' : 'Normal mode'} •{' '}
-                  {formatEpochSeconds(Math.floor(Date.now() / 1000))}
-                </div>
-              ) : null}
+                <Button variant="outline" onClick={() => setQuestion('')} disabled={!question}>
+                  Reset
+                </Button>
+              </div>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>Upload</CardTitle>
-              <CardDescription>Add documents to the index. Supports .txt, .md, and .pdf.</CardDescription>
+              <CardTitle>Conversation</CardTitle>
+              <CardDescription>
+                Stored locally in your browser (up to {MAX_TURNS} turns). Export for a shareable markdown log.
+              </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
-              {!meta ? <div className="text-sm text-muted-foreground">Loading…</div> : null}
-              {meta && !uploadsEnabled ? (
+            <CardContent className="space-y-4">
+              {!turns.length ? (
                 <div className="text-sm text-muted-foreground">
-                  Uploads are disabled in this deployment.
+                  No questions yet. Ask something above to start a local conversation.
                 </div>
-              ) : null}
-              {uploadsEnabled ? (
-                <>
-                  <div className="space-y-3">
-                    <div className="text-sm font-medium">Upload file</div>
-                    <form
-                      onSubmit={async (e) => {
-                        e.preventDefault()
-                        if (!uploadFile) return
-                        await fileMutation.mutateAsync(uploadFile)
-                        setUploadFile(null)
-                        if (fileInputRef.current) fileInputRef.current.value = ''
-                      }}
-                      className="space-y-3"
-                    >
-                      <Input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".txt,.md,.pdf"
-                        disabled={fileMutation.isPending}
-                        onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
-                      />
-                      <div className="flex items-center gap-3">
-                        <Button type="submit" disabled={!uploadFile || fileMutation.isPending}>
-                          {fileMutation.isPending ? 'Uploading…' : 'Upload file'}
-                        </Button>
-                        {uploadFile ? (
-                          <span className="text-xs text-muted-foreground">{uploadFile.name}</span>
-                        ) : null}
-                      </div>
-                      {fileMutation.isError ? (
-                        <div className="text-xs text-destructive">{(fileMutation.error as Error).message}</div>
-                      ) : null}
-                      {fileMutation.isSuccess ? (
-                        <div className="text-xs text-muted-foreground">
-                          Ingested {fileMutation.data.doc_id} ({fileMutation.data.num_chunks} chunks).
-                        </div>
-                      ) : null}
-                    </form>
-                  </div>
+              ) : (
+                <div className="space-y-4">
+                  {[...turns]
+                    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+                    .map((t) => {
+                      const citations = t.response?.citations ?? []
+                      const retrieval = t.response?.retrieval ?? []
+                      const refused = Boolean(t.response?.refused)
+                      const refusalReason = t.response?.refusal_reason
+                      const provider = t.response?.provider
+                      const answer = t.response?.answer
 
-                  <div className="space-y-3">
-                    <div className="text-sm font-medium">Paste text</div>
-                    <form
-                      onSubmit={async (e) => {
-                        e.preventDefault()
-                        if (!textTitle.trim() || !textSource.trim() || !textBody.trim()) return
-                        const payload: IngestTextRequest = {
-                          title: textTitle.trim(),
-                          source: textSource.trim(),
-                          text: textBody.trim(),
-                          doc_id: textDocId.trim() || undefined,
-                        }
-                        await textMutation.mutateAsync(payload)
-                        setTextTitle('')
-                        setTextSource('')
-                        setTextBody('')
-                        setTextDocId('')
-                      }}
-                      className="space-y-3"
-                    >
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="space-y-2">
-                          <Label>Title</Label>
-                          <Input value={textTitle} onChange={(e) => setTextTitle(e.target.value)} placeholder="Quarterly report" />
+                      const citedChunkIds = new Set(citations.map((c) => c.chunk_id))
+
+                      return (
+                        <div key={t.id} className="rounded-xl border p-4">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="space-y-1">
+                              <div className="text-sm font-semibold">Q</div>
+                              <div className="text-sm">{t.question}</div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {provider ? <Badge variant="outline">{provider}</Badge> : null}
+                              {refused ? <Badge variant="warning">refused</Badge> : <Badge variant="success">answered</Badge>}
+                              <Badge variant="secondary">top_k:{t.top_k}</Badge>
+                              {t.debug ? <Badge variant="outline">debug</Badge> : null}
+                            </div>
+                          </div>
+
+                          <Separator className="my-3" />
+
+                          {t.error ? (
+                            <div className="text-sm text-destructive">Error: {t.error}</div>
+                          ) : !answer ? (
+                            <div className="text-sm text-muted-foreground">Working…</div>
+                          ) : (
+                            <div className="space-y-3">
+                              <div className="text-sm font-semibold">A</div>
+                              <pre className="whitespace-pre-wrap rounded-lg bg-muted p-3 text-sm">{answer}</pre>
+
+                              {refused && refusalReason ? (
+                                <div className="text-xs text-muted-foreground">
+                                  refusal_reason: <span className="font-mono">{refusalReason}</span>
+                                </div>
+                              ) : null}
+
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={async () => {
+                                    if (!answer) return
+                                    try {
+                                      await navigator.clipboard.writeText(answer)
+                                    } catch {
+                                      // ignore
+                                    }
+                                  }}
+                                  disabled={!answer}
+                                >
+                                  Copy answer
+                                </Button>
+
+                                <Dialog>
+                                  <DialogTrigger asChild>
+                                    <Button size="sm" variant="outline" disabled={!citations.length}>
+                                      Citations ({citations.length})
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent>
+                                    <DialogHeader>
+                                      <DialogTitle>Citations</DialogTitle>
+                                      <DialogDescription>
+                                        Evidence snippets used to ground the answer. Open a doc for full context.
+                                      </DialogDescription>
+                                    </DialogHeader>
+                                    <div className="space-y-3">
+                                      {citations.length ? (
+                                        citations.map((c) => (
+                                          <div key={c.chunk_id} className="rounded-lg border p-3">
+                                            <div className="flex items-start justify-between gap-3">
+                                              <div className="space-y-1">
+                                                <div className="text-sm font-semibold">
+                                                  {c.doc_title ?? 'Untitled'}
+                                                </div>
+                                                <div className="text-xs text-muted-foreground">{c.doc_source ?? c.doc_id}</div>
+                                              </div>
+                                              <Link
+                                                to="/docs/$docId"
+                                                params={{ docId: c.doc_id }}
+                                                className="text-sm underline"
+                                              >
+                                                Open doc
+                                              </Link>
+                                            </div>
+                                            {c.quote ? (
+                                              <pre className="mt-2 whitespace-pre-wrap rounded bg-muted p-2 text-xs">{c.quote}</pre>
+                                            ) : null}
+                                            <div className="mt-2 text-xs text-muted-foreground">
+                                              chunk_id: <span className="font-mono">{c.chunk_id}</span>
+                                            </div>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <div className="text-sm text-muted-foreground">No citations returned.</div>
+                                      )}
+                                    </div>
+                                  </DialogContent>
+                                </Dialog>
+
+                                <Dialog>
+                                  <DialogTrigger asChild>
+                                    <Button size="sm" variant="outline" disabled={!retrieval.length}>
+                                      Retrieval ({retrieval.length})
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent className="max-h-[80vh] overflow-hidden">
+                                    <DialogHeader>
+                                      <DialogTitle>Retrieval debug</DialogTitle>
+                                      <DialogDescription>
+                                        Hybrid retrieval results (BM25 + embeddings). Highlighted rows are cited.
+                                      </DialogDescription>
+                                    </DialogHeader>
+
+                                    {retrieval.length ? (
+                                      <div className="space-y-2">
+                                        <DataTable<RetrievalDebug>
+                                          data={retrieval}
+                                          columns={retrievalColumns}
+                                          height={420}
+                                          getRowClassName={(r) =>
+                                            citedChunkIds.has((r as RetrievalDebug).chunk_id)
+                                              ? 'bg-emerald-500/10'
+                                              : ''
+                                          }
+                                        />
+                                        <div className="text-xs text-muted-foreground">
+                                          Note: full chunk text is only included when chunk view is enabled.
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="text-sm text-muted-foreground">No retrieval debug returned.</div>
+                                    )}
+                                  </DialogContent>
+                                </Dialog>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <div className="space-y-2">
-                          <Label>Source</Label>
-                          <Input value={textSource} onChange={(e) => setTextSource(e.target.value)} placeholder="internal:reports/q1" />
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Doc ID (optional)</Label>
-                        <Input value={textDocId} onChange={(e) => setTextDocId(e.target.value)} placeholder="optional-stable-id" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Text</Label>
-                        <Textarea
-                          value={textBody}
-                          onChange={(e) => setTextBody(e.target.value)}
-                          placeholder="Paste the content to ingest…"
-                          rows={6}
-                        />
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <Button
-                          type="submit"
-                          disabled={
-                            textMutation.isPending ||
-                            !textTitle.trim() ||
-                            !textSource.trim() ||
-                            !textBody.trim()
-                          }
-                        >
-                          {textMutation.isPending ? 'Ingesting…' : 'Ingest text'}
-                        </Button>
-                      </div>
-                      {textMutation.isError ? (
-                        <div className="text-xs text-destructive">{(textMutation.error as Error).message}</div>
-                      ) : null}
-                      {textMutation.isSuccess ? (
-                        <div className="text-xs text-muted-foreground">
-                          Ingested {textMutation.data.doc_id} ({textMutation.data.num_chunks} chunks).
-                        </div>
-                      ) : null}
-                    </form>
-                  </div>
-                </>
-              ) : null}
+                      )
+                    })}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              Answer
-              <Badge variant="secondary">provider: {mutation.data?.provider ?? '—'}</Badge>
-              {mutation.data?.refused ? <Badge variant="warning">refused</Badge> : <Badge variant="outline">grounded</Badge>}
-              {mutation.data?.refusal_reason ? (
-                <Badge variant="destructive" title={mutation.data.refusal_reason}>
-                  reason
-                </Badge>
-              ) : null}
-            </CardTitle>
-            <CardDescription>
-              Answers are grounded in retrieved text. If the system cannot support a claim, it should refuse.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {!mutation.data ? (
-              <div className="text-sm text-muted-foreground">Ask a question to see an answer and citations.</div>
-            ) : (
-              <>
-                {mutation.data.refused && mutation.data.refusal_reason ? (
-                  <div className="rounded-md border bg-destructive/10 p-3 text-sm">
-                    <span className="font-medium">Refusal reason:</span>{' '}
-                    <span className="font-mono">{mutation.data.refusal_reason}</span>
-                  </div>
-                ) : null}
-                <div className="whitespace-pre-wrap rounded-md border border-primary/20 bg-muted/40 p-4 text-sm leading-relaxed shadow">
-                  {mutation.data.answer}
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Index</CardTitle>
+              <CardDescription>Quick links + a tiny peek at what’s indexed.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <Link to="/docs" className="underline">
+                  Docs
+                </Link>
+                <span className="text-muted-foreground">·</span>
+                <Link to="/search" className="underline">
+                  Search
+                </Link>
+                <span className="text-muted-foreground">·</span>
+                <Link to="/dashboard" className="underline">
+                  Dashboard
+                </Link>
+                <span className="text-muted-foreground">·</span>
+                <Link to="/ingest" className="underline">
+                  Ingest
+                </Link>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-sm">
+                <div className="rounded-lg border p-2">
+                  <div className="text-xs text-muted-foreground">docs</div>
+                  <div className="font-mono text-lg">{meta?.stats?.docs ?? '—'}</div>
                 </div>
+                <div className="rounded-lg border p-2">
+                  <div className="text-xs text-muted-foreground">chunks</div>
+                  <div className="font-mono text-lg">{meta?.stats?.chunks ?? '—'}</div>
+                </div>
+                <div className="rounded-lg border p-2">
+                  <div className="text-xs text-muted-foreground">emb</div>
+                  <div className="font-mono text-lg">{meta?.stats?.embeddings ?? '—'}</div>
+                </div>
+              </div>
 
-                {showEvidence ? (
-                  <div className="space-y-2">
-                    <div className="text-sm font-medium">Citations</div>
-                    {citations.length ? (
-                      <DataTable<QueryCitation> data={citations} columns={citationCols} height={240} />
-                    ) : (
-                      <div className="text-sm text-muted-foreground">No citations returned.</div>
-                    )}
+              <Separator />
+
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-muted-foreground">Recently indexed</div>
+                {docsQuery.isError ? (
+                  <div className="text-sm text-destructive">Failed to load docs list.</div>
+                ) : docsQuery.data?.docs?.length ? (
+                  <div className="space-y-1">
+                    {docsQuery.data.docs.slice(0, 6).map((d) => (
+                      <div key={d.doc_id} className="text-sm">
+                        <Link to="/docs/$docId" params={{ docId: d.doc_id }} className="underline">
+                          {d.title || d.doc_id}
+                        </Link>
+                      </div>
+                    ))}
                   </div>
-                ) : null}
+                ) : (
+                  <div className="text-sm text-muted-foreground">No docs.</div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
 
-                {showEvidence && form.state.values.debug && retrieval.length ? (
-                  <div className="space-y-2">
-                    <div className="text-sm font-medium">Retrieval debug</div>
-                    <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-3">
-                      <span className="inline-flex items-center gap-2">
-                        <span className="h-3 w-3 rounded-sm bg-amber-50/60 dark:bg-amber-950/25 border border-amber-400" />
-                        <span>Highlighted rows were cited in the final answer.</span>
-                      </span>
-                      <span className="inline-flex items-center gap-2">
-                        <span className="h-3 w-3 rounded-sm border border-border" />
-                        <span>Other rows were retrieved but not cited.</span>
-                      </span>
-                    </div>
-                    <DataTable
-                      data={retrieval}
-                      columns={retrievalCols}
-                      height={260}
-                      getRowClassName={(row) =>
-                        citedChunkIds.has((row as any).chunk_id)
-                          ? 'bg-amber-50/60 dark:bg-amber-950/25 border-l-4 border-amber-400'
-                          : ''
-                      }
-                    />
-                    <div className="text-xs text-muted-foreground">
-                      Debug shows hybrid scores and chunk previews (useful for tuning).
-                    </div>
-                  </div>
-                ) : null}
-              </>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <Dialog open={chunkOpen} onOpenChange={setChunkOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Retrieved chunk</DialogTitle>
-            <DialogDescription>
-              {selectedChunk ? (
-                <span className="font-mono text-xs">
-                  {selectedChunk.chunk?.doc_id ?? selectedChunk.citation?.doc_id ?? '—'} / idx{' '}
-                  {selectedChunk.chunk?.idx ?? selectedChunk.citation?.idx ?? '—'}
-                  {selectedChunk.chunk ? ` • score ${Number(selectedChunk.chunk.score).toFixed(4)}` : ''}
-                </span>
-              ) : null}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-3 max-h-[60vh] overflow-auto rounded-lg border bg-muted p-3">
-            <div className="whitespace-pre-wrap text-sm leading-relaxed">
-              {selectedChunk
-                ? renderHighlighted(
-                    selectedChunk.chunk?.text ??
-                      selectedChunk.chunk?.text_preview ??
-                      selectedChunk.citation?.quote ??
-                      '',
-                    selectedChunk.citation?.quote,
+          <Card>
+            <CardHeader>
+              <CardTitle>Settings snapshot</CardTitle>
+              <CardDescription>Operational flags reflected from the API.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Mode</span>
+                {metaQuery.isError ? (
+                  <Badge variant="destructive">api error</Badge>
+                ) : meta ? (
+                  meta.public_demo_mode ? (
+                    <Badge variant="warning">demo</Badge>
+                  ) : (
+                    <Badge variant="success">private</Badge>
                   )
-                : ''}
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-</Page>
+                ) : (
+                  <Badge variant="secondary">loading…</Badge>
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Uploads</span>
+                <Badge variant={meta?.uploads_enabled ? 'success' : 'secondary'}>
+                  {meta?.uploads_enabled ? 'enabled' : 'disabled'}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Eval</span>
+                <Badge variant={meta?.eval_enabled ? 'success' : 'secondary'}>
+                  {meta?.eval_enabled ? 'enabled' : 'disabled'}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Chunk view</span>
+                <Badge variant={meta?.chunk_view_enabled ? 'success' : 'secondary'}>
+                  {meta?.chunk_view_enabled ? 'enabled' : 'disabled'}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Citations required</span>
+                <Badge variant={meta?.citations_required ? 'success' : 'secondary'}>
+                  {meta?.citations_required ? 'yes' : 'no'}
+                </Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">LLM</span>
+                <Badge variant="outline">{meta?.llm_provider ?? '—'}</Badge>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </Page>
   )
 }

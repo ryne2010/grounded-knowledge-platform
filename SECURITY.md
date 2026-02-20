@@ -20,6 +20,7 @@ If you ingest sensitive documents:
 - Prefer a **local embeddings backend** (`EMBEDDINGS_BACKEND=sentence-transformers`)
 - Prefer a **local LLM provider** (`LLM_PROVIDER=ollama`) or use `extractive`
 - Avoid sending retrieved content to third-party APIs unless you have explicit approval
+- Keep `ALLOW_CHUNK_VIEW=0` unless you explicitly need to browse raw chunks. (Retrieval debug will not include full chunk text unless chunk viewing is enabled.)
 
 ## Defense in depth (recommended)
 

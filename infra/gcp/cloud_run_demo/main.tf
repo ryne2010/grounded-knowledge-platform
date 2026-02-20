@@ -17,6 +17,7 @@ locals {
     GKP_ENV     = var.env
 
     PUBLIC_DEMO_MODE      = "1"
+    CITATIONS_REQUIRED     = "1"
     BOOTSTRAP_DEMO_CORPUS = var.bootstrap_demo_corpus ? "1" : "0"
 
     # On Cloud Run, /tmp is the safest writable location.

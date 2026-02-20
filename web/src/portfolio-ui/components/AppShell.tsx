@@ -16,6 +16,7 @@ export type AppShellProps = {
   nav: NavItem[]
   docsHref?: string
   repoHref?: string
+  headerRight?: React.ReactNode
   children: React.ReactNode
 }
 
@@ -68,6 +69,7 @@ export function AppShell(props: AppShellProps) {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
+            {props.headerRight}
             {props.docsHref ? (
               <a
                 href={props.docsHref}

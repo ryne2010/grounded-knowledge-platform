@@ -9,7 +9,9 @@ from .config import settings
 @dataclass(frozen=True)
 class PdfTextResult:
     text: str
-    used_ocr_pages: int
+    pages: int
+    ocr_pages: int
+    warnings: tuple[str, ...] = ()
 
 
 def extract_text_from_pdf(path: str | Path) -> PdfTextResult:
@@ -29,9 +31,13 @@ def extract_text_from_pdf(path: str | Path) -> PdfTextResult:
         raise RuntimeError("PDF support requires `PyMuPDF` (package: pymupdf).") from e
 
     used_ocr = 0
+    skipped_ocr = 0
+    empty_pages = 0
+    warnings: list[str] = []
     texts: list[str] = []
 
     with fitz.open(str(path)) as doc:
+        total_pages = int(getattr(doc, "page_count", 0) or 0)
         for _, page in enumerate(doc):
             page_text = (page.get_text("text") or "").strip()
 
@@ -42,11 +48,20 @@ def extract_text_from_pdf(path: str | Path) -> PdfTextResult:
                     if ocr_text.strip():
                         page_text = ocr_text.strip()
                         used_ocr += 1
+                else:
+                    skipped_ocr += 1
 
             if page_text:
                 texts.append(page_text)
+            else:
+                empty_pages += 1
 
-    return PdfTextResult(text="\n\n".join(texts), used_ocr_pages=used_ocr)
+    if skipped_ocr:
+        warnings.append(f"ocr_skipped_pages={skipped_ocr}")
+    if empty_pages:
+        warnings.append(f"empty_pages={empty_pages}")
+
+    return PdfTextResult(text="\n\n".join(texts), pages=total_pages, ocr_pages=used_ocr, warnings=tuple(warnings))
 
 
 def _ocr_page(page) -> str:

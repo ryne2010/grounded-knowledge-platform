@@ -7,7 +7,7 @@ WORKDIR /app/web
 RUN corepack enable
 
 COPY web/package.json web/pnpm-lock.yaml* ./
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 COPY web/ ./
 RUN pnpm build
@@ -25,10 +25,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # System deps
-# - build-essential: some Python wheels may require compilation
 # - tesseract: optional OCR support (fully open source)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
     tesseract-ocr \
     tesseract-ocr-eng \
  && rm -rf /var/lib/apt/lists/*
@@ -54,6 +52,12 @@ COPY scripts ./scripts
 # Copy built web assets
 COPY --from=frontend /app/web/dist ./web/dist
 
+# Harden: run as non-root.
+RUN addgroup --system app && adduser --system --ingroup app app \
+    && chown -R app:app /app \
+    && chmod -R a+rX /opt/venv
+USER app
+
 EXPOSE 8080
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

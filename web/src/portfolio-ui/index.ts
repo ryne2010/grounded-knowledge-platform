@@ -8,6 +8,7 @@ export * from './ui/separator'
 export * from './ui/textarea'
 export * from './ui/checkbox'
 export * from './ui/dialog'
+export * from './ui/spinner'
 
 export * from './components/AppShell'
 export * from './components/Page'

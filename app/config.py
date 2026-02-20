@@ -5,6 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .version import get_version
+
 # Load a local .env for developer convenience.
 # - Does NOT override already-set environment variables (CI/Cloud Run wins)
 # - Safe: if .env doesn't exist, no-op
@@ -56,6 +58,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 _ALLOWED_LLM_PROVIDERS = {"extractive", "openai", "gemini", "ollama"}
 _ALLOWED_EMBEDDINGS_BACKENDS = {"none", "hash", "sentence-transformers"}
+_ALLOWED_RATE_LIMIT_SCOPES = {"query", "api"}
 
 
 @dataclass(frozen=True)
@@ -69,10 +72,23 @@ class Settings:
       - PUBLIC_DEMO_MODE forces a safety-first config (read-only, no uploads)
     """
 
+    # ---- Build / runtime ----
+    version: str
+
     # ---- Safety / demo flags ----
     public_demo_mode: bool
     allow_uploads: bool
     allow_eval: bool
+
+    # Developer / internal-only features (never enable on a public URL)
+    allow_chunk_view: bool
+    allow_doc_delete: bool
+
+    # Grounding
+    citations_required: bool
+
+    # Upload limits (defense-in-depth)
+    max_upload_bytes: int
 
     # Read-only demo bootstrap
     bootstrap_demo_corpus: bool
@@ -84,6 +100,7 @@ class Settings:
 
     # Basic in-app rate limiting (helpful for public demos)
     rate_limit_enabled: bool
+    rate_limit_scope: str  # query | api
     rate_limit_window_s: int
     rate_limit_max_requests: int
 
@@ -133,22 +150,40 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    public_demo_mode = _env_bool("PUBLIC_DEMO_MODE", False)
+    # Safety-first default: with no env configured, prefer read-only demo mode.
+    public_demo_mode = _env_bool("PUBLIC_DEMO_MODE", True)
 
-    # Defaults are developer-friendly. PUBLIC_DEMO_MODE overrides to safe settings.
-    allow_uploads = _env_bool("ALLOW_UPLOADS", True)
-    allow_eval = _env_bool("ALLOW_EVAL", True)
-    bootstrap_demo_corpus = _env_bool("BOOTSTRAP_DEMO_CORPUS", True)
+    # These are intentionally opt-in (even in private mode).
+    allow_uploads = _env_bool("ALLOW_UPLOADS", False)
+    allow_eval = _env_bool("ALLOW_EVAL", False)
+
+    # These should never be enabled on a public URL.
+    allow_chunk_view = _env_bool("ALLOW_CHUNK_VIEW", False)
+    allow_doc_delete = _env_bool("ALLOW_DOC_DELETE", False)
+
+    # Grounding
+    citations_required = _env_bool("CITATIONS_REQUIRED", True)
+
+    # Upload limits
+    max_upload_bytes = _env_int("MAX_UPLOAD_BYTES", 10_000_000)  # 10MB
+
+    bootstrap_demo_corpus = _env_bool("BOOTSTRAP_DEMO_CORPUS", public_demo_mode)
     demo_corpus_path = _env_str("DEMO_CORPUS_PATH", "data/demo_corpus")
 
     max_question_chars = _env_int("MAX_QUESTION_CHARS", 2000)
     max_top_k = _env_int("MAX_TOP_K", 8)
 
-    rate_limit_enabled = _env_bool("RATE_LIMIT_ENABLED", True)
+    # Rate limiting is enabled by default in PUBLIC_DEMO_MODE, but off by default
+    # for private/internal deployments unless explicitly enabled.
+    rate_limit_enabled = _env_bool("RATE_LIMIT_ENABLED", public_demo_mode)
+    rate_limit_scope = _env_str("RATE_LIMIT_SCOPE", "query").lower().strip()
+    if rate_limit_scope not in _ALLOWED_RATE_LIMIT_SCOPES:
+        rate_limit_scope = "query"
     rate_limit_window_s = _env_int("RATE_LIMIT_WINDOW_S", 60)
     rate_limit_max_requests = _env_int("RATE_LIMIT_MAX_REQUESTS", 30)
 
-    sqlite_path = _env_str("SQLITE_PATH", "data/index.sqlite")
+    sqlite_default = "/tmp/index.sqlite" if public_demo_mode else "data/index.sqlite"
+    sqlite_path = _env_str("SQLITE_PATH", sqlite_default)
 
     embeddings_backend = _env_str("EMBEDDINGS_BACKEND", "hash").lower().strip()
     if embeddings_backend not in _ALLOWED_EMBEDDINGS_BACKENDS:
@@ -184,14 +219,20 @@ def load_settings() -> Settings:
     ocr_min_chars = _env_int("OCR_MIN_CHARS", 40)
 
     s = Settings(
+        version=_env_str("APP_VERSION", get_version()),
         public_demo_mode=public_demo_mode,
         allow_uploads=allow_uploads,
         allow_eval=allow_eval,
+        allow_chunk_view=allow_chunk_view,
+        allow_doc_delete=allow_doc_delete,
+        citations_required=citations_required,
+        max_upload_bytes=max_upload_bytes,
         bootstrap_demo_corpus=bootstrap_demo_corpus,
         demo_corpus_path=demo_corpus_path,
         max_question_chars=max_question_chars,
         max_top_k=max_top_k,
         rate_limit_enabled=rate_limit_enabled,
+        rate_limit_scope=rate_limit_scope,
         rate_limit_window_s=rate_limit_window_s,
         rate_limit_max_requests=rate_limit_max_requests,
         sqlite_path=sqlite_path,
@@ -224,14 +265,20 @@ def load_settings() -> Settings:
             safe_embed = "hash"
 
         return Settings(
+            version=s.version,
             public_demo_mode=True,
             allow_uploads=False,
             allow_eval=False,
+            allow_chunk_view=False,
+            allow_doc_delete=False,
+            citations_required=True,
+            max_upload_bytes=min(s.max_upload_bytes, 10_000_000),
             bootstrap_demo_corpus=True,
             demo_corpus_path=s.demo_corpus_path,
             max_question_chars=min(s.max_question_chars, 2000),
             max_top_k=min(s.max_top_k, 8),
             rate_limit_enabled=True,
+            rate_limit_scope=s.rate_limit_scope,
             rate_limit_window_s=s.rate_limit_window_s,
             rate_limit_max_requests=s.rate_limit_max_requests,
             sqlite_path=s.sqlite_path,

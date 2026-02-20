@@ -52,8 +52,7 @@ def _call_query(
         if r.status_code >= 400:
             body_preview = r.text[:500].replace("\n", "\\n")
             raise RuntimeError(
-                f"Query request failed: {r.status_code} {r.reason_phrase}. "
-                f"URL={url}. Body preview={body_preview}"
+                f"Query request failed: {r.status_code} {r.reason_phrase}. URL={url}. Body preview={body_preview}"
             )
         return r.json()
 

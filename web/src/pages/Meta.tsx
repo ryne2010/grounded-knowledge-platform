@@ -1,4 +1,3 @@
-import React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, Page } from '../portfolio-ui'

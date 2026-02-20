@@ -11,7 +11,9 @@ This checklist is optimized for running a **public-facing demo** of the Grounded
 - [ ] Set `PUBLIC_DEMO_MODE=1` (forces extractive-only, disables uploads/eval)
 - [ ] Keep `ALLOW_UPLOADS` unset/false (demo mode overrides this anyway)
 - [ ] Keep `LLM_PROVIDER=extractive` (demo mode overrides this anyway)
-- [ ] Use local embeddings (`EMBEDDINGS_BACKEND=hash` or `sentence-transformers`)
+- [ ] Ensure citations-required behavior is enabled (`CITATIONS_REQUIRED=1`, forced in demo mode)
+- [ ] Use local embeddings (`EMBEDDINGS_BACKEND=hash` is recommended for a public demo)
+  - `sentence-transformers` is supported but requires an optional dependency + local model and increases image size
 - [ ] Ensure the demo corpus is **open-source/public** content only (`data/demo_corpus/`)
 
 ## Cloud Run deployment guardrails
@@ -31,6 +33,7 @@ This checklist is optimized for running a **public-facing demo** of the Grounded
 ## Rate limiting and abuse prevention
 
 - [ ] Keep `RATE_LIMIT_ENABLED=1`
+- [ ] Optionally set `RATE_LIMIT_SCOPE=api` to rate-limit all API endpoints (not just `/api/query`)
 - [ ] Tune `RATE_LIMIT_MAX_REQUESTS` to something reasonable (e.g. 20–60 per minute)
 - [ ] Keep `MAX_QUESTION_CHARS` capped (default 2000)
 - [ ] Keep `MAX_TOP_K` capped (default 8)

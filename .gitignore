@@ -6,6 +6,11 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Build artifacts
+dist/
+/.uv/
+/.cache/
+
 # Frontend
 web/node_modules/
 web/dist/

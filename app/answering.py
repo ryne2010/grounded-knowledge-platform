@@ -19,6 +19,7 @@ def get_answerer() -> AnswerProvider:
     if provider == "openai":
         try:
             from .llm.openai_provider import OpenAIAnswerer
+
             return OpenAIAnswerer()
         except Exception as e:
             logger.warning("Failed to init OpenAIAnswerer; falling back to extractive: %s", e)
@@ -26,6 +27,7 @@ def get_answerer() -> AnswerProvider:
     if provider == "gemini":
         try:
             from .llm.gemini_provider import GeminiAnswerer
+
             return GeminiAnswerer()
         except Exception as e:
             logger.warning("Failed to init GeminiAnswerer; falling back to extractive: %s", e)
@@ -33,6 +35,7 @@ def get_answerer() -> AnswerProvider:
     if provider == "ollama":
         try:
             from .llm.ollama_provider import OllamaAnswerer
+
             return OllamaAnswerer()
         except Exception as e:
             logger.warning("Failed to init OllamaAnswerer; falling back to extractive: %s", e)
