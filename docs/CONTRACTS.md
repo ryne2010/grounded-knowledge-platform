@@ -123,6 +123,7 @@ OCR is disabled by default. Enable only for private deployments.
 
 - `LOG_LEVEL=INFO|DEBUG|WARNING|ERROR` (default: `INFO`)
 - `OTEL_ENABLED=0|1` (default: `0`)
+- `OTEL_TRACES_EXPORTER=auto|none|otlp|gcp_trace` (default: `auto`)
 - `OTEL_EXPORTER_OTLP_ENDPOINT` (optional)
 - `OTEL_SERVICE_NAME` (default: `grounded-knowledge-platform`)
 - `OTEL_DEBUG_CONTENT=0|1` (default: `0`)

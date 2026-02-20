@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -22,13 +23,25 @@ def otel_enabled() -> bool:
     return bool(settings.otel_enabled) and _OTEL_READY
 
 
+def _resolve_trace_exporter_mode() -> str:
+    mode = (settings.otel_traces_exporter or "auto").strip().lower()
+    if mode != "auto":
+        return mode
+    if settings.otel_exporter_otlp_endpoint:
+        return "otlp"
+    # Cloud Run defaults to Cloud Trace exporter when no OTLP endpoint is provided.
+    if os.getenv("K_SERVICE"):
+        return "gcp_trace"
+    return "none"
+
+
 def setup_otel(app: Any) -> bool:
     """Configure FastAPI tracing when OTEL is enabled.
 
     Design goals:
     - near-zero overhead when OTEL is disabled
     - no hard dependency on otel packages for local demo mode
-    - Cloud Run friendly OTLP endpoint override
+    - Cloud Run friendly exporter selection (OTLP or Cloud Trace)
     """
 
     global _OTEL_READY, _OTEL_SETUP_ATTEMPTED, _TRACER
@@ -43,9 +56,6 @@ def setup_otel(app: Any) -> bool:
     try:
         from opentelemetry import metrics as otel_metrics  # type: ignore[import-not-found]
         from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # type: ignore[import-not-found]
-            OTLPSpanExporter,
-        )
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # type: ignore[import-not-found]
         from opentelemetry.sdk.metrics import MeterProvider  # type: ignore[import-not-found]
         from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader  # type: ignore[import-not-found]
@@ -60,12 +70,32 @@ def setup_otel(app: Any) -> bool:
     provider = TracerProvider(resource=resource)
 
     endpoint = settings.otel_exporter_otlp_endpoint
-    if endpoint:
-        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
+    trace_exporter_mode = _resolve_trace_exporter_mode()
+    if trace_exporter_mode == "otlp":
+        if not endpoint:
+            logger.warning(
+                "OTEL trace exporter mode is otlp but OTEL_EXPORTER_OTLP_ENDPOINT is not set; spans will stay local"
+            )
+        else:
+            try:
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # type: ignore[import-not-found]
+                    OTLPSpanExporter,
+                )
+
+                provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
+            except Exception as e:  # pragma: no cover
+                logger.warning("OTEL OTLP trace exporter init failed; spans will stay local. error=%s", e)
+    elif trace_exporter_mode == "gcp_trace":
+        try:
+            from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter  # type: ignore[import-not-found]
+
+            provider.add_span_processor(BatchSpanProcessor(CloudTraceSpanExporter()))
+        except Exception as e:  # pragma: no cover
+            logger.warning("OTEL Cloud Trace exporter init failed; spans will stay local. error=%s", e)
     else:
-        # Keep setup valid even if no exporter endpoint is configured.
-        # Operators can still wire endpoint later via env vars.
-        logger.info("OTEL enabled without OTLP endpoint; spans will stay local to process")
+        logger.info("OTEL tracing enabled without exporter; spans will stay local to process")
+
+    logger.info("OTEL trace exporter mode resolved to %s", trace_exporter_mode)
 
     trace.set_tracer_provider(provider)
     FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)

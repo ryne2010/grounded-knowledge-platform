@@ -76,6 +76,12 @@ variable "allow_unauthenticated" {
   default     = true
 }
 
+variable "private_invoker_members" {
+  type        = list(string)
+  description = "Additional IAM members to grant roles/run.invoker when allow_unauthenticated=false (e.g., [\"user:you@example.com\"])."
+  default     = []
+}
+
 variable "min_instances" {
   type        = number
   description = "Minimum Cloud Run instances (0 for scale-to-zero)."
@@ -104,6 +110,12 @@ variable "enable_cloudsql" {
   type        = bool
   description = "Create a Cloud SQL Postgres instance and mount it to Cloud Run."
   default     = false
+}
+
+variable "secret_env" {
+  type        = map(string)
+  description = "Map of Cloud Run env var name -> Secret Manager secret_id (latest version). Example: { API_KEY = \"gkp-stage-api-key\" }"
+  default     = {}
 }
 
 variable "cloudsql_tier" {

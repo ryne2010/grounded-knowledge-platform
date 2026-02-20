@@ -15,6 +15,7 @@ The API supports OpenTelemetry tracing with a strict default-off posture.
 
 Environment variables:
 - `OTEL_ENABLED=0|1` (default: `0`)
+- `OTEL_TRACES_EXPORTER=auto|none|otlp|gcp_trace` (default: `auto`)
 - `OTEL_SERVICE_NAME` (default: `grounded-knowledge-platform`)
 - `OTEL_EXPORTER_OTLP_ENDPOINT` (optional; OTLP HTTP endpoint)
 - `OTEL_DEBUG_CONTENT=0|1` (default: `0`)
@@ -39,7 +40,8 @@ Privacy-by-default:
 - `OTEL_DEBUG_CONTENT=1` is reserved for short-lived debugging in private environments
 
 Cloud Run notes:
-- prefer OTLP export to your collector/managed backend over console logging
+- `OTEL_TRACES_EXPORTER=auto` on Cloud Run defaults to `gcp_trace` when no OTLP endpoint is set.
+- For managed collectors, set `OTEL_TRACES_EXPORTER=otlp` + `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - keep OTEL off in public demo mode unless you explicitly need traces
 
 ---

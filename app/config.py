@@ -60,6 +60,7 @@ _ALLOWED_LLM_PROVIDERS = {"extractive", "openai", "gemini", "ollama"}
 _ALLOWED_EMBEDDINGS_BACKENDS = {"none", "hash", "sentence-transformers"}
 _ALLOWED_RATE_LIMIT_SCOPES = {"query", "api"}
 _ALLOWED_AUTH_MODES = {"none", "api_key", "oidc"}
+_ALLOWED_OTEL_TRACE_EXPORTERS = {"auto", "none", "otlp", "gcp_trace"}
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,7 @@ class Settings:
     # ---- OpenTelemetry ----
     otel_enabled: bool
     otel_exporter_otlp_endpoint: str | None
+    otel_traces_exporter: str
     otel_service_name: str
     otel_debug_content: bool
 
@@ -196,6 +198,9 @@ def load_settings() -> Settings:
 
     otel_enabled = _env_bool("OTEL_ENABLED", False)
     otel_exporter_otlp_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or None
+    otel_traces_exporter = _env_str("OTEL_TRACES_EXPORTER", "auto").lower().strip()
+    if otel_traces_exporter not in _ALLOWED_OTEL_TRACE_EXPORTERS:
+        otel_traces_exporter = "auto"
     otel_service_name = _env_str("OTEL_SERVICE_NAME", "grounded-knowledge-platform")
     otel_debug_content = _env_bool("OTEL_DEBUG_CONTENT", False)
 
@@ -256,6 +261,7 @@ def load_settings() -> Settings:
         rate_limit_max_requests=rate_limit_max_requests,
         otel_enabled=otel_enabled,
         otel_exporter_otlp_endpoint=otel_exporter_otlp_endpoint,
+        otel_traces_exporter=otel_traces_exporter,
         otel_service_name=otel_service_name,
         otel_debug_content=otel_debug_content,
         sqlite_path=sqlite_path,
@@ -308,6 +314,7 @@ def load_settings() -> Settings:
             rate_limit_max_requests=s.rate_limit_max_requests,
             otel_enabled=s.otel_enabled,
             otel_exporter_otlp_endpoint=s.otel_exporter_otlp_endpoint,
+            otel_traces_exporter=s.otel_traces_exporter,
             otel_service_name=s.otel_service_name,
             otel_debug_content=s.otel_debug_content,
             sqlite_path=s.sqlite_path,

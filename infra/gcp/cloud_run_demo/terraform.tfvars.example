@@ -14,6 +14,17 @@ artifact_repo_name = "gkp"
 image_name         = "gkp"
 image_tag          = "latest"
 
+# Keep services private and allow selected principals to invoke via browser/API auth.
+# allow_unauthenticated = false
+# private_invoker_members = [
+#   "user:you@example.com",
+# ]
+
+# Optional: wire env vars from Secret Manager (latest version).
+# secret_env = {
+#   API_KEY = "gkp-dev-api-key"
+# }
+
 # Optional: demonstrate group-based IAM without Workspace/Cloud Identity.
 # clients_observers_group_email              = "gkp-observers@googlegroups.com"
 # enable_clients_observers_monitoring_viewer = true

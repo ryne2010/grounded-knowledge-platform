@@ -23,6 +23,8 @@ def _reload_app(sqlite_path: str) -> object:
     os.environ["OTEL_ENABLED"] = "1"
     os.environ["OTEL_SERVICE_NAME"] = "gkp-test"
     os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+    os.environ.pop("OTEL_TRACES_EXPORTER", None)
+    os.environ.pop("K_SERVICE", None)
 
     import app.config as config
     import app.ingestion as ingestion
@@ -38,6 +40,32 @@ def _reload_app(sqlite_path: str) -> object:
     importlib.reload(retrieval)
     importlib.reload(main)
     return main
+
+
+def test_trace_exporter_mode_resolution():
+    os.environ["OTEL_ENABLED"] = "1"
+    os.environ["OTEL_SERVICE_NAME"] = "gkp-test"
+    os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+    os.environ["OTEL_TRACES_EXPORTER"] = "auto"
+    os.environ.pop("K_SERVICE", None)
+
+    import app.config as config
+    import app.otel as otel
+
+    importlib.reload(config)
+    importlib.reload(otel)
+    assert otel._resolve_trace_exporter_mode() == "none"
+
+    os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://collector:4318/v1/traces"
+    importlib.reload(config)
+    importlib.reload(otel)
+    assert otel._resolve_trace_exporter_mode() == "otlp"
+
+    os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+    os.environ["K_SERVICE"] = "gkp-stage"
+    importlib.reload(config)
+    importlib.reload(otel)
+    assert otel._resolve_trace_exporter_mode() == "gcp_trace"
 
 
 def test_query_request_emits_key_spans_and_preserves_request_id(tmp_path):

@@ -63,6 +63,17 @@ resource "google_cloud_run_v2_service_iam_member" "engineers_min_invoker" {
   member = local.engineers_min_group
 }
 
+resource "google_cloud_run_v2_service_iam_member" "private_invokers" {
+  for_each = var.allow_unauthenticated ? toset([]) : toset(var.private_invoker_members)
+
+  project  = var.project_id
+  location = var.region
+  name     = module.cloud_run.service_name
+
+  role   = "roles/run.invoker"
+  member = each.value
+}
+
 # --- Log View access (least-privilege client observability) ------------------
 #
 # Clients often need access to *just* this service's logs — not the whole project.

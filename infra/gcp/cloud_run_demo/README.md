@@ -6,6 +6,8 @@ What this demonstrates (staff-level):
 - **Remote Terraform state** (GCS backend)
 - **Plan/apply separation** (PR-friendly)
 - **Safe public demo defaults** (`PUBLIC_DEMO_MODE=1`, no uploads, extractive-only)
+- Optional **private service IAM** via `allow_unauthenticated=false` + `private_invoker_members`
+- Optional **Secret Manager env wiring** via `secret_env` (no plaintext keys in tfvars)
 - **Scale-to-zero** (min instances 0)
 - **Cost guardrails** (max instances cap)
 - macOS-friendly **Cloud Build** based image builds

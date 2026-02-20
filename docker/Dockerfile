@@ -40,8 +40,10 @@ COPY pyproject.toml ./
 # to make builds more reproducible.
 COPY uv.lock ./
 
-# Install only runtime deps into /opt/venv
-RUN uv sync --no-dev --no-install-project
+# Install runtime deps + deployment extras:
+# - cloudsql: psycopg for Postgres/Cloud SQL connectivity
+# - observability: OpenTelemetry SDK/instrumentation
+RUN uv sync --no-dev --no-install-project --extra cloudsql --extra observability
 
 COPY app ./app
 COPY data ./data

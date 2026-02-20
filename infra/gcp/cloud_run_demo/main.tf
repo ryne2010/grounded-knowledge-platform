@@ -17,7 +17,7 @@ locals {
     GKP_ENV     = var.env
 
     PUBLIC_DEMO_MODE      = "1"
-    CITATIONS_REQUIRED     = "1"
+    CITATIONS_REQUIRED    = "1"
     BOOTSTRAP_DEMO_CORPUS = var.bootstrap_demo_corpus ? "1" : "0"
 
     # On Cloud Run, /tmp is the safest writable location.
@@ -145,6 +145,7 @@ module "cloud_run" {
 
   allow_unauthenticated = var.allow_unauthenticated
   env_vars              = local.env_vars
+  secret_env            = var.secret_env
   cloud_sql_instances   = var.enable_cloudsql ? [google_sql_database_instance.cloudsql[0].connection_name] : []
   labels                = local.labels
 
@@ -153,4 +154,13 @@ module "cloud_run" {
 
   vpc_connector_id = var.enable_vpc_connector ? module.network[0].serverless_connector_id : null
   vpc_egress       = var.vpc_egress
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_secret_access" {
+  for_each = toset(values(var.secret_env))
+
+  project   = var.project_id
+  secret_id = each.value
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${module.service_accounts.runtime_service_account_email}"
 }
