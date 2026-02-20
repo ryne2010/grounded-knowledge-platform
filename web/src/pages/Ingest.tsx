@@ -39,6 +39,7 @@ export function IngestPage() {
 
   // ---- Upload form ----
   const [file, setFile] = React.useState<File | null>(null)
+  const [contractFile, setContractFile] = React.useState<File | null>(null)
   const [fileTitle, setFileTitle] = React.useState('')
   const [fileSource, setFileSource] = React.useState('ui:file')
   const [fileClassification, setFileClassification] = React.useState('internal')
@@ -137,7 +138,25 @@ export function IngestPage() {
         accessorKey: 'changed',
         cell: (info: any) => {
           const v = Boolean(info.getValue())
-          return v ? <Badge variant="success">changed</Badge> : <Badge variant="outline">no</Badge>
+          const e = info.row.original as IngestEventView
+          return (
+            <div className="flex flex-wrap gap-1">
+              {v ? <Badge variant="success">changed</Badge> : <Badge variant="outline">no</Badge>}
+              {e.schema_drifted ? <Badge variant="warning">drift</Badge> : null}
+            </div>
+          )
+        },
+      },
+      {
+        header: 'Validation',
+        accessorKey: 'validation_status',
+        cell: (info: any) => {
+          const status = String(info.getValue() ?? '').toLowerCase()
+          if (!status) return <span className="text-xs text-muted-foreground">—</span>
+          if (status === 'pass') return <Badge variant="success">pass</Badge>
+          if (status === 'warn') return <Badge variant="warning">warn</Badge>
+          if (status === 'fail') return <Badge variant="destructive">fail</Badge>
+          return <Badge variant="outline">{status}</Badge>
         },
       },
       {
@@ -175,6 +194,7 @@ export function IngestPage() {
 
   const classifications = meta?.doc_classifications ?? ['public', 'internal', 'confidential', 'restricted']
   const retentions = meta?.doc_retentions ?? ['none', '30d', '90d', '1y', 'indefinite']
+  const tabularSelected = Boolean(file && /\.(csv|tsv|xlsx|xlsm)$/i.test(file.name))
 
   return (
     <Page>
@@ -204,13 +224,35 @@ export function IngestPage() {
                   id="file"
                   type="file"
                   accept=".md,.txt,.pdf,.csv,.tsv,.xlsx,.xlsm"
-                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  onChange={(e) => {
+                    const next = e.target.files?.[0] ?? null
+                    setFile(next)
+                    if (!next || !/\.(csv|tsv|xlsx|xlsm)$/i.test(next.name)) {
+                      setContractFile(null)
+                    }
+                  }}
                   disabled={!uploadsEnabled}
                 />
                 <div className="text-xs text-muted-foreground">
                   Max upload size: {meta?.max_upload_bytes ? `${meta.max_upload_bytes.toLocaleString()} bytes` : '—'}
                 </div>
               </div>
+
+              {tabularSelected ? (
+                <div className="space-y-2">
+                  <Label htmlFor="contractFile">Contract file (optional YAML)</Label>
+                  <Input
+                    id="contractFile"
+                    type="file"
+                    accept=".yaml,.yml"
+                    onChange={(e) => setContractFile(e.target.files?.[0] ?? null)}
+                    disabled={!uploadsEnabled}
+                  />
+                  <div className="text-xs text-muted-foreground">
+                    Applies contract validation + schema drift tracking for tabular ingests.
+                  </div>
+                </div>
+              ) : null}
 
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-2">
@@ -286,6 +328,7 @@ export function IngestPage() {
                     if (!file) return
                     uploadMutation.mutate({
                       file,
+                      contractFile: contractFile ?? undefined,
                       title: fileTitle.trim() || undefined,
                       source: fileSource || undefined,
                       classification: fileClassification || undefined,
@@ -302,6 +345,7 @@ export function IngestPage() {
                   variant="outline"
                   onClick={() => {
                     setFile(null)
+                    setContractFile(null)
                     setFileTitle('')
                     setFileTags('')
                     setFileNotes('')
@@ -429,7 +473,7 @@ export function IngestPage() {
                     if (!pasteTitle.trim() || !pasteText.trim()) return
                     pasteMutation.mutate({
                       title: pasteTitle.trim(),
-                      source: pasteSource || undefined,
+                      source: pasteSource,
                       text: pasteText,
                       classification: pasteClassification || undefined,
                       retention: pasteRetention || undefined,
@@ -503,7 +547,7 @@ export function IngestPage() {
                 <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by doc/source/tag/backend…" />
               </div>
               <div className="flex items-center gap-2">
-                <Checkbox id="changedOnly" checked={changedOnly} onCheckedChange={(v) => setChangedOnly(Boolean(v))} />
+                <Checkbox id="changedOnly" checked={changedOnly} onChange={(e) => setChangedOnly(e.currentTarget.checked)} />
                 <Label htmlFor="changedOnly">Changed only</Label>
               </div>
             </div>

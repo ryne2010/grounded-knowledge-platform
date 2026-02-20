@@ -9,6 +9,41 @@ Files to review:
 
 ---
 
+## OpenTelemetry tracing (optional)
+
+The API supports OpenTelemetry tracing with a strict default-off posture.
+
+Environment variables:
+- `OTEL_ENABLED=0|1` (default: `0`)
+- `OTEL_SERVICE_NAME` (default: `grounded-knowledge-platform`)
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (optional; OTLP HTTP endpoint)
+- `OTEL_DEBUG_CONTENT=0|1` (default: `0`)
+
+When enabled, spans include:
+- request lifecycle (FastAPI instrumentation)
+- `safety.prompt_injection_scan`
+- `retrieval.retrieve`
+- `generation.answer`
+
+Metrics (OTEL SDK) include:
+- `gkp.http.server.requests`
+- `gkp.http.server.duration_ms`
+- `gkp.query.safety_scan.duration_ms`
+- `gkp.query.retrieval.duration_ms`
+- `gkp.query.generation.duration_ms`
+
+These are emitted only when `OTEL_ENABLED=1`; otherwise metric recorders are no-ops.
+
+Privacy-by-default:
+- document text and raw user prompts are **not** recorded in span attributes by default
+- `OTEL_DEBUG_CONTENT=1` is reserved for short-lived debugging in private environments
+
+Cloud Run notes:
+- prefer OTLP export to your collector/managed backend over console logging
+- keep OTEL off in public demo mode unless you explicitly need traces
+
+---
+
 ## Logging: service-scoped logs (client-safe pattern)
 
 Instead of giving stakeholders broad `roles/logging.viewer` access on the project, this repo:

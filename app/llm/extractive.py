@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Iterator
 
 from .base import Answer, Citation
 
@@ -14,6 +15,18 @@ class ExtractiveAnswerer:
     """
 
     name = "extractive"
+
+    def stream_answer(self, question: str, context: list[tuple[str, str, int, str]]) -> Iterator[str]:
+        ans = self.answer(question, context)
+        text = (ans.text or "").strip()
+        if not text:
+            return
+        parts = [p.strip() for p in _SENT_RE.split(text) if p.strip()]
+        if not parts:
+            yield text
+            return
+        for p in parts:
+            yield p
 
     def answer(self, question: str, context: list[tuple[str, str, int, str]]) -> Answer:
         if not context:

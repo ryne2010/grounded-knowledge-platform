@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { useMemo, useState } from 'react'
 
 import { api, Doc } from '../api'
+import { useOfflineStatus } from '../lib/offline'
 import { formatUnixSeconds } from '../lib/time'
 import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, DataTable, Input, Page, Section, Spinner } from '../portfolio-ui'
 
@@ -21,6 +22,7 @@ function isExpired(doc: Doc, nowSec: number): boolean {
 
 export function DocsPage() {
   const [q, setQ] = useState('')
+  const offline = useOfflineStatus()
 
   const docsQuery = useQuery({
     queryKey: ['docs'],
@@ -135,10 +137,17 @@ export function DocsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            {offline ? (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Offline: showing cached docs if available.
+              </div>
+            ) : null}
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by title/source/tag…" />
             {docsQuery.isLoading ? <Spinner /> : null}
             {docsQuery.isError ? (
-              <div className="rounded-md border bg-destructive/10 p-3 text-sm">{(docsQuery.error as Error).message}</div>
+              <div className="rounded-md border bg-destructive/10 p-3 text-sm">
+                {offline ? 'Offline and no cached docs available.' : (docsQuery.error as Error).message}
+              </div>
             ) : null}
             <DataTable<Doc> data={filtered} columns={columns} height={520} />
           </CardContent>

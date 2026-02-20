@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
 import { api, type QueryResponse, type RetrievalDebug } from '../api'
+import { useOfflineStatus } from '../lib/offline'
 import {
   Badge,
   Button,
@@ -219,6 +220,10 @@ export function HomePage() {
   const [question, setQuestion] = React.useState('')
   const [topK, setTopK] = React.useState(5)
   const [debug, setDebug] = React.useState(false)
+  const [useStreaming, setUseStreaming] = React.useState(true)
+  const [streamingTurnId, setStreamingTurnId] = React.useState<string | null>(null)
+  const streamAbortRef = React.useRef<AbortController | null>(null)
+  const offline = useOfflineStatus()
 
   const [turns, setTurns] = React.useState<ChatTurn[]>(() => (typeof window === 'undefined' ? [] : loadTurns()))
 
@@ -254,6 +259,91 @@ export function HomePage() {
 
     setTurns((prev) => [...prev, next].slice(-MAX_TURNS))
 
+    if (useStreaming) {
+      const controller = new AbortController()
+      streamAbortRef.current = controller
+      setStreamingTurnId(id)
+      setTurns((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                response: {
+                  question: q,
+                  answer: '',
+                  refused: false,
+                  refusal_reason: null,
+                  provider: 'stream',
+                  citations: [],
+                  retrieval: [],
+                },
+              }
+            : t,
+        ),
+      )
+
+      try {
+        const res = await api.queryStream(
+          q,
+          topK,
+          {
+            onRetrieval: (rows) => {
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.id === id && t.response
+                    ? {
+                        ...t,
+                        response: { ...t.response, retrieval: rows },
+                      }
+                    : t,
+                ),
+              )
+            },
+            onToken: (token) => {
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.id === id && t.response
+                    ? {
+                        ...t,
+                        response: {
+                          ...t.response,
+                          answer: `${t.response.answer}${t.response.answer ? ' ' : ''}${token}`,
+                        },
+                      }
+                    : t,
+                ),
+              )
+            },
+            onCitations: (citations) => {
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.id === id && t.response
+                    ? {
+                        ...t,
+                        response: { ...t.response, citations },
+                      }
+                    : t,
+                ),
+              )
+            },
+          },
+          controller.signal,
+        )
+        setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, response: res } : t)))
+      } catch (e: unknown) {
+        if ((e as Error)?.name === 'AbortError') {
+          setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, error: 'Canceled' } : t)))
+        } else {
+          const msg = e instanceof Error ? e.message : String(e)
+          setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, error: msg } : t)))
+        }
+      } finally {
+        streamAbortRef.current = null
+        setStreamingTurnId(null)
+      }
+      return
+    }
+
     try {
       const res = await queryMutation.mutateAsync({ question: q, top_k: topK, debug })
       setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, response: res } : t)))
@@ -264,6 +354,7 @@ export function HomePage() {
   }
 
   const maxTopK = typeof meta?.max_top_k === 'number' ? meta.max_top_k : 8
+  const isBusy = queryMutation.isPending || Boolean(streamingTurnId)
 
   const actions = (
     <>
@@ -309,6 +400,12 @@ export function HomePage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {offline ? (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  Offline mode: asking is disabled until the API is reachable.
+                </div>
+              ) : null}
+
               <div className="space-y-2">
                 <Label htmlFor="question">Question</Label>
                 <Textarea
@@ -334,13 +431,22 @@ export function HomePage() {
                   <Checkbox
                     id="debug"
                     checked={debug}
-                    onCheckedChange={(v) => setDebug(Boolean(v))}
+                    onChange={(e) => setDebug(e.currentTarget.checked)}
                     disabled={Boolean(meta?.public_demo_mode)}
                   />
                   <Label htmlFor="debug">Debug retrieval</Label>
                   {meta?.public_demo_mode ? (
                     <span className="text-xs text-muted-foreground">(disabled in demo)</span>
                   ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="streaming"
+                    checked={useStreaming}
+                    onChange={(e) => setUseStreaming(e.currentTarget.checked)}
+                    disabled={isBusy}
+                  />
+                  <Label htmlFor="streaming">Streaming mode</Label>
                 </div>
               </div>
 
@@ -353,12 +459,21 @@ export function HomePage() {
               </div>
 
               <div className="flex items-center gap-2">
-                <Button onClick={onAsk} disabled={!question.trim() || queryMutation.isPending}>
-                  {queryMutation.isPending ? 'Asking…' : 'Ask'}
+                <Button onClick={onAsk} disabled={!question.trim() || isBusy || offline}>
+                  {isBusy ? 'Asking…' : 'Ask'}
                 </Button>
                 <Button variant="outline" onClick={() => setQuestion('')} disabled={!question}>
                   Reset
                 </Button>
+                {streamingTurnId ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => streamAbortRef.current?.abort()}
+                    disabled={!streamingTurnId}
+                  >
+                    Cancel
+                  </Button>
+                ) : null}
               </div>
             </CardContent>
           </Card>

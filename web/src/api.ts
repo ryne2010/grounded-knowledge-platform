@@ -1,6 +1,8 @@
 export type MetaResponse = {
   version?: string
   public_demo_mode: boolean
+  auth_mode?: string
+  database_backend?: string
   uploads_enabled: boolean
   eval_enabled: boolean
   chunk_view_enabled: boolean
@@ -57,6 +59,11 @@ export type IngestEvent = {
   embedding_dim: number
   chunk_size_chars: number
   chunk_overlap_chars: number
+  schema_fingerprint?: string | null
+  contract_sha256?: string | null
+  validation_status?: 'pass' | 'warn' | 'fail' | null
+  validation_errors?: string[]
+  schema_drifted?: boolean
   notes: string | null
 }
 
@@ -168,6 +175,22 @@ export type QueryResponse = {
   retrieval?: RetrievalDebug[]
 }
 
+export type QueryStreamDone = {
+  question: string
+  answer: string
+  refused: boolean
+  refusal_reason: string | null
+  provider: string
+}
+
+export type QueryStreamHandlers = {
+  onRetrieval?: (rows: RetrievalDebug[]) => void
+  onToken?: (text: string) => void
+  onCitations?: (citations: QueryCitation[]) => void
+  onDone?: (done: QueryStreamDone) => void
+  onError?: (message: string) => void
+}
+
 export type EvalRequest = {
   golden_path: string
   k: number
@@ -245,14 +268,28 @@ export type ExpiredDocsResponse = {
   expired: ExpiredDoc[]
 }
 
+const OFFLINE_EVENT = 'gkp:network-offline'
+const ONLINE_EVENT = 'gkp:network-online'
+
+function dispatchNetworkEvent(name: string) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(name))
+}
+
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      ...(init?.headers ?? {}),
-    },
-  })
-  return res
+  try {
+    const res = await fetch(path, {
+      ...init,
+      headers: {
+        ...(init?.headers ?? {}),
+      },
+    })
+    dispatchNetworkEvent(ONLINE_EVENT)
+    return res
+  } catch (e) {
+    dispatchNetworkEvent(OFFLINE_EVENT)
+    throw e
+  }
 }
 
 function formatHttpError(res: Response, bodyText: string): string {
@@ -294,6 +331,26 @@ async function patchJson<TReq, TRes>(path: string, body: TReq): Promise<TRes> {
     throw new Error(formatHttpError(res, text))
   }
   return (await res.json()) as TRes
+}
+
+function parseSseEvents(chunk: string): Array<{ event: string; data: string }> {
+  const out: Array<{ event: string; data: string }> = []
+  const blocks = chunk.split('\n\n')
+  for (const block of blocks) {
+    const trimmed = block.trim()
+    if (!trimmed) continue
+    let event = 'message'
+    const dataLines: string[] = []
+    for (const line of trimmed.split('\n')) {
+      if (line.startsWith('event:')) {
+        event = line.slice(6).trim()
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice(5).trim())
+      }
+    }
+    out.push({ event, data: dataLines.join('\n') })
+  }
+  return out
 }
 
 export const api = {
@@ -358,6 +415,7 @@ export const api = {
 
   ingestFile: async (opts: {
     file: File
+    contractFile?: File
     title?: string
     source?: string
     classification?: string
@@ -367,6 +425,7 @@ export const api = {
   }) => {
     const form = new FormData()
     form.append('file', opts.file)
+    if (opts.contractFile) form.append('contract_file', opts.contractFile)
     if (opts.title) form.append('title', opts.title)
     if (opts.source) form.append('source', opts.source)
     if (opts.classification) form.append('classification', opts.classification)
@@ -391,6 +450,133 @@ export const api = {
       top_k,
       debug,
     }),
+
+  queryStream: async (
+    question: string,
+    top_k = 5,
+    handlers: QueryStreamHandlers = {},
+    signal?: AbortSignal,
+  ): Promise<QueryResponse> => {
+    const res = await apiFetch('/api/query/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, top_k }),
+      signal,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(formatHttpError(res, text))
+    }
+    if (!res.body) {
+      throw new Error('Streaming not supported by this browser')
+    }
+
+    const decoder = new TextDecoder()
+    const reader = res.body.getReader()
+    let buffer = ''
+
+    let answer = ''
+    let citations: QueryCitation[] = []
+    let retrieval: RetrievalDebug[] | undefined
+    let done: QueryStreamDone | null = null
+
+    while (true) {
+      const { value, done: doneReading } = await reader.read()
+      if (doneReading) break
+      buffer += decoder.decode(value, { stream: true })
+      const boundary = buffer.lastIndexOf('\n\n')
+      if (boundary < 0) continue
+
+      const ready = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + 2)
+      const events = parseSseEvents(ready)
+
+      for (const evt of events) {
+        let parsed: any = {}
+        try {
+          parsed = evt.data ? JSON.parse(evt.data) : {}
+        } catch {
+          parsed = {}
+        }
+
+        if (evt.event === 'retrieval') {
+          retrieval = Array.isArray(parsed) ? (parsed as RetrievalDebug[]) : []
+          handlers.onRetrieval?.(retrieval)
+          continue
+        }
+        if (evt.event === 'token') {
+          const token = String(parsed?.text ?? '')
+          answer += (answer ? ' ' : '') + token
+          handlers.onToken?.(token)
+          continue
+        }
+        if (evt.event === 'citations') {
+          citations = Array.isArray(parsed) ? (parsed as QueryCitation[]) : []
+          handlers.onCitations?.(citations)
+          continue
+        }
+        if (evt.event === 'done') {
+          done = {
+            question: String(parsed?.question ?? question),
+            answer: String(parsed?.answer ?? answer),
+            refused: Boolean(parsed?.refused),
+            refusal_reason: parsed?.refusal_reason ?? null,
+            provider: String(parsed?.provider ?? 'unknown'),
+          }
+          handlers.onDone?.(done)
+          continue
+        }
+        if (evt.event === 'error') {
+          handlers.onError?.(String(parsed?.message ?? 'stream error'))
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      const tailEvents = parseSseEvents(buffer)
+      for (const evt of tailEvents) {
+        let parsed: any = {}
+        try {
+          parsed = evt.data ? JSON.parse(evt.data) : {}
+        } catch {
+          parsed = {}
+        }
+        if (evt.event === 'done') {
+          done = {
+            question: String(parsed?.question ?? question),
+            answer: String(parsed?.answer ?? answer),
+            refused: Boolean(parsed?.refused),
+            refusal_reason: parsed?.refusal_reason ?? null,
+            provider: String(parsed?.provider ?? 'unknown'),
+          }
+        } else if (evt.event === 'citations' && Array.isArray(parsed)) {
+          citations = parsed as QueryCitation[]
+        } else if (evt.event === 'retrieval' && Array.isArray(parsed)) {
+          retrieval = parsed as RetrievalDebug[]
+        }
+      }
+    }
+
+    if (!done) {
+      done = {
+        question,
+        answer,
+        refused: false,
+        refusal_reason: null,
+        provider: 'unknown',
+      }
+    }
+
+    return {
+      question: done.question,
+      answer: done.answer || answer,
+      refused: done.refused,
+      refusal_reason: done.refusal_reason,
+      provider: done.provider,
+      citations,
+      retrieval,
+    }
+  },
 
   runEval: (req: EvalRequest) => postJson<EvalRequest, EvalResponse>('/api/eval/run', req),
 }

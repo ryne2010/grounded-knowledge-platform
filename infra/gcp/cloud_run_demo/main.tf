@@ -12,7 +12,7 @@ locals {
   # - extractive-only (no generative output)
   # - no uploads
   # - fixed demo corpus
-  env_vars = {
+  base_env_vars = {
     GCP_PROJECT = var.project_id
     GKP_ENV     = var.env
 
@@ -33,6 +33,29 @@ locals {
     RATE_LIMIT_WINDOW_S     = "60"
     RATE_LIMIT_MAX_REQUESTS = "30"
   }
+
+  cloudsql_connection_name = var.enable_cloudsql ? google_sql_database_instance.cloudsql[0].connection_name : null
+  cloudsql_database_url = var.enable_cloudsql ? format(
+    "postgresql://%s:%s@/%s?host=/cloudsql/%s",
+    var.cloudsql_user,
+    random_password.cloudsql_password[0].result,
+    var.cloudsql_database,
+    google_sql_database_instance.cloudsql[0].connection_name,
+  ) : null
+
+  env_vars = merge(
+    local.base_env_vars,
+    var.enable_cloudsql ? { DATABASE_URL = local.cloudsql_database_url } : {},
+  )
+
+  runtime_roles = concat(
+    [
+      "roles/logging.logWriter",
+      "roles/monitoring.metricWriter",
+      "roles/cloudtrace.agent",
+    ],
+    var.enable_cloudsql ? ["roles/cloudsql.client"] : [],
+  )
 }
 
 module "core_services" {
@@ -80,11 +103,7 @@ module "service_accounts" {
   runtime_display_name = "GKP Runtime (${var.env})"
 
   # Cloud Run runtime needs logs/metrics and (optionally) trace correlation.
-  runtime_roles = [
-    "roles/logging.logWriter",
-    "roles/monitoring.metricWriter",
-    "roles/cloudtrace.agent",
-  ]
+  runtime_roles = local.runtime_roles
 }
 
 module "network" {
@@ -126,6 +145,7 @@ module "cloud_run" {
 
   allow_unauthenticated = var.allow_unauthenticated
   env_vars              = local.env_vars
+  cloud_sql_instances   = var.enable_cloudsql ? [google_sql_database_instance.cloudsql[0].connection_name] : []
   labels                = local.labels
 
   # For personal demos, keep cleanup easy.

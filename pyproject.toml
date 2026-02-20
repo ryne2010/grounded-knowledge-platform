@@ -33,6 +33,17 @@ embeddings = [
   "sentence-transformers>=5.2.2",
 ]
 
+observability = [
+  "opentelemetry-api>=1.27.0",
+  "opentelemetry-sdk>=1.27.0",
+  "opentelemetry-exporter-otlp>=1.27.0",
+  "opentelemetry-instrumentation-fastapi>=0.48b0",
+]
+
+cloudsql = [
+  "psycopg[binary]>=3.2",
+]
+
 [dependency-groups]
 dev = [
   "pytest>=8.0.0",
@@ -49,4 +60,3 @@ python_version = "3.11"
 warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
-

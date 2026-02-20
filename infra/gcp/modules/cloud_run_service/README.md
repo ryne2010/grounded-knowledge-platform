@@ -4,6 +4,7 @@ Deploys a **Cloud Run (v2) service** with optional:
 - unauthenticated access (public)
 - Secret Manager env vars (latest version)
 - Serverless VPC Access connector
+- Cloud SQL Unix socket mount (`cloud_sql_instances` -> `/cloudsql`)
 
 Defaults are chosen for low-cost demos:
 - `min_instances = 0` (scale to zero)

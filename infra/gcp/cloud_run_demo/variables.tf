@@ -100,6 +100,36 @@ variable "vpc_egress" {
   default     = "PRIVATE_RANGES_ONLY"
 }
 
+variable "enable_cloudsql" {
+  type        = bool
+  description = "Create a Cloud SQL Postgres instance and mount it to Cloud Run."
+  default     = false
+}
+
+variable "cloudsql_tier" {
+  type        = string
+  description = "Cloud SQL machine tier."
+  default     = "db-custom-1-3840"
+}
+
+variable "cloudsql_disk_size_gb" {
+  type        = number
+  description = "Cloud SQL disk size (GB)."
+  default     = 20
+}
+
+variable "cloudsql_database" {
+  type        = string
+  description = "Application database name."
+  default     = "gkp"
+}
+
+variable "cloudsql_user" {
+  type        = string
+  description = "Application database user."
+  default     = "gkp_app"
+}
+
 # --- Workspace / team IAM (Google Groups) ---
 # We intentionally keep this optional so you can run a solo demo in a personal project.
 

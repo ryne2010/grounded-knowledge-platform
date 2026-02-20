@@ -64,7 +64,7 @@ export function MaintenancePage() {
   const demo = metaQuery.data?.public_demo_mode ?? false
 
   return (
-    <Page title="Maintenance" subtitle="Read-only operational helpers (no destructive actions)">
+    <Page title="Maintenance" description="Read-only operational helpers (no destructive actions)">
       <Section title="Retention" description="See what would be purged based on the doc retention policy.">
         <Card>
           <CardHeader>

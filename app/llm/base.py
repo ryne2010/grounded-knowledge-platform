@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Iterator, Protocol
 
 
 @dataclass(frozen=True)
@@ -27,4 +27,12 @@ class AnswerProvider(Protocol):
         """
         context entries are (chunk_id, doc_id, idx, text)
         """
+        ...
+
+
+class StreamingAnswerProvider(Protocol):
+    name: str
+
+    def stream_answer(self, question: str, context: list[tuple[str, str, int, str]]) -> Iterator[str]:
+        """Yield provider-native text deltas for streaming responses."""
         ...

@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { useMemo, useState } from 'react'
 
 import { api, ChunkSearchResult } from '../api'
+import { useOfflineStatus } from '../lib/offline'
 import {
   Badge,
   Card,
@@ -32,6 +33,7 @@ function fmtScore(v: number | null | undefined): string {
 }
 
 export function SearchPage() {
+  const offline = useOfflineStatus()
   const metaQuery = useQuery({ queryKey: ['meta'], queryFn: api.meta, staleTime: 30_000 })
   const chunkViewEnabled = Boolean(metaQuery.data?.chunk_view_enabled)
 
@@ -156,6 +158,11 @@ export function SearchPage() {
             <CardDescription>Tip: start with 2–3 keywords. Click a doc title to jump to its ingest lineage.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            {offline ? (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Offline: search requires live API access and may be unavailable.
+              </div>
+            ) : null}
             <div className="grid gap-2 sm:grid-cols-3">
               <div className="sm:col-span-2">
                 <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search chunks (keywords)…" />
@@ -184,7 +191,9 @@ export function SearchPage() {
             {searchQuery.isLoading ? <Spinner /> : null}
 
             {searchQuery.isError ? (
-              <div className="rounded-md border bg-destructive/10 p-3 text-sm">{(searchQuery.error as Error).message}</div>
+              <div className="rounded-md border bg-destructive/10 p-3 text-sm">
+                {offline ? 'Offline: search endpoint unreachable.' : (searchQuery.error as Error).message}
+              </div>
             ) : null}
 
             <DataTable<ChunkSearchResult> data={results} columns={columns} height={560} />

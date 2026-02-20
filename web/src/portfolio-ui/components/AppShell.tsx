@@ -4,6 +4,7 @@ import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
 import { cn } from '../lib/utils'
 import { Separator } from '../ui/separator'
+import { useOfflineStatus } from '../../lib/offline'
 
 export type NavItem = {
   to: string
@@ -31,6 +32,7 @@ function getInitialTheme(): 'light' | 'dark' {
 
 export function AppShell(props: AppShellProps) {
   const [theme, setTheme] = React.useState<'light' | 'dark'>(() => getInitialTheme())
+  const offline = useOfflineStatus()
 
   React.useEffect(() => {
     const root = document.documentElement
@@ -105,6 +107,11 @@ export function AppShell(props: AppShellProps) {
             </Button>
           </div>
         </div>
+        {offline ? (
+          <div className="border-t border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+            Offline mode. Cached pages are available, but live API data may be stale or unavailable.
+          </div>
+        ) : null}
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6">{props.children}</main>

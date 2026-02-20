@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import json
+import logging
 import re
 import time
 import uuid
@@ -13,6 +13,7 @@ from threading import Lock
 import numpy as np
 
 from .config import settings
+from .contracts.tabular_contract import TabularSnapshot, build_snapshot, load_contract, validate_snapshot
 from .embeddings import Embedder, HashEmbedder, NoEmbedder, SentenceTransformerEmbedder
 from .index_maintenance import ensure_index_compatible
 from .metadata import normalize_classification, normalize_retention, normalize_tags
@@ -27,8 +28,10 @@ from .storage import (
     insert_chunks,
     insert_embeddings,
     insert_ingest_event,
+    list_ingest_events,
     upsert_doc,
 )
+
 logger = logging.getLogger(__name__)
 
 
@@ -146,6 +149,11 @@ def ingest_text(
     retention: str | None = None,
     tags: str | list[str] | None = None,
     notes: str | None = None,
+    schema_fingerprint: str | None = None,
+    contract_sha256: str | None = None,
+    validation_status: str | None = None,
+    validation_errors: list[str] | None = None,
+    schema_drifted: bool = False,
 ) -> IngestResult:
     """Ingest a text blob.
 
@@ -184,13 +192,28 @@ def ingest_text(
 
         # Ensure stored embeddings are compatible with the currently configured backend/model.
         # This prevents "silent" retrieval degradation when settings change but the DB is reused.
-        ensure_index_compatible(conn, embedder)
+        # Postgres path currently uses direct schema migrations and skips this SQLite-specific rebuild flow.
+        if not settings.database_url:
+            ensure_index_compatible(conn, embedder)
 
         existing = get_doc(conn, doc_id)
         prev_hash = existing.content_sha256 if existing is not None else None
         prev_version = existing.doc_version if existing is not None else 0
         doc_version = prev_version + 1 if existing is not None else 1
         changed = prev_hash is None or prev_hash != content_sha256
+
+        inferred_drifted = bool(schema_drifted)
+        if schema_fingerprint:
+            prev_events = list_ingest_events(conn, doc_id, limit=1)
+            prev_schema = prev_events[0].schema_fingerprint if prev_events else None
+            inferred_drifted = inferred_drifted or bool(prev_schema and prev_schema != schema_fingerprint)
+
+        effective_validation_status = validation_status
+        if effective_validation_status == "pass" and inferred_drifted:
+            effective_validation_status = "warn"
+        validation_errors_json = (
+            json.dumps(validation_errors or [], ensure_ascii=False) if validation_errors is not None else None
+        )
 
         upsert_doc(
             conn,
@@ -226,6 +249,11 @@ def ingest_text(
             embedding_dim=int(embs.shape[1]),
             chunk_size_chars=settings.chunk_size_chars,
             chunk_overlap_chars=settings.chunk_overlap_chars,
+            schema_fingerprint=schema_fingerprint,
+            contract_sha256=contract_sha256,
+            validation_status=effective_validation_status,
+            validation_errors_json=validation_errors_json,
+            schema_drifted=1 if inferred_drifted else 0,
             notes=(notes or None),
         )
         insert_ingest_event(conn, evt)
@@ -259,7 +287,7 @@ def _truncate_cell(value: object, *, max_chars: int) -> str:
     return s
 
 
-def _csv_to_text(path: Path) -> tuple[str, str]:
+def _csv_to_text(path: Path) -> tuple[str, str, TabularSnapshot]:
     """Convert a CSV/TSV into a retrieval-friendly text representation.
 
     Returns: (text, notes)
@@ -301,7 +329,7 @@ def _csv_to_text(path: Path) -> tuple[str, str]:
             rows.append([_truncate_cell(c, max_chars=_TABULAR_MAX_CELL_CHARS) for c in row])
 
     if not rows:
-        return "", "csv rows=0"
+        return "", "csv rows=0", build_snapshot([], [])
 
     # Determine header.
     header = rows[0]
@@ -323,6 +351,7 @@ def _csv_to_text(path: Path) -> tuple[str, str]:
 
     total_chars = sum(len(x) for x in lines)
     emitted = 0
+    emitted_rows: list[dict[str, str]] = []
     for r_idx, row in enumerate(data_rows, start=1):
         if emitted >= _TABULAR_MAX_ROWS:
             truncated = True
@@ -334,10 +363,13 @@ def _csv_to_text(path: Path) -> tuple[str, str]:
             row = row[:col_count]
 
         lines.append(f"Row {r_idx}:")
+        row_map: dict[str, str] = {}
         for c_idx, (h, v) in enumerate(zip(header, row, strict=False)):
             key = h or f"col_{c_idx + 1}"
             lines.append(f"- {key}: {v}")
+            row_map[key] = v
         lines.append("")
+        emitted_rows.append(row_map)
         emitted += 1
         total_chars += sum(len(x) for x in lines[-(col_count + 2) :])
         if total_chars >= _TABULAR_MAX_TOTAL_CHARS:
@@ -348,10 +380,14 @@ def _csv_to_text(path: Path) -> tuple[str, str]:
         lines.append("(truncated)")
 
     notes = f"csv rows_emitted={emitted} cols={col_count} truncated={1 if truncated else 0}"
-    return "\n".join(lines).strip() + "\n", notes
+    snapshot = build_snapshot(
+        [h or f"col_{i + 1}" for i, h in enumerate(header)],
+        emitted_rows,
+    )
+    return "\n".join(lines).strip() + "\n", notes, snapshot
 
 
-def _xlsx_to_text(path: Path) -> tuple[str, str]:
+def _xlsx_to_text(path: Path) -> tuple[str, str, TabularSnapshot]:
     """Convert an XLSX/XLSM workbook into text.
 
     This uses `openpyxl` (included in the default dependency set for this repo).
@@ -379,6 +415,7 @@ def _xlsx_to_text(path: Path) -> tuple[str, str]:
     truncated = False
     emitted_rows_total = 0
 
+    emitted_rows: list[dict[str, str]] = []
     for s_idx, name in enumerate(sheet_names[:max_sheets], start=1):
         ws = wb[name]
 
@@ -416,10 +453,13 @@ def _xlsx_to_text(path: Path) -> tuple[str, str]:
                 row = row[:col_count]
 
             lines.append(f"Row {r_idx}:")
+            row_map: dict[str, str] = {}
             for c_idx, (h, v) in enumerate(zip(header, row, strict=False)):
                 key = h or f"col_{c_idx + 1}"
                 lines.append(f"- {key}: {v}")
+                row_map[key] = v
             lines.append("")
+            emitted_rows.append(row_map)
             emitted_rows_total += 1
 
             total_chars += sum(len(x) for x in lines[-(col_count + 2) :])
@@ -438,7 +478,16 @@ def _xlsx_to_text(path: Path) -> tuple[str, str]:
         f"xlsx sheets={len(sheet_names)} processed={max_sheets} rows_emitted={emitted_rows_total} "
         f"truncated={1 if truncated else 0}"
     )
-    return "\n".join(lines).strip() + "\n", notes
+    # Use headers from the last processed non-empty sheet for fingerprinting.
+    # If multiple sheets differ, drift will surface via content/schema changes over time.
+    last_headers: list[str] = []
+    for line in lines:
+        if line.startswith("Columns (") and ":" in line:
+            cols = line.split(":", 1)[1].strip()
+            if cols:
+                last_headers = [c.strip() for c in cols.split(",")]
+    snapshot = build_snapshot(last_headers, emitted_rows)
+    return "\n".join(lines).strip() + "\n", notes, snapshot
 
 
 def ingest_file(
@@ -450,13 +499,19 @@ def ingest_file(
     retention: str | None = None,
     tags: str | list[str] | None = None,
     notes: str | None = None,
+    contract_bytes: bytes | None = None,
 ) -> IngestResult:
     path = Path(path)
     title = title or path.stem
     # Use filename as the default source so doc_ids are stable across machines.
     source = source or path.name
 
-    if path.suffix.lower() in {".md", ".txt"}:
+    suffix = path.suffix.lower()
+
+    if contract_bytes is not None and suffix not in {".csv", ".tsv", ".xlsx", ".xlsm"}:
+        raise ValueError("contract_file is only supported for tabular files (.csv/.tsv/.xlsx/.xlsm)")
+
+    if suffix in {".md", ".txt"}:
         text = path.read_text(encoding="utf-8")
         return ingest_text(
             title=title,
@@ -468,10 +523,21 @@ def ingest_file(
             notes=notes,
         )
 
-    if path.suffix.lower() in {".csv", ".tsv"}:
-        text, auto_notes = _csv_to_text(path)
+    if suffix in {".csv", ".tsv"}:
+        text, auto_notes, snapshot = _csv_to_text(path)
         if not text.strip():
             raise RuntimeError("No text could be extracted from CSV/TSV")
+        contract_sha256: str | None = None
+        validation_status: str | None = None
+        validation_errors: list[str] | None = None
+        if contract_bytes is not None:
+            contract, contract_sha256 = load_contract(contract_bytes)
+            validation = validate_snapshot(snapshot, contract)
+            validation_status = validation.status
+            validation_errors = [*validation.errors, *validation.warnings]
+            if validation.status == "fail":
+                raise ValueError("; ".join(validation.errors) or "Contract validation failed")
+
         merged_notes = auto_notes if not notes else f"{notes}\n{auto_notes}"
         return ingest_text(
             title=title,
@@ -481,12 +547,27 @@ def ingest_file(
             retention=retention,
             tags=tags,
             notes=merged_notes,
+            schema_fingerprint=snapshot.schema_fingerprint,
+            contract_sha256=contract_sha256,
+            validation_status=validation_status,
+            validation_errors=validation_errors,
         )
 
-    if path.suffix.lower() in {".xlsx", ".xlsm"}:
-        text, auto_notes = _xlsx_to_text(path)
+    if suffix in {".xlsx", ".xlsm"}:
+        text, auto_notes, snapshot = _xlsx_to_text(path)
         if not text.strip():
             raise RuntimeError("No text could be extracted from XLSX/XLSM")
+        xlsx_contract_sha256: str | None = None
+        xlsx_validation_status: str | None = None
+        xlsx_validation_errors: list[str] | None = None
+        if contract_bytes is not None:
+            contract, xlsx_contract_sha256 = load_contract(contract_bytes)
+            validation = validate_snapshot(snapshot, contract)
+            xlsx_validation_status = validation.status
+            xlsx_validation_errors = [*validation.errors, *validation.warnings]
+            if validation.status == "fail":
+                raise ValueError("; ".join(validation.errors) or "Contract validation failed")
+
         merged_notes = auto_notes if not notes else f"{notes}\n{auto_notes}"
         return ingest_text(
             title=title,
@@ -496,9 +577,13 @@ def ingest_file(
             retention=retention,
             tags=tags,
             notes=merged_notes,
+            schema_fingerprint=snapshot.schema_fingerprint,
+            contract_sha256=xlsx_contract_sha256,
+            validation_status=xlsx_validation_status,
+            validation_errors=xlsx_validation_errors,
         )
 
-    if path.suffix.lower() == ".pdf":
+    if suffix == ".pdf":
         # Robust extraction via PyMuPDF; optionally OCR scanned pages with Tesseract.
         res = extract_text_from_pdf(path)
         if not res.text.strip():

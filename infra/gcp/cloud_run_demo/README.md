@@ -10,6 +10,7 @@ What this demonstrates (staff-level):
 - **Cost guardrails** (max instances cap)
 - macOS-friendly **Cloud Build** based image builds
 - Optional (disabled by default): **Serverless VPC Access connector**
+- Optional (disabled by default): **Cloud SQL Postgres** persistence
 - Optional: **Workspace IAM starter pack** (Google Groups → roles)
 - **Observability as code** (small dashboard + alert policies)
 
@@ -70,3 +71,22 @@ See `docs/IAM_STARTER_PACK.md` for the full role matrix.
 If you want to demonstrate private networking (Cloud Run → private IP resources), enable `enable_vpc_connector`.
 
 > Note: Serverless VPC Access connectors are not free.
+
+---
+
+## Optional: Cloud SQL Postgres
+
+Enable persistent Postgres storage:
+
+```hcl
+enable_cloudsql   = true
+cloudsql_database = "gkp"
+cloudsql_user     = "gkp_app"
+```
+
+This stack will:
+- create a Cloud SQL Postgres instance + DB + user
+- mount the Cloud SQL connection into Cloud Run at `/cloudsql`
+- inject `DATABASE_URL` for app runtime
+
+Runbook: `docs/RUNBOOKS/CLOUDSQL.md`

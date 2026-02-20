@@ -145,7 +145,7 @@ def _lexical_scores_fts(conn: sqlite3.Connection, query: str, limit: int) -> Opt
             (q, limit),
         )
         rows = [(r["chunk_id"], float(r["bm"])) for r in cur.fetchall()]
-    except sqlite3.OperationalError:
+    except Exception:
         return None
 
     if not rows:
@@ -220,7 +220,9 @@ def retrieve(
         init_db(conn)
 
         # If settings changed (backend/model/dim), rebuild stored embeddings so retrieval stays valid.
-        rebuilt = ensure_index_compatible(conn, embedder)
+        rebuilt = False
+        if not settings.database_url:
+            rebuilt = ensure_index_compatible(conn, embedder)
         conn.commit()
         if rebuilt:
             invalidate_cache()

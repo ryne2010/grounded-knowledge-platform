@@ -4,6 +4,7 @@ A small, safety-minded, citation-first **RAG** (retrieval augmented generation) 
 
 - **FastAPI** backend + **React (Vite)** frontend
 - **SQLite** for doc/chunk storage + embeddings
+- optional **Cloud SQL (Postgres)** adapter path for durable persistence
 - **Hybrid retrieval** (lexical + vector)
 - **Grounding enforced**: answers must be supported by retrieved sources (or the system refuses)
 - **Public demo mode**: read-only + extractive answering + rate limiting
@@ -130,6 +131,8 @@ Supported file uploads:
 - `.csv`, `.tsv` (tabular ingestion is rendered into retrieval-friendly text)
 - `.xlsx` / `.xlsm` (uses `openpyxl`, included in the default dependency set)
 
+For tabular files, you can optionally attach a YAML `contract_file` to validate required columns/types and record schema drift in ingest lineage.
+
 To ingest docs and inspect ingest lineage across all docs, open the **Ingest** page.
 
 For index/config health, open the **Dashboard** page.
@@ -163,6 +166,7 @@ See:
 
 - `infra/gcp/README.md`
 - `Makefile` targets: `make build`, `make deploy`
+- Cloud SQL runbook: `docs/RUNBOOKS/CLOUDSQL.md`
 
 ---
 
