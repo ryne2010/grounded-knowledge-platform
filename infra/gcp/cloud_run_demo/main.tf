@@ -46,6 +46,7 @@ locals {
   env_vars = merge(
     local.base_env_vars,
     var.enable_cloudsql ? { DATABASE_URL = local.cloudsql_database_url } : {},
+    var.app_env_overrides,
   )
 
   runtime_roles = concat(

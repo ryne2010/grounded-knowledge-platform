@@ -17,12 +17,19 @@ image_tag          = "latest"
 # Keep services private and allow selected principals to invoke via browser/API auth.
 # allow_unauthenticated = false
 # private_invoker_members = [
-#   "user:you@example.com",
+#   "group:your-team@googlegroups.com",
 # ]
 
 # Optional: wire env vars from Secret Manager (latest version).
 # secret_env = {
 #   API_KEY = "gkp-dev-api-key"
+# }
+#
+# Optional: override app env defaults for private/internal deployments.
+# app_env_overrides = {
+#   PUBLIC_DEMO_MODE = "0"
+#   AUTH_MODE        = "api_key"
+#   OTEL_ENABLED     = "1"
 # }
 
 # Optional: demonstrate group-based IAM without Workspace/Cloud Identity.

@@ -93,10 +93,16 @@ For private/internal deployments, keep Cloud Run non-public and enable API-key a
 ```hcl
 allow_unauthenticated = false
 private_invoker_members = [
-  "user:you@example.com",
+  "group:your-team@googlegroups.com",
 ]
 secret_env = {
   API_KEY = "gkp-stage-api-key"
+}
+app_env_overrides = {
+  PUBLIC_DEMO_MODE      = "0"
+  AUTH_MODE             = "api_key"
+  OTEL_ENABLED          = "1"
+  OTEL_TRACES_EXPORTER  = "gcp_trace"
 }
 ```
 
@@ -110,8 +116,9 @@ OTEL_TRACES_EXPORTER=gcp_trace
 ```
 
 Notes:
-- `private_invoker_members` keeps the service private while allowing selected users to open it in a browser after Google sign-in.
+- `private_invoker_members` keeps the service private while allowing selected users/groups to open it in a browser after Google sign-in.
 - Use Secret Manager for `API_KEY` / `API_KEYS_JSON` and map via `secret_env` (never commit keys in tfvars).
+- Use `app_env_overrides` for private-mode runtime settings so Terraform apply does not drift service env back to demo defaults.
 - In demo mode (`PUBLIC_DEMO_MODE=1`), auth is always forced off (`AUTH_MODE=none`) and the app stays read-only.
 
 ---

@@ -40,12 +40,12 @@ fmt = [
 
 lint = [
   "uv run ruff check .",
-  "cd web && pnpm run typecheck",
+  "cd web && corepack pnpm run typecheck",
 ]
 
 typecheck = [
   "uv run mypy app",
-  "cd web && pnpm run typecheck",
+  "cd web && corepack pnpm run typecheck",
 ]
 
 test = [
@@ -53,8 +53,8 @@ test = [
 ]
 
 build = [
-  "cd web && pnpm install --frozen-lockfile",
-  "cd web && pnpm run build",
+  "cd web && corepack pnpm install --frozen-lockfile",
+  "cd web && corepack pnpm run build",
 ]
 
 [paths]

@@ -118,6 +118,12 @@ variable "secret_env" {
   default     = {}
 }
 
+variable "app_env_overrides" {
+  type        = map(string)
+  description = "Map of Cloud Run plaintext env overrides merged on top of demo-safe defaults (for private/internal deployments)."
+  default     = {}
+}
+
 variable "cloudsql_tier" {
   type        = string
   description = "Cloud SQL machine tier."

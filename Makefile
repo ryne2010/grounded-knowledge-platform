@@ -96,7 +96,7 @@ help:
 	@echo ""
 	@echo "Local dev / quality:"
 	@echo "  py-install         Install Python deps (dev) via uv"
-	@echo "  web-install        Install web deps via pnpm"
+	@echo "  web-install        Install web deps via Corepack pnpm"
 	@echo "  run-api            Run API locally (http://127.0.0.1:8080)"
 	@echo "  run-ui             Run UI locally (http://127.0.0.1:5173)"
 	@echo "  dev                Run API + UI concurrently"
@@ -128,14 +128,14 @@ help:
 py-install: ## Install Python deps (dev) via uv
 	uv sync --dev
 
-web-install: ## Install web deps via pnpm
-	cd web && pnpm install --frozen-lockfile
+web-install: ## Install web deps via Corepack pnpm
+	cd web && corepack pnpm install --frozen-lockfile
 
 run-api: ## Run API locally (http://127.0.0.1:8080)
 	uv run uvicorn app.main:app --reload --port 8080
 
 run-ui: ## Run UI locally (http://127.0.0.1:5173)
-	cd web && pnpm dev
+	cd web && corepack pnpm dev
 
 dev: ## Run API + UI concurrently (two terminals is still recommended for logs)
 	@bash -euo pipefail -c '\
@@ -146,7 +146,7 @@ dev: ## Run API + UI concurrently (two terminals is still recommended for logs)
 	'
 
 web-build: ## Build web bundle into web/dist
-	cd web && pnpm build
+	cd web && corepack pnpm build
 
 lint: ## Lint (ruff)
 	uv run python scripts/harness.py lint
@@ -351,10 +351,11 @@ doctor:
 	else \
 	  echo "  ⚠ node not found. Install: https://nodejs.org/"; \
 	fi; \
-	if command -v pnpm >/dev/null 2>&1; then \
-	  echo "  ✓ pnpm: $$(pnpm -v)"; \
+	if command -v corepack >/dev/null 2>&1; then \
+	  echo "  ✓ corepack: $$(corepack --version)"; \
+	  echo "  ✓ pnpm (via corepack): $$(corepack pnpm --version)"; \
 	else \
-	  echo "  ⚠ pnpm not found. Enable corepack (recommended): corepack enable"; \
+	  echo "  ✗ corepack not found. Install Node.js 20+ (includes corepack)."; \
 	fi; \
 	if command -v docker >/dev/null 2>&1; then \
 	  if docker info >/dev/null 2>&1; then \
@@ -503,7 +504,7 @@ lock:
 	@echo "Generating uv.lock (Python)"
 	uv lock
 	@echo "Generating pnpm-lock.yaml (web)"
-	cd web && pnpm install --frozen-lockfile
+	cd web && corepack pnpm install --frozen-lockfile
 	@echo "Done. Commit uv.lock and pnpm-lock.yaml for team reproducibility."
 
 

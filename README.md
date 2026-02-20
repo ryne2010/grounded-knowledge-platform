@@ -25,7 +25,7 @@ Prereqs:
 - Python **3.11+**
 - [`uv`](https://github.com/astral-sh/uv)
 - Node **20+**
-- `pnpm`
+- `pnpm` via Corepack (`corepack enable && corepack prepare pnpm@9.15.0 --activate`)
 
 ### 1) Configure env
 

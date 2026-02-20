@@ -26,7 +26,7 @@ brew install --cask google-cloud-sdk
 
 # pnpm via Corepack (recommended)
 corepack enable
-corepack prepare pnpm@latest --activate
+corepack prepare pnpm@9.15.0 --activate
 
 # Optional OCR dependency (scanned PDFs)
 brew install tesseract
@@ -42,7 +42,7 @@ brew install terraform
 
 ```bash
 uv sync --dev
-cd web && pnpm install
+cd web && corepack pnpm install
 ```
 
 Create a `.env`:
