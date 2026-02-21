@@ -276,9 +276,22 @@ export function HomePage() {
   const [useStreaming, setUseStreaming] = React.useState(true)
   const [streamingTurnId, setStreamingTurnId] = React.useState<string | null>(null)
   const streamAbortRef = React.useRef<AbortController | null>(null)
+  const toastTimeoutRef = React.useRef<number | null>(null)
   const offline = useOfflineStatus()
 
   const [turns, setTurns] = React.useState<ChatTurn[]>(() => (typeof window === 'undefined' ? [] : loadTurns()))
+  const [toastMessage, setToastMessage] = React.useState<string | null>(null)
+
+  const showToast = React.useCallback((message: string) => {
+    setToastMessage(message)
+    if (toastTimeoutRef.current != null) {
+      window.clearTimeout(toastTimeoutRef.current)
+    }
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToastMessage(null)
+      toastTimeoutRef.current = null
+    }, 2500)
+  }, [])
 
   const suggestedQuestions = React.useMemo(() => {
     const docs = docsQuery.data?.docs ?? []
@@ -294,6 +307,15 @@ export function HomePage() {
   React.useEffect(() => {
     saveTurns(turns)
   }, [turns])
+
+  React.useEffect(
+    () => () => {
+      if (toastTimeoutRef.current != null) {
+        window.clearTimeout(toastTimeoutRef.current)
+      }
+    },
+    [],
+  )
 
   const queryMutation = useMutation({
     mutationFn: (vars: { question: string; top_k: number; debug: boolean }) =>
@@ -421,6 +443,7 @@ export function HomePage() {
         onClick={() => {
           const md = exportTurnsMarkdown(turns)
           downloadText(`gkp-conversation-${new Date().toISOString().slice(0, 10)}.md`, md)
+          showToast('Conversation exported as markdown.')
         }}
         disabled={!turns.length}
       >
@@ -429,7 +452,10 @@ export function HomePage() {
       <Button
         variant="destructive"
         onClick={() => {
-          if (confirm('Clear conversation history?')) setTurns([])
+          if (confirm('Clear conversation history?')) {
+            setTurns([])
+            showToast('Conversation history cleared.')
+          }
         }}
         disabled={!turns.length}
       >
@@ -439,7 +465,8 @@ export function HomePage() {
   )
 
   return (
-    <Page
+    <>
+      <Page
       title="Ask"
       description={
         meta?.public_demo_mode
@@ -581,12 +608,25 @@ export function HomePage() {
 
                           {t.error ? (
                             <div className="text-sm text-destructive">Error: {t.error}</div>
-                          ) : !answer ? (
+                          ) : !t.response ? (
                             <div className="text-sm text-muted-foreground">Working…</div>
                           ) : (
                             <div className="space-y-3">
                               <div className="text-sm font-semibold">A</div>
-                              <pre className="whitespace-pre-wrap rounded-lg bg-muted p-3 text-sm">{answer}</pre>
+                              {answer ? (
+                                <pre
+                                  className="min-h-24 whitespace-pre-wrap rounded-lg bg-muted p-3 text-sm"
+                                  aria-live={streamingTurnId === t.id ? 'polite' : undefined}
+                                >
+                                  {answer}
+                                </pre>
+                              ) : (
+                                <div
+                                  className="min-h-24 animate-pulse rounded-lg bg-muted p-3"
+                                  aria-live="polite"
+                                  aria-label="Answer is streaming"
+                                />
+                              )}
 
                               {refused && refusalReason ? (
                                 <div className="text-xs text-muted-foreground">
@@ -602,8 +642,9 @@ export function HomePage() {
                                     if (!answer) return
                                     try {
                                       await navigator.clipboard.writeText(answer)
+                                      showToast('Answer copied to clipboard.')
                                     } catch {
-                                      // ignore
+                                      showToast('Copy failed.')
                                     }
                                   }}
                                   disabled={!answer}
@@ -635,13 +676,36 @@ export function HomePage() {
                                                 </div>
                                                 <div className="text-xs text-muted-foreground">{c.doc_source ?? c.doc_id}</div>
                                               </div>
-                                              <Link
-                                                to="/docs/$docId"
-                                                params={{ docId: c.doc_id }}
-                                                className="text-sm underline"
-                                              >
-                                                Open doc
-                                              </Link>
+                                              <div className="flex items-center gap-2">
+                                                <Link
+                                                  to="/docs/$docId"
+                                                  params={{ docId: c.doc_id }}
+                                                  className="text-sm underline"
+                                                >
+                                                  Open doc
+                                                </Link>
+                                                <Button
+                                                  type="button"
+                                                  size="sm"
+                                                  variant="outline"
+                                                  onClick={async () => {
+                                                    const quote = c.quote?.trim()
+                                                    if (!quote) return
+                                                    const citationLabel = c.doc_title ?? c.doc_id
+                                                    const citationSource = c.doc_source ? ` (${c.doc_source})` : ''
+                                                    const text = `${quote}\n\n— ${citationLabel}${citationSource}, chunk ${c.chunk_id}`
+                                                    try {
+                                                      await navigator.clipboard.writeText(text)
+                                                      showToast('Citation quote copied.')
+                                                    } catch {
+                                                      showToast('Copy failed.')
+                                                    }
+                                                  }}
+                                                  disabled={!c.quote?.trim()}
+                                                >
+                                                  Copy quote
+                                                </Button>
+                                              </div>
                                             </div>
                                             {c.quote ? (
                                               <pre className="mt-2 whitespace-pre-wrap rounded bg-muted p-2 text-xs">{c.quote}</pre>
@@ -820,6 +884,12 @@ export function HomePage() {
           </Card>
         </div>
       </div>
-    </Page>
+      </Page>
+      {toastMessage ? (
+        <div className="pointer-events-none fixed bottom-4 right-4 z-50" aria-live="polite">
+          <div className="rounded-lg border bg-background px-3 py-2 text-sm shadow-lg">{toastMessage}</div>
+        </div>
+      ) : null}
+    </>
   )
 }

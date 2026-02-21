@@ -21,9 +21,46 @@ jobs:
         uses: astral-sh/setup-uv@v3
         with:
           version: 'latest'
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
 
       - name: Install Python deps
-        run: uv sync --dev
+        shell: bash
+        env:
+          UV_DEFAULT_INDEX: 'https://pypi.org/simple'
+          UV_HTTP_RETRIES: '10'
+          UV_HTTP_TIMEOUT: '120'
+          UV_HTTP_CONNECT_TIMEOUT: '30'
+          UV_CONCURRENT_DOWNLOADS: '4'
+        run: |
+          set -euo pipefail
+
+          # If the lockfile was generated against a private mirror, uv will keep
+          # downloading from that host even when UV_DEFAULT_INDEX is set.
+          # Refresh the lock in CI to normalize URLs to the configured index.
+          if grep -Eq "packages\\.applied-caas-gateway1|pypi-public/simple" uv.lock; then
+            echo "uv.lock references mirror URLs; refreshing lock against ${UV_DEFAULT_INDEX}"
+            uv lock --refresh --no-progress
+          fi
+
+          max_attempts=5
+          for attempt in $(seq 1 "$max_attempts"); do
+            echo "uv sync attempt ${attempt}/${max_attempts}"
+            if uv sync --dev --frozen --no-progress; then
+              exit 0
+            fi
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              break
+            fi
+            sleep_seconds=$((attempt * 10))
+            echo "Retrying in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+          done
+
+          echo "uv sync failed after ${max_attempts} attempts"
+          exit 1
 
       - name: Set up Node
         uses: actions/setup-node@v4

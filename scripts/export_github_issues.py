@@ -228,7 +228,7 @@ def main() -> int:
         )
 
         # gh CLI helper
-        label_flags = " ".join(["--label " + shlex.quote(l) for l in labels])
+        label_flags = " ".join(["--label " + shlex.quote(label) for label in labels])
         gh_lines.append(
             "gh issue create "
             + "--title "

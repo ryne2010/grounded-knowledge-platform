@@ -124,8 +124,8 @@ export function DocsPage() {
   )
 
   return (
-    <Page>
-      <Section title="Docs" description="Browse the indexed documents (metadata + versioning).">
+    <Page title="Docs" description="Browse indexed documents, governance metadata, and lifecycle status.">
+      <Section title="Inventory" description="Browse the indexed documents (metadata + versioning).">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
