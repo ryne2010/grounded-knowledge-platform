@@ -635,3 +635,79 @@ Implemented the backend ingestion-runs capability for connector operations:
 
 - Commit `TASK_INGESTION_RUNS` on this branch and open PR.
 - Move to queue item #9: `TASK_INGESTION_RUNS_UI`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-ingestion-runs-ui`
+- Current task: `TASK_INGESTION_RUNS_UI` (`agents/tasks/TASK_INGESTION_RUNS_UI.md`)
+
+## Task summary
+
+Implemented the ingestion-runs operator UI in the Ingest workspace:
+
+- added run history list + detail panel on `/ingest`
+- added list filters for status, trigger type, and started-on/after date
+- added detail summary tiles (changed, unchanged, errors) and expandable error details
+- added linked ingest-events table per selected run (metadata only; no raw content rendering)
+- added a disabled `Rerun (coming soon)` affordance with explicit admin/safety labeling
+- enforced demo-safe UX path: public demo now shows a clear empty-state message for ingestion runs and no run actions
+
+## Decisions made
+
+- Keep this task frontend-only and consume existing Task #8 APIs (`/api/ingestion-runs`, `/api/ingestion-runs/{run_id}`).
+- Gate runs-query fetch + rendering in public demo mode to preserve safe-by-default posture.
+- Introduce small pure helper utilities (`web/src/lib/ingestionRuns.ts`) for filtering, badge mapping, and bounded error summaries to keep page logic testable.
+
+## Files changed
+
+- `web/src/api.ts`
+- `web/src/pages/Ingest.tsx`
+- `web/src/lib/ingestionRuns.ts`
+- `web/src/lib/ingestionRuns.test.ts`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_INGESTION_RUNS_UI.md`
+2. Branch/context checks:
+   - `git status --short`
+   - `git branch --show-current`
+3. Discovery:
+   - `sed -n ... web/src/pages/Ingest.tsx`
+   - `sed -n ... web/src/api.ts`
+   - `sed -n ... app/main.py`
+   - `rg -n ... app tests`
+4. Targeted validation:
+   - `cd web && corepack pnpm run test -- --run src/lib/ingestionRuns.test.ts`
+   - `cd web && corepack pnpm run typecheck`
+5. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `make web-typecheck`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`37 passed, 3 skipped` in Python; `12 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make web-typecheck`: PASS
+
+## What’s next
+
+- Commit `TASK_INGESTION_RUNS_UI` on this branch and open PR.
+- Move to queue item #10: `TASK_REPLAY_BACKFILL`.

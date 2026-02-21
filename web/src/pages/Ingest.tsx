@@ -2,8 +2,9 @@ import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
-import { api, type GcsSyncResponse, type IngestEventView } from '../api'
+import { api, type GcsSyncResponse, type IngestionRunSummary, type IngestEventView } from '../api'
 import { getConnectorAvailability, summarizeGcsSyncRun } from '../lib/gcsConnector'
+import { filterIngestionRuns, runErrorsCount, statusBadgeVariant, summarizeRunError } from '../lib/ingestionRuns'
 import { formatUnixSeconds } from '../lib/time'
 import {
   Badge,
@@ -28,6 +29,7 @@ export function IngestPage() {
 
   const metaQuery = useQuery({ queryKey: ['meta'], queryFn: api.meta, staleTime: 30_000 })
   const meta = metaQuery.data
+  const publicDemoMode = Boolean(meta?.public_demo_mode)
   const uploadsEnabled = Boolean(meta?.uploads_enabled)
   const connectorAvailability = getConnectorAvailability(meta)
   const connectorsEnabled = connectorAvailability.enabled
@@ -97,10 +99,12 @@ export function IngestPage() {
     onSuccess: async (run) => {
       setLatestSyncRun(run)
       setSyncCopyStatus('idle')
+      setSelectedRunId(run.run_id)
       await qc.invalidateQueries({ queryKey: ['docs'] })
       await qc.invalidateQueries({ queryKey: ['stats'] })
       await qc.invalidateQueries({ queryKey: ['ingest-events'] })
       await qc.invalidateQueries({ queryKey: ['recent-ingest-events'] })
+      await qc.invalidateQueries({ queryKey: ['ingestion-runs'] })
     },
   })
 
@@ -108,6 +112,58 @@ export function IngestPage() {
     () => (latestSyncRun ? summarizeGcsSyncRun(latestSyncRun) : null),
     [latestSyncRun],
   )
+
+  // ---- Ingestion runs (history + detail) ----
+  const [runsStatus, setRunsStatus] = React.useState('')
+  const [runsTriggerType, setRunsTriggerType] = React.useState('')
+  const [runsStartedFromDate, setRunsStartedFromDate] = React.useState('')
+  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null)
+
+  const runsQuery = useQuery({
+    queryKey: ['ingestion-runs'],
+    queryFn: () => api.listIngestionRuns(250),
+    staleTime: 5_000,
+    enabled: Boolean(meta) && !publicDemoMode,
+  })
+
+  const allRuns = runsQuery.data?.runs ?? []
+  const filteredRuns = React.useMemo(
+    () =>
+      filterIngestionRuns(allRuns, {
+        status: runsStatus,
+        triggerType: runsTriggerType,
+        startedFromDate: runsStartedFromDate,
+      }),
+    [allRuns, runsStatus, runsTriggerType, runsStartedFromDate],
+  )
+
+  React.useEffect(() => {
+    if (publicDemoMode) {
+      setSelectedRunId(null)
+      return
+    }
+    if (filteredRuns.length === 0) {
+      setSelectedRunId(null)
+      return
+    }
+    if (!selectedRunId) {
+      setSelectedRunId(filteredRuns[0].run_id)
+      return
+    }
+    if (!filteredRuns.some((r) => r.run_id === selectedRunId)) {
+      setSelectedRunId(filteredRuns[0].run_id)
+    }
+  }, [filteredRuns, selectedRunId, publicDemoMode])
+
+  const runDetailQuery = useQuery({
+    queryKey: ['ingestion-runs', selectedRunId],
+    queryFn: () => api.ingestionRunDetail(String(selectedRunId)),
+    enabled: Boolean(selectedRunId),
+    staleTime: 5_000,
+  })
+
+  const selectedRun = runDetailQuery.data?.run ?? null
+  const selectedRunEvents = runDetailQuery.data?.events ?? []
 
   // ---- Ingest events feed ----
   const [q, setQ] = React.useState('')
@@ -223,6 +279,76 @@ export function IngestPage() {
       },
     ],
     [],
+  )
+
+  const runStatuses = React.useMemo(() => {
+    const seen = new Set<string>()
+    for (const r of allRuns) seen.add(String(r.status || ''))
+    return Array.from(seen).filter(Boolean).sort()
+  }, [allRuns])
+
+  const runTriggerTypes = React.useMemo(() => {
+    const seen = new Set<string>()
+    for (const r of allRuns) seen.add(String(r.trigger_type || ''))
+    return Array.from(seen).filter(Boolean).sort()
+  }, [allRuns])
+
+  const runColumns = React.useMemo(
+    () => [
+      {
+        header: 'Started',
+        accessorKey: 'started_at',
+        cell: (info: any) => <span className="text-xs">{formatUnixSeconds(Number(info.getValue() ?? 0))}</span>,
+      },
+      {
+        header: 'Run',
+        accessorKey: 'run_id',
+        cell: (info: any) => {
+          const run = info.row.original as IngestionRunSummary
+          const selected = run.run_id === selectedRunId
+          return (
+            <button
+              type="button"
+              onClick={() => setSelectedRunId(run.run_id)}
+              className={`font-mono text-xs underline-offset-2 hover:underline ${selected ? 'font-semibold' : ''}`}
+            >
+              {run.run_id}
+            </button>
+          )
+        },
+      },
+      {
+        header: 'Status',
+        accessorKey: 'status',
+        cell: (info: any) => {
+          const run = info.row.original as IngestionRunSummary
+          return <Badge variant={statusBadgeVariant(run.status)}>{run.status}</Badge>
+        },
+      },
+      {
+        header: 'Trigger',
+        accessorKey: 'trigger_type',
+        cell: (info: any) => <span className="text-xs">{String(info.getValue() ?? '—')}</span>,
+      },
+      {
+        header: 'Changed',
+        accessorKey: 'docs_changed',
+      },
+      {
+        header: 'Unchanged',
+        accessorKey: 'docs_unchanged',
+      },
+      {
+        header: 'Errors',
+        accessorKey: 'errors',
+        cell: (info: any) => {
+          const run = info.row.original as IngestionRunSummary
+          const count = runErrorsCount(run)
+          return count > 0 ? <Badge variant="destructive">{count}</Badge> : <Badge variant="outline">0</Badge>
+        },
+      },
+    ],
+    [selectedRunId],
   )
 
   async function copyLatestRunJson() {
@@ -840,6 +966,200 @@ export function IngestPage() {
           </CardContent>
         </Card>
 
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              Ingestion runs
+              <Badge variant="secondary">{publicDemoMode ? 0 : filteredRuns.length}</Badge>
+            </CardTitle>
+            <CardDescription>
+              Inspect run history, status, and linked ingest events without exposing raw document payloads.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {publicDemoMode ? (
+              <div className="space-y-2 rounded-md border bg-muted p-4 text-sm">
+                <div className="font-medium">No runs in demo mode.</div>
+                <div className="text-xs text-muted-foreground">
+                  Public demo deployments expose only the bundled demo corpus and no operator run actions.
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="runStatus">Status</Label>
+                    <Input
+                      id="runStatus"
+                      value={runsStatus}
+                      onChange={(e) => setRunsStatus(e.target.value)}
+                      placeholder="All statuses"
+                      list="run-statuses"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="runTriggerType">Trigger type</Label>
+                    <Input
+                      id="runTriggerType"
+                      value={runsTriggerType}
+                      onChange={(e) => setRunsTriggerType(e.target.value)}
+                      placeholder="All trigger types"
+                      list="run-trigger-types"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="runStartedFromDate">Started on/after</Label>
+                    <Input
+                      id="runStartedFromDate"
+                      type="date"
+                      value={runsStartedFromDate}
+                      onChange={(e) => setRunsStartedFromDate(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {runsQuery.isLoading ? <Spinner /> : null}
+                {runsQuery.isError ? (
+                  <div className="rounded-md border bg-destructive/10 p-3 text-sm">{(runsQuery.error as Error).message}</div>
+                ) : null}
+
+                {!runsQuery.isLoading && !runsQuery.isError && filteredRuns.length === 0 ? (
+                  <div className="rounded-md border bg-muted p-3 text-sm">
+                    No ingestion runs match the current filters.
+                  </div>
+                ) : null}
+
+                <div className="grid gap-4 xl:grid-cols-5">
+                  <div className="xl:col-span-3">
+                    <DataTable<IngestionRunSummary> data={filteredRuns} columns={runColumns} height={340} />
+                  </div>
+
+                  <div className="xl:col-span-2">
+                    <div className="space-y-3 rounded-md border bg-card p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-sm font-medium">Run detail</div>
+                        {selectedRun ? (
+                          <Badge variant={statusBadgeVariant(selectedRun.status)}>{selectedRun.status}</Badge>
+                        ) : (
+                          <Badge variant="outline">none selected</Badge>
+                        )}
+                      </div>
+
+                      {runDetailQuery.isLoading ? <Spinner /> : null}
+                      {runDetailQuery.isError ? (
+                        <div className="rounded-md border bg-destructive/10 p-3 text-sm">
+                          {(runDetailQuery.error as Error).message}
+                        </div>
+                      ) : null}
+
+                      {!selectedRun && !runDetailQuery.isLoading ? (
+                        <div className="text-sm text-muted-foreground">Select a run from the table to inspect details.</div>
+                      ) : null}
+
+                      {selectedRun ? (
+                        <>
+                          <div className="space-y-1 text-xs text-muted-foreground">
+                            <div className="font-mono text-foreground">{selectedRun.run_id}</div>
+                            <div>Started: {formatUnixSeconds(selectedRun.started_at)}</div>
+                            <div>
+                              Finished:{' '}
+                              {selectedRun.finished_at ? formatUnixSeconds(selectedRun.finished_at) : 'still running'}
+                            </div>
+                            <div>Trigger: {selectedRun.trigger_type}</div>
+                            <div>Principal: {selectedRun.principal || 'system'}</div>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2 text-xs">
+                            <div className="rounded border bg-muted p-2">
+                              <div className="text-muted-foreground">Changed</div>
+                              <div className="text-sm font-semibold">{selectedRun.docs_changed}</div>
+                            </div>
+                            <div className="rounded border bg-muted p-2">
+                              <div className="text-muted-foreground">Unchanged</div>
+                              <div className="text-sm font-semibold">{selectedRun.docs_unchanged}</div>
+                            </div>
+                            <div className="rounded border bg-muted p-2">
+                              <div className="text-muted-foreground">Errors</div>
+                              <div className="text-sm font-semibold">{runErrorsCount(selectedRun)}</div>
+                            </div>
+                          </div>
+
+                          <details className="rounded-md border bg-muted p-2">
+                            <summary className="cursor-pointer text-sm font-medium">
+                              Error details ({runErrorsCount(selectedRun)})
+                            </summary>
+                            {runErrorsCount(selectedRun) === 0 ? (
+                              <div className="pt-2 text-xs text-muted-foreground">No errors were recorded for this run.</div>
+                            ) : (
+                              <ul className="list-disc space-y-1 pl-5 pt-2 text-xs">
+                                {selectedRun.errors.map((err, idx) => (
+                                  <li key={`${selectedRun.run_id}:error:${idx}`}>{summarizeRunError(err)}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </details>
+
+                          <div className="space-y-2 rounded-md border bg-muted p-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                variant="outline"
+                                disabled
+                                title="Coming soon: safe rerun/backfill tooling (admin only)."
+                              >
+                                Rerun (coming soon)
+                              </Button>
+                              <Badge variant="outline">Admin action</Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Planned behavior: idempotent replay with add/update-only safety checks.
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="text-sm font-medium">Linked ingest events ({selectedRunEvents.length})</div>
+                            {selectedRunEvents.length === 0 ? (
+                              <div className="text-xs text-muted-foreground">
+                                No linked ingest events were recorded for this run.
+                              </div>
+                            ) : (
+                              <div className="max-h-56 overflow-auto rounded border">
+                                <table className="min-w-full text-xs">
+                                  <thead className="bg-muted/60">
+                                    <tr className="text-left">
+                                      <th className="px-3 py-2">Ingested</th>
+                                      <th className="px-3 py-2">Doc</th>
+                                      <th className="px-3 py-2">Changed</th>
+                                      <th className="px-3 py-2">Chunks</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {selectedRunEvents.map((evt) => (
+                                      <tr key={evt.event_id} className="border-t">
+                                        <td className="px-3 py-2">{formatUnixSeconds(evt.ingested_at)}</td>
+                                        <td className="px-3 py-2">
+                                          <Link to="/docs/$docId" params={{ docId: evt.doc_id }} className="underline">
+                                            {evt.doc_title || evt.doc_id}
+                                          </Link>
+                                        </td>
+                                        <td className="px-3 py-2">{evt.changed ? 'yes' : 'no'}</td>
+                                        <td className="px-3 py-2">{evt.num_chunks}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         <datalist id="classifications">
           {classifications.map((c) => (
             <option key={c} value={c} />
@@ -849,6 +1169,18 @@ export function IngestPage() {
         <datalist id="retentions">
           {retentions.map((r) => (
             <option key={r} value={r} />
+          ))}
+        </datalist>
+
+        <datalist id="run-statuses">
+          {runStatuses.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+
+        <datalist id="run-trigger-types">
+          {runTriggerTypes.map((t) => (
+            <option key={t} value={t} />
           ))}
         </datalist>
 
