@@ -1586,3 +1586,92 @@ Implemented Task #19 CI smoke eval gate to catch retrieval/safety regressions qu
 
 - Commit `TASK_EVAL_CI_SMOKE` on this branch and open PR.
 - Move to queue item #20: `TASK_EVAL_DATASET_AUTHORING`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-eval-dataset-authoring`
+- Current task: `TASK_EVAL_DATASET_AUTHORING` (`agents/tasks/TASK_EVAL_DATASET_AUTHORING.md`)
+
+## Task summary
+
+Implemented Task #20 eval dataset authoring docs + validator tooling:
+
+- added `docs/EVAL_DATASETS.md` with canonical JSONL schema, answerable/refusal examples, safe update workflow, and anti-flake guidance
+- added dataset validator logic in `app/eval.py` with strict line-level checks for:
+  - malformed JSON
+  - missing/invalid required fields
+  - duplicate IDs
+  - invalid expectation shape/type
+- added CLI helper command:
+  - `python -m app.cli validate-eval-dataset <path>.jsonl`
+- wired retrieval eval to run dataset validation before execution and to evaluate only citation-targeted cases
+- added automated tests covering valid datasets, malformed/missing fields, and CLI success/failure behavior
+
+## Decisions made
+
+- Kept backward compatibility with existing repo datasets while introducing canonical `expect` format:
+  - supports legacy retrieval rows (`expected_doc_ids` / `expected_chunk_ids`)
+  - supports legacy safety rows (`expect_refusal: true|false`)
+- Enforced strict validation errors (non-zero exit) so malformed dataset edits fail early in local workflows and CI.
+- Preserved deterministic eval behavior by skipping non-citation cases in `run_eval` instead of forcing ambiguous pass/fail semantics.
+
+## Files changed
+
+- `app/eval.py`
+- `app/cli.py`
+- `tests/test_eval_dataset_validation.py`
+- `docs/EVAL_DATASETS.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... harness.toml`
+   - `sed -n ... docs/PRODUCT/PRODUCT_BRIEF.md`
+   - `sed -n ... docs/ARCHITECTURE/README.md`
+   - `sed -n ... docs/DOMAIN.md`
+   - `sed -n ... docs/DESIGN.md`
+   - `sed -n ... docs/CONTRACTS.md`
+   - `sed -n ... docs/WORKFLOW.md`
+   - `sed -n ... agents/tasks/TASK_EVAL_DATASET_AUTHORING.md`
+   - `sed -n ... docs/SPECS/EVAL_HARNESS_PRODUCTIZATION.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only && git checkout -b codex/task-eval-dataset-authoring`
+3. Targeted validation during implementation:
+   - `uv run ruff check app/eval.py app/cli.py tests/test_eval_dataset_validation.py`
+   - `uv run pytest -q tests/test_eval_dataset_validation.py`
+   - `uv run python -m app.cli validate-eval-dataset data/eval/golden.jsonl`
+   - `uv run python -m app.cli validate-eval-dataset data/eval/smoke.jsonl`
+   - `uv run python -m app.cli validate-eval-dataset data/eval/prompt_injection.jsonl`
+   - `make eval-smoke`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`73 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `validate-eval-dataset` smoke checks on repo datasets: PASS
+- `make eval-smoke`: PASS
+
+## What’s next
+
+- Commit `TASK_EVAL_DATASET_AUTHORING` on this branch and open PR.
+- Move to queue item #21: `TASK_OTEL`.
