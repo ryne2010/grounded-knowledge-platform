@@ -1230,3 +1230,98 @@ Implemented Task #15 retention enforcement with retrieval filtering and operator
 
 - Commit `TASK_RETENTION_ENFORCEMENT` on this branch and open PR.
 - Move to queue item #16: `TASK_AUDIT_EVENTS`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-audit-events`
+- Current task: `TASK_AUDIT_EVENTS` (`agents/tasks/TASK_AUDIT_EVENTS.md`)
+
+## Task summary
+
+Implemented Task #16 audit events for security-sensitive admin actions:
+
+- added append-only `audit_events` storage model for SQLite + Postgres
+- added Postgres migration `004_audit_events.sql`
+- added storage helpers to insert/list audit events with filters (`action`, `since`, `until`, `limit`)
+- added admin-only API endpoint:
+  - `GET /api/audit-events`
+- added shared audit write helper in API layer with metadata sanitization/redaction guardrails
+- wired audit writes at required action points:
+  - metadata update (`doc.metadata.updated`)
+  - doc delete (`doc.deleted`)
+  - connector sync trigger (`connector.gcs.sync.triggered`)
+  - eval run trigger (`eval.run.created`)
+- added tests for endpoint access/filtering, write-point coverage, request-id correlation, and migration/table creation
+
+## Decisions made
+
+- Kept audit logging API read-only; write actions remain endpoint-internal/CLI-internal (no new public write surface).
+- Used explicit per-action metadata payloads plus a sanitizer/redactor to avoid storing document content or secrets.
+- Scoped endpoint access to `admin` role only, consistent with security model and task requirement.
+- Used correlation via existing `request_id` middleware state so audit events align with structured request logs.
+
+## Files changed
+
+- `app/storage.py`
+- `app/main.py`
+- `app/migrations/postgres/004_audit_events.sql`
+- `tests/test_audit_events.py`
+- `tests/test_storage_migrations.py`
+- `docs/CONTRACTS.md`
+- `docs/DOMAIN.md`
+- `docs/ARCHITECTURE/DATA_MODEL.md`
+- `docs/ARCHITECTURE/SECURITY_MODEL.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... harness.toml`
+   - `sed -n ... docs/PRODUCT/PRODUCT_BRIEF.md`
+   - `sed -n ... docs/PRODUCT/FEATURE_MATRIX.md`
+   - `sed -n ... docs/ARCHITECTURE/README.md`
+   - `sed -n ... docs/DOMAIN.md`
+   - `sed -n ... docs/DESIGN.md`
+   - `sed -n ... docs/CONTRACTS.md`
+   - `sed -n ... agents/tasks/TASK_AUDIT_EVENTS.md`
+   - `sed -n ... docs/SPECS/GOVERNANCE_METADATA.md`
+   - `rg -n "audit|request_id|principal|doc_update|delete_doc|eval|connectors/gcs/sync" app tests docs -S`
+2. Branching:
+   - `git checkout main`
+   - `git pull --ff-only`
+   - `git checkout -b codex/task-audit-events`
+3. Targeted validation during implementation:
+   - `uv run ruff check app/main.py app/storage.py tests/test_audit_events.py tests/test_storage_migrations.py`
+   - `uv run mypy app`
+   - `uv run pytest -q tests/test_audit_events.py tests/test_storage_migrations.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `make test-postgres`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`54 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make test-postgres`: PASS (`1 skipped` when Docker/Postgres unavailable)
+
+## What’s next
+
+- Commit `TASK_AUDIT_EVENTS` on this branch and open PR.
+- Move to queue item #17: `TASK_SAFETY_HARDENING`.

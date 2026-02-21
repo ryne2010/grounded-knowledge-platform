@@ -213,6 +213,21 @@ Ingestion run history:
 - `GET /api/ingestion-runs?limit=100` → `{ runs: IngestionRunSummary[] }`
 - `GET /api/ingestion-runs/{run_id}` → `{ run: IngestionRunSummary, events: IngestEventView[] }`
 
+Audit events (admin-only):
+
+- `GET /api/audit-events?limit=100&action=<optional>&since=<optional unix_ts>&until=<optional unix_ts>`
+  - returns `{ events: AuditEvent[] }`
+  - `AuditEvent` shape:
+    - `event_id: string`
+    - `occurred_at: number`
+    - `principal: string`
+    - `role: string`
+    - `action: string`
+    - `target_type: string`
+    - `target_id: string | null`
+    - `metadata: Record<string, unknown>` (sanitized; no document content/secrets)
+    - `request_id: string | null`
+
 Chunk browsing (requires `ALLOW_CHUNK_VIEW=1` and not demo mode):
 
 - `GET /api/docs/{doc_id}/chunks?limit=200&offset=0`

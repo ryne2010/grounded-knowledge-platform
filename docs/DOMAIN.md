@@ -79,6 +79,18 @@ This allows you to debug:
 
 The UI exposes this per-doc and also as a global audit feed.
 
+### AuditEvent
+
+Security-sensitive admin actions are recorded in an append-only audit log (`audit_events` table).
+
+Captures:
+
+- actor (`principal`, `role`)
+- action (`action`)
+- target (`target_type`, `target_id`)
+- request correlation (`request_id`)
+- sanitized metadata (no document content/secrets)
+
 ---
 
 ## Core workflows

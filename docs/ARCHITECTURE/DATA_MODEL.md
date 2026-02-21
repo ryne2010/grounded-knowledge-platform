@@ -71,6 +71,17 @@ Captures:
 ### `meta`
 Small key/value store for app metadata.
 
+### `audit_events`
+Append-only audit log for security-sensitive actions.
+
+Captures:
+- who (`principal`, `role`)
+- what (`action`)
+- target (`target_type`, `target_id`)
+- when (`occurred_at`)
+- safe metadata (`metadata_json`)
+- request correlation (`request_id`)
+
 ### `schema_migrations`
 Tracks applied SQL migration filenames.
 
@@ -79,15 +90,6 @@ Tracks applied SQL migration filenames.
 ## Planned tables (roadmap)
 
 These are defined in the backlog but not all are implemented yet.
-
-### `audit_events`
-Append-only audit log for security-sensitive actions:
-
-- who (principal)
-- what (action type)
-- when
-- target (doc_id, connector, config)
-- outcome (success/failure)
 
 ### `eval_runs`
 Persisted evaluation history:
