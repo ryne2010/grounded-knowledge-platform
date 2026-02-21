@@ -24,7 +24,7 @@ output "runtime_service_account" {
 }
 
 output "serverless_connector_id" {
-  value       = var.enable_vpc_connector ? try(module.network[0].serverless_connector_id, null) : null
+  value       = (var.enable_vpc_connector || var.enable_cloudsql) ? try(module.network[0].serverless_connector_id, null) : null
   description = "Serverless VPC Access connector ID (if created)."
 }
 

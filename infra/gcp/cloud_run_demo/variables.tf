@@ -103,7 +103,7 @@ variable "deletion_protection" {
 
 variable "enable_vpc_connector" {
   type        = bool
-  description = "Create and attach a Serverless VPC Access connector (NOT free)."
+  description = "Create and attach a Serverless VPC Access connector (NOT free). This is auto-enabled when Cloud SQL is enabled to support private IP connectivity."
   default     = false
 }
 

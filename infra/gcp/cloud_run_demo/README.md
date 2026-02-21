@@ -12,7 +12,7 @@ What this demonstrates (staff-level):
 - **Scale-to-zero** (min instances 0)
 - **Cost guardrails** (max instances cap)
 - macOS-friendly **Cloud Build** based image builds
-- Optional (disabled by default): **Serverless VPC Access connector**
+- **Serverless VPC Access connector** (auto-enabled when Cloud SQL is enabled)
 - **Cloud SQL Postgres** persistence (enabled by default)
 - Optional: **Workspace IAM starter pack** (Google Groups → roles)
 - **Observability as code** (small dashboard + alert policies)
@@ -69,9 +69,11 @@ See `docs/IAM_STARTER_PACK.md` for the full role matrix.
 
 ---
 
-## Optional: VPC connector
+## VPC connector
 
-If you want to demonstrate private networking (Cloud Run → private IP resources), enable `enable_vpc_connector`.
+When Cloud SQL is enabled (default), this stack automatically creates and attaches a Serverless VPC Access connector so Cloud Run can reach Cloud SQL over private IP.
+
+You can also enable `enable_vpc_connector=true` when Cloud SQL is disabled and you still need private networking for other resources.
 
 > Note: Serverless VPC Access connectors are not free.
 
