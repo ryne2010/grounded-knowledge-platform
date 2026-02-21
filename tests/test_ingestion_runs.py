@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 from pathlib import Path
 
@@ -193,3 +194,48 @@ def test_rerun_same_sync_is_idempotent_for_docs(tmp_path: Path, monkeypatch: pyt
     assert run_summary["status"] == "succeeded"
     assert run_summary["docs_changed"] == 0
     assert run_summary["docs_unchanged"] >= 1
+
+
+def test_scheduler_trigger_logs_job_bucket_prefix_and_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    main = _reload_app(str(tmp_path / "ingestion_runs_scheduler.sqlite"))
+    _patch_gcs_sync(
+        monkeypatch,
+        files={
+            "knowledge/a.txt": (18, "scheduler-content"),
+        },
+    )
+    client = TestClient(main.app)
+
+    sync_res = client.post(
+        "/api/connectors/gcs/sync",
+        headers={
+            "X-API-Key": "admin-key",
+            "X-CloudScheduler": "true",
+            "X-CloudScheduler-JobName": "gkp-dev-gcs-sync",
+        },
+        json={"bucket": "demo-bucket", "prefix": "knowledge/", "max_objects": 10, "dry_run": False},
+    )
+    assert sync_res.status_code == 200, sync_res.text
+    run_id = str(sync_res.json()["run_id"])
+
+    captured = capsys.readouterr()
+    scheduled_events = []
+    for line in (captured.out + "\n" + captured.err).splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            continue
+        if payload.get("event") == "connector.gcs.sync.scheduled":
+            scheduled_events.append(payload)
+
+    assert scheduled_events, "expected connector.gcs.sync.scheduled log event"
+    event = scheduled_events[-1]
+    assert event["job_name"] == "gkp-dev-gcs-sync"
+    assert event["bucket"] == "demo-bucket"
+    assert event["prefix"] == "knowledge/"
+    assert event["run_id"] == run_id

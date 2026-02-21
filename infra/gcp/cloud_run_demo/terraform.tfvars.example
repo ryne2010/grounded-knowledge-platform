@@ -41,6 +41,17 @@ image_tag          = "latest"
 # pubsub_push_bucket        = "my-ingest-bucket"
 # pubsub_push_prefix        = "knowledge/"
 
+# Optional: periodic ingestion (Cloud Scheduler -> /api/connectors/gcs/sync)
+# enable_scheduler_sync      = true
+# scheduler_sync_schedule    = "0 * * * *"
+# scheduler_sync_time_zone   = "Etc/UTC"
+# scheduler_sync_bucket      = "my-ingest-bucket"
+# scheduler_sync_prefix      = "knowledge/"
+# scheduler_sync_max_objects = 200
+# scheduler_sync_dry_run     = false
+# scheduler_sync_notes       = "scheduler"
+# scheduler_sync_api_key     = "set-admin-api-key-when-auth-mode-api-key"
+
 # Optional: demonstrate group-based IAM without Workspace/Cloud Identity.
 # clients_observers_group_email              = "gkp-observers@googlegroups.com"
 # enable_clients_observers_monitoring_viewer = true

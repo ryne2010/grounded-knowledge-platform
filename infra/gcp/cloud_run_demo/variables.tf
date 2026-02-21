@@ -166,6 +166,114 @@ variable "pubsub_push_max_delivery_attempts" {
   default     = 5
 }
 
+variable "enable_scheduler_sync" {
+  type        = bool
+  description = "Enable optional Cloud Scheduler -> /api/connectors/gcs/sync periodic sync for private deployments."
+  default     = false
+
+  validation {
+    condition     = !var.enable_scheduler_sync || !var.allow_unauthenticated
+    error_message = "enable_scheduler_sync requires allow_unauthenticated=false (private service)."
+  }
+
+  validation {
+    condition = !var.enable_scheduler_sync || (
+      try(var.app_env_overrides["PUBLIC_DEMO_MODE"], "") == "0" &&
+      try(var.app_env_overrides["ALLOW_CONNECTORS"], "") == "1"
+    )
+    error_message = "enable_scheduler_sync requires app_env_overrides PUBLIC_DEMO_MODE=0 and ALLOW_CONNECTORS=1."
+  }
+}
+
+variable "scheduler_sync_schedule" {
+  type        = string
+  description = "Cloud Scheduler cron expression (default: hourly at minute 0)."
+  default     = "0 * * * *"
+
+  validation {
+    condition     = length(trimspace(var.scheduler_sync_schedule)) > 0
+    error_message = "scheduler_sync_schedule must be a non-empty cron expression."
+  }
+}
+
+variable "scheduler_sync_time_zone" {
+  type        = string
+  description = "Cloud Scheduler job time zone."
+  default     = "Etc/UTC"
+}
+
+variable "scheduler_sync_paused" {
+  type        = bool
+  description = "Whether the Cloud Scheduler job should be created paused."
+  default     = false
+}
+
+variable "scheduler_sync_attempt_deadline" {
+  type        = string
+  description = "Cloud Scheduler HTTP attempt deadline (duration string, max 1800s)."
+  default     = "320s"
+}
+
+variable "scheduler_sync_bucket" {
+  type        = string
+  description = "Bucket for periodic sync payload when enable_scheduler_sync=true."
+  default     = ""
+}
+
+variable "scheduler_sync_prefix" {
+  type        = string
+  description = "Optional prefix for periodic sync payload."
+  default     = ""
+}
+
+variable "scheduler_sync_max_objects" {
+  type        = number
+  description = "Max objects per scheduled sync invocation."
+  default     = 200
+
+  validation {
+    condition     = var.scheduler_sync_max_objects >= 1 && var.scheduler_sync_max_objects <= 5000
+    error_message = "scheduler_sync_max_objects must be between 1 and 5000."
+  }
+}
+
+variable "scheduler_sync_dry_run" {
+  type        = bool
+  description = "Run scheduled syncs in dry-run mode."
+  default     = false
+}
+
+variable "scheduler_sync_classification" {
+  type        = string
+  description = "Optional classification for docs ingested by scheduled syncs."
+  default     = ""
+}
+
+variable "scheduler_sync_retention" {
+  type        = string
+  description = "Optional retention policy for docs ingested by scheduled syncs."
+  default     = ""
+}
+
+variable "scheduler_sync_tags" {
+  type        = list(string)
+  description = "Optional tags applied to docs ingested by scheduled syncs."
+  default     = []
+}
+
+variable "scheduler_sync_notes" {
+  type        = string
+  description = "Optional notes applied to docs ingested by scheduled syncs."
+  default     = "scheduler"
+}
+
+variable "scheduler_sync_api_key" {
+  type        = string
+  description = "Optional x-api-key header value for /api/connectors/gcs/sync when AUTH_MODE=api_key."
+  default     = ""
+  sensitive   = true
+}
+
 variable "cloudsql_tier" {
   type        = string
   description = "Cloud SQL machine tier."

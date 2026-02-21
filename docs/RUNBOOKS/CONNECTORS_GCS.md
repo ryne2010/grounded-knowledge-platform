@@ -10,7 +10,7 @@ This runbook covers operating the **GCS prefix sync connector** in private deplo
 
 This connector is intentionally **disabled** in the public demo deployment.
 
-Related (planned):
+Related:
 
 - Event-driven ingestion via Pub/Sub push: `docs/SPECS/PUBSUB_EVENT_INGESTION.md`
 - Periodic sync via Cloud Scheduler: `docs/SPECS/SCHEDULER_PERIODIC_SYNC.md`
@@ -181,6 +181,83 @@ Expected outcome:
 - response includes `run_id`, `gcs_uri`, and `result` (`changed|unchanged|skipped_unsupported|ignored_event`)
 - repeated delivery for the same object remains idempotent (no duplicate docs)
 
+## Periodic ingestion (Cloud Scheduler)
+
+Use this when you want a fixed cadence (for example hourly) without manual `curl`/`make gcs-sync`.
+
+### Terraform setup (private deployments)
+
+Set these variables in `infra/gcp/cloud_run_demo/terraform.tfvars`:
+
+```hcl
+allow_unauthenticated = false
+
+app_env_overrides = {
+  PUBLIC_DEMO_MODE = "0"
+  ALLOW_CONNECTORS = "1"
+  AUTH_MODE        = "api_key"
+}
+
+enable_scheduler_sync      = true
+scheduler_sync_schedule    = "0 * * * *"
+scheduler_sync_time_zone   = "Etc/UTC"
+scheduler_sync_bucket      = "my-bucket"
+scheduler_sync_prefix      = "knowledge/"
+scheduler_sync_max_objects = 200
+scheduler_sync_dry_run     = false
+scheduler_sync_notes       = "scheduler"
+scheduler_sync_api_key     = "<admin-api-key>"
+```
+
+Apply:
+
+```bash
+make plan
+make apply
+```
+
+Notes:
+- Scheduler calls `POST /api/connectors/gcs/sync`.
+- Cloud Scheduler uses OIDC to invoke private Cloud Run (`roles/run.invoker` on a dedicated scheduler service account).
+- If app auth is `AUTH_MODE=api_key`, set `scheduler_sync_api_key` so the request is authorized as admin.
+
+### Force-run once (manual verification)
+
+```bash
+gcloud scheduler jobs run "${SERVICE_NAME}-gcs-sync" --location "${REGION}"
+```
+
+Then confirm run history:
+
+```bash
+curl -sS "${GKP_API_URL:-http://127.0.0.1:8080}/api/ingestion-runs?limit=5" \
+  -H "x-api-key: ${GKP_API_KEY:-}"
+```
+
+Expected outcome:
+- a new run appears with `trigger_type=connector`
+- run payload contains the scheduled bucket/prefix
+
+### Pause / disable
+
+Pause without deleting:
+
+```hcl
+scheduler_sync_paused = true
+```
+
+Disable/remove job:
+
+```hcl
+enable_scheduler_sync = false
+```
+
+Then:
+
+```bash
+make apply
+```
+
 ## Local development notes
 
 ### Token acquisition
@@ -202,6 +279,7 @@ Notes:
 
 - The sync response includes a `run_id`.
 - In Cloud Run, use structured logs and search for the `run_id`.
+- Scheduled jobs emit `event=connector.gcs.sync.scheduled` including `job_name`, `bucket`, `prefix`, and `run_id`.
 
 Useful endpoints:
 

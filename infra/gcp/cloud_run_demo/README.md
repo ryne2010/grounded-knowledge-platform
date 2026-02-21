@@ -9,6 +9,7 @@ What this demonstrates (staff-level):
 - Optional **private service IAM** via `allow_unauthenticated=false` + `private_invoker_members`
 - Optional **Secret Manager env wiring** via `secret_env` (no plaintext keys in tfvars)
 - Optional **Pub/Sub push ingestion plumbing** (topic, DLQ, push subscription, GCS notification)
+- Optional **Cloud Scheduler periodic sync** (`POST /api/connectors/gcs/sync`)
 - **Scale-to-zero** (min instances 0)
 - **Cost guardrails** (max instances cap)
 - macOS-friendly **Cloud Build** based image builds
@@ -110,3 +111,33 @@ pubsub_push_prefix        = "knowledge/"
 ```
 
 You must also run the app in private mode (`PUBLIC_DEMO_MODE=0`) and enable connectors (`ALLOW_CONNECTORS=1`) via `app_env_overrides`.
+
+---
+
+## Optional: Cloud Scheduler periodic sync
+
+To run connector sync on a schedule for private deployments:
+
+```hcl
+allow_unauthenticated = false
+
+app_env_overrides = {
+  PUBLIC_DEMO_MODE = "0"
+  ALLOW_CONNECTORS = "1"
+  AUTH_MODE        = "api_key" # or "none" when relying only on Cloud Run IAM
+}
+
+enable_scheduler_sync      = true
+scheduler_sync_schedule    = "0 * * * *"
+scheduler_sync_bucket      = "my-bucket"
+scheduler_sync_prefix      = "knowledge/"
+scheduler_sync_max_objects = 200
+scheduler_sync_api_key     = "set-admin-key-if-auth-mode-api-key"
+```
+
+This stack creates:
+- a dedicated scheduler service account
+- a `roles/run.invoker` binding on the Cloud Run service
+- a Cloud Scheduler HTTP job that posts to `/api/connectors/gcs/sync`
+
+Runbook: `docs/RUNBOOKS/CONNECTORS_GCS.md`
