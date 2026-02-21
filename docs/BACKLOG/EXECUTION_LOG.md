@@ -86,3 +86,73 @@ Implemented Task #1 UI/UX polish slice with focus on:
 
 - Initial validation failures were pre-existing lint/type issues outside UI scope; fixed minimally to unblock required harness checks.
 - Remaining queue tasks proceed from `docs/BACKLOG/QUEUE.md` item #2 after this branch is committed and opened as PR.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-doc-viewer-citations`
+- Current task: `TASK_DOC_VIEWER_CITATIONS` (`agents/tasks/TASK_DOC_VIEWER_CITATIONS.md`)
+
+## Task summary
+
+Implemented Task #2 citation UX polish:
+
+- citation deep links from Ask view now carry doc context (`chunk_id`, quote, title/source, score)
+- Doc Detail now detects citation navigation and renders a dedicated “Citations in this doc” section
+- cited snippets are highlighted in chunk preview context when chunk view is enabled
+- jump behavior now auto-scrolls/focuses cited content (or citation summary card when chunk view is gated)
+- copy-citation UX standardized to include quote + title + `doc_id`
+- added web UI test coverage for citation click navigation + scroll/focus highlight behavior
+
+## Decisions made
+
+- Keep public demo safe-by-default: only show citation snippets in URL/summary; no full chunk exposure unless chunk view is enabled.
+- Use URL search params for citation jump state (no new backend surface area).
+- Add a lightweight web test stack (`vitest` + `jsdom`) and wire it into harness `test` so citation UX checks run in CI.
+
+## Files changed
+
+- `web/src/lib/citations.ts`
+- `web/src/lib/citations.test.ts`
+- `web/src/pages/Home.tsx`
+- `web/src/pages/DocDetail.tsx`
+- `web/vitest.config.ts`
+- `web/package.json`
+- `web/pnpm-lock.yaml`
+- `harness.toml`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Discovery/grounding:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... agents/tasks/TASK_DOC_VIEWER_CITATIONS.md`
+   - `sed -n ... docs/SPECS/UI_UX_PRODUCTION_POLISH.md`
+2. Implementation:
+   - file edits for citation helper, Ask citations, Doc Detail citation jump/highlight, and web tests
+   - `cd web && corepack pnpm install`
+3. Validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `make web-typecheck`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`29 passed, 3 skipped` in Python; `1 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make web-typecheck`: PASS
+
+## What’s next
+
+- Commit `TASK_DOC_VIEWER_CITATIONS` on this branch and open PR.
+- Move to queue item #3: `TASK_QUERY_EXPLAIN_DRAWER`.

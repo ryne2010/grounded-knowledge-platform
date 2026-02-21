@@ -50,6 +50,7 @@ typecheck = [
 
 test = [
   "uv run pytest",
+  "cd web && corepack pnpm run test",
 ]
 
 build = [

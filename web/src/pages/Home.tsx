@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
 import { api, type Doc, type QueryResponse, type RetrievalDebug } from '../api'
+import { buildCitationClipboardText, buildDocCitationHref } from '../lib/citations'
 import { useOfflineStatus } from '../lib/offline'
 import {
   Badge,
@@ -588,6 +589,7 @@ export function HomePage() {
                       const answer = t.response?.answer
 
                       const citedChunkIds = new Set(citations.map((c) => c.chunk_id))
+                      const retrievalScoreByChunk = new Map(retrieval.map((r) => [r.chunk_id, r.score] as const))
 
                       return (
                         <div key={t.id} className="rounded-xl border p-4">
@@ -634,6 +636,66 @@ export function HomePage() {
                                 </div>
                               ) : null}
 
+                              {citations.length ? (
+                                <div className="space-y-2">
+                                  <div className="text-sm font-semibold">Citations</div>
+                                  <div className="space-y-2">
+                                    {citations.map((c) => {
+                                      const score = retrievalScoreByChunk.get(c.chunk_id)
+                                      const citationHref = buildDocCitationHref(c.doc_id, c, score)
+                                      return (
+                                        <div key={c.chunk_id} className="rounded-lg border p-3">
+                                          <div className="flex flex-wrap items-start justify-between gap-2">
+                                            <div className="space-y-1">
+                                              <div className="text-sm font-semibold">{c.doc_title ?? 'Untitled'}</div>
+                                              <div className="text-xs text-muted-foreground">{c.doc_source ?? c.doc_id}</div>
+                                            </div>
+                                            {typeof score === 'number' && Number.isFinite(score) ? (
+                                              <Badge variant="outline">score {score.toFixed(3)}</Badge>
+                                            ) : null}
+                                          </div>
+                                          {c.quote ? (
+                                            <pre className="mt-2 whitespace-pre-wrap rounded bg-muted p-2 text-xs">{c.quote}</pre>
+                                          ) : (
+                                            <div className="mt-2 text-xs text-muted-foreground">No quote available.</div>
+                                          )}
+                                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                                            <a href={citationHref} className="text-sm underline">
+                                              Open doc context
+                                            </a>
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              variant="outline"
+                                              onClick={async () => {
+                                                const quote = c.quote?.trim()
+                                                if (!quote) return
+                                                const text = buildCitationClipboardText({
+                                                  quote,
+                                                  docId: c.doc_id,
+                                                  title: c.doc_title,
+                                                  source: c.doc_source,
+                                                  chunkId: c.chunk_id,
+                                                })
+                                                try {
+                                                  await navigator.clipboard.writeText(text)
+                                                  showToast('Citation quote copied.')
+                                                } catch {
+                                                  showToast('Copy failed.')
+                                                }
+                                              }}
+                                              disabled={!c.quote?.trim()}
+                                            >
+                                              Copy citation
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              ) : null}
+
                               <div className="flex flex-wrap items-center gap-2">
                                 <Button
                                   size="sm"
@@ -651,76 +713,6 @@ export function HomePage() {
                                 >
                                   Copy answer
                                 </Button>
-
-                                <Dialog>
-                                  <DialogTrigger asChild>
-                                    <Button size="sm" variant="outline" disabled={!citations.length}>
-                                      Citations ({citations.length})
-                                    </Button>
-                                  </DialogTrigger>
-                                  <DialogContent>
-                                    <DialogHeader>
-                                      <DialogTitle>Citations</DialogTitle>
-                                      <DialogDescription>
-                                        Evidence snippets used to ground the answer. Open a doc for full context.
-                                      </DialogDescription>
-                                    </DialogHeader>
-                                    <div className="space-y-3">
-                                      {citations.length ? (
-                                        citations.map((c) => (
-                                          <div key={c.chunk_id} className="rounded-lg border p-3">
-                                            <div className="flex items-start justify-between gap-3">
-                                              <div className="space-y-1">
-                                                <div className="text-sm font-semibold">
-                                                  {c.doc_title ?? 'Untitled'}
-                                                </div>
-                                                <div className="text-xs text-muted-foreground">{c.doc_source ?? c.doc_id}</div>
-                                              </div>
-                                              <div className="flex items-center gap-2">
-                                                <Link
-                                                  to="/docs/$docId"
-                                                  params={{ docId: c.doc_id }}
-                                                  className="text-sm underline"
-                                                >
-                                                  Open doc
-                                                </Link>
-                                                <Button
-                                                  type="button"
-                                                  size="sm"
-                                                  variant="outline"
-                                                  onClick={async () => {
-                                                    const quote = c.quote?.trim()
-                                                    if (!quote) return
-                                                    const citationLabel = c.doc_title ?? c.doc_id
-                                                    const citationSource = c.doc_source ? ` (${c.doc_source})` : ''
-                                                    const text = `${quote}\n\n— ${citationLabel}${citationSource}, chunk ${c.chunk_id}`
-                                                    try {
-                                                      await navigator.clipboard.writeText(text)
-                                                      showToast('Citation quote copied.')
-                                                    } catch {
-                                                      showToast('Copy failed.')
-                                                    }
-                                                  }}
-                                                  disabled={!c.quote?.trim()}
-                                                >
-                                                  Copy quote
-                                                </Button>
-                                              </div>
-                                            </div>
-                                            {c.quote ? (
-                                              <pre className="mt-2 whitespace-pre-wrap rounded bg-muted p-2 text-xs">{c.quote}</pre>
-                                            ) : null}
-                                            <div className="mt-2 text-xs text-muted-foreground">
-                                              chunk_id: <span className="font-mono">{c.chunk_id}</span>
-                                            </div>
-                                          </div>
-                                        ))
-                                      ) : (
-                                        <div className="text-sm text-muted-foreground">No citations returned.</div>
-                                      )}
-                                    </div>
-                                  </DialogContent>
-                                </Dialog>
 
                                 <Dialog>
                                   <DialogTrigger asChild>
