@@ -98,6 +98,42 @@ columns:
         assert "Missing required columns" in str(e)
 
 
+def test_tabular_contract_invalid_type_fails_with_clear_error(tmp_path):
+    db = tmp_path / "contracts_type_mismatch.sqlite"
+    ingestion, storage = _reload_for_db(str(db))
+
+    with storage.connect(str(db)) as conn:
+        storage.init_db(conn)
+
+    csv_path = tmp_path / "events_type_mismatch.csv"
+    csv_path.write_text("event_id,occurred_at\nabc,not-a-timestamp\n", encoding="utf-8")
+
+    contract = """
+version: 1
+name: customer_events
+columns:
+  - name: event_id
+    type: string
+    required: true
+  - name: occurred_at
+    type: timestamp
+    required: true
+""".strip()
+
+    try:
+        ingestion.ingest_file(
+            csv_path,
+            title="Events Type Mismatch",
+            source="unit-test",
+            contract_bytes=contract.encode("utf-8"),
+        )
+        assert False, "expected ValueError"
+    except ValueError as e:
+        msg = str(e)
+        assert "occurred_at" in msg
+        assert "expected type `timestamp`" in msg
+
+
 def test_tabular_schema_drift_is_recorded(tmp_path):
     db = tmp_path / "contracts_drift.sqlite"
     ingestion, storage = _reload_for_db(str(db))
