@@ -1313,6 +1313,37 @@ def get_ingestion_run(conn: Any, run_id: str) -> IngestionRun | None:
     return IngestionRun(**dict(row)) if row is not None else None
 
 
+def list_doc_ids_for_run(conn: Any, run_id: str, *, limit: int = 10000) -> list[str]:
+    """Return unique doc_ids linked to a run, in first-seen ingest order."""
+
+    limit = max(1, min(int(limit), 20000))
+    if _is_postgres_conn(conn):
+        cur = conn.execute(
+            """
+            SELECT e.doc_id, MIN(e.ingested_at) AS first_ingested_at
+            FROM ingest_events e
+            WHERE e.run_id=%s
+            GROUP BY e.doc_id
+            ORDER BY first_ingested_at ASC, e.doc_id ASC
+            LIMIT %s
+            """,
+            (run_id, limit),
+        )
+    else:
+        cur = conn.execute(
+            """
+            SELECT e.doc_id, MIN(e.ingested_at) AS first_ingested_at
+            FROM ingest_events e
+            WHERE e.run_id=?
+            GROUP BY e.doc_id
+            ORDER BY first_ingested_at ASC, e.doc_id ASC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        )
+    return [str(r["doc_id"]) for r in cur.fetchall()]
+
+
 def list_ingest_events_for_run(conn: Any, run_id: str, *, limit: int = 500) -> list[IngestEventView]:
     limit = max(1, min(int(limit), 2000))
     if _is_postgres_conn(conn):
