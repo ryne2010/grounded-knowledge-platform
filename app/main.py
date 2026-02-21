@@ -2046,7 +2046,29 @@ def _signal_summary(r: RetrievedChunk) -> str:
     return "hybrid relevance"
 
 
-def _refusal_details(refusal_reason: str | None) -> dict[str, Any]:
+def _citations_are_weak(question: str, citations_out: list[dict[str, Any]]) -> bool:
+    """Heuristic guardrail: reject answers backed by weak/unrelated citations."""
+    if not citations_out:
+        return True
+
+    quotes = [str(c.get("quote") or "").strip() for c in citations_out if str(c.get("quote") or "").strip()]
+    if not quotes:
+        return True
+
+    combined = " ".join(quotes).lower()
+
+    terms = _extract_key_terms(question)[:8]
+    if not terms:
+        return False
+
+    matches = 0
+    for term in terms:
+        if any(v in combined for v in _term_variants(term)):
+            matches += 1
+    return matches == 0
+
+
+def _refusal_details(refusal_reason: str | None, *, safety_reasons: list[str] | None = None) -> dict[str, Any]:
     reason = str(refusal_reason or "")
     if not reason:
         return {
@@ -2055,26 +2077,25 @@ def _refusal_details(refusal_reason: str | None) -> dict[str, Any]:
             "category": None,
             "message": "Answer grounded in cited evidence from the indexed corpus.",
         }
-    if reason.startswith("prompt_injection:"):
-        return {
+    if reason == "safety_block":
+        out: dict[str, Any] = {
             "refused": True,
             "code": reason,
             "category": "safety",
-            "message": "The request matched prompt-injection safeguards, so the system refused.",
+            "message": "The request triggered safety protections, so the system refused.",
         }
+        if safety_reasons:
+            out["signals"] = list(safety_reasons)[:8]
+        return out
     if reason == "insufficient_evidence":
+        msg = "Retrieved evidence was insufficient or unrelated to safely answer."
+        if settings.public_demo_mode:
+            msg += " Public demo mode is extractive-only and limited to the bundled demo corpus."
         return {
             "refused": True,
             "code": reason,
             "category": "evidence",
-            "message": "Retrieved evidence was insufficient or unrelated to safely answer.",
-        }
-    if reason == "answerer_refused":
-        return {
-            "refused": True,
-            "code": reason,
-            "category": "model",
-            "message": "The answering model declined to produce an answer.",
+            "message": msg,
         }
     if reason == "internal_error":
         return {
@@ -2100,6 +2121,7 @@ def _build_explain_payload(
     refusal_reason: str | None,
     doc_map: dict[str, Any] | None,
     debug: bool,
+    safety_reasons: list[str] | None = None,
 ) -> dict[str, Any]:
     selected_chunk_ids = {str(c.get("chunk_id", "")) for c in citations_out if c.get("chunk_id")}
     evidence: list[dict[str, Any]] = []
@@ -2139,7 +2161,7 @@ def _build_explain_payload(
             "public_demo_mode": bool(settings.public_demo_mode),
             "debug_details_included": private_detail_enabled,
         },
-        "refusal": _refusal_details(refusal_reason),
+        "refusal": _refusal_details(refusal_reason, safety_reasons=safety_reasons),
     }
 
 
@@ -2175,7 +2197,7 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
         inj = detect_prompt_injection(question)
     record_safety_scan_metric(latency_ms=(time.perf_counter() - safety_start) * 1000.0)
     if inj.is_injection:
-        refusal_reason = f"prompt_injection:{','.join(inj.reasons)}"
+        refusal_reason = "safety_block"
         return {
             "question": question,
             "answer": "I can’t help with that request. I can only answer questions using the provided sources.",
@@ -2191,6 +2213,7 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
                 refusal_reason=refusal_reason,
                 doc_map={},
                 debug=debug,
+                safety_reasons=inj.reasons,
             ),
         }
 
@@ -2257,20 +2280,44 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
 
     # --- Answer ---
     answerer = get_answerer()
-    generation_start = time.perf_counter()
-    with span(
-        "generation.answer",
-        attributes={
-            "provider": getattr(answerer, "name", settings.effective_llm_provider),
-            "context_chunks": len(context),
-        },
-    ):
-        ans = answerer.answer(question, context)
-    record_generation_metric(
-        latency_ms=(time.perf_counter() - generation_start) * 1000.0,
-        provider=str(getattr(answerer, "name", settings.effective_llm_provider)),
-        streaming=False,
-    )
+    try:
+        generation_start = time.perf_counter()
+        with span(
+            "generation.answer",
+            attributes={
+                "provider": getattr(answerer, "name", settings.effective_llm_provider),
+                "context_chunks": len(context),
+            },
+        ):
+            ans = answerer.answer(question, context)
+        record_generation_metric(
+            latency_ms=(time.perf_counter() - generation_start) * 1000.0,
+            provider=str(getattr(answerer, "name", settings.effective_llm_provider)),
+            streaming=False,
+        )
+    except Exception:
+        logger.exception("Answer generation failed")
+        refusal_reason = "internal_error"
+        out_internal: dict[str, Any] = {
+            "question": question,
+            "answer": "I don’t have enough evidence in the indexed sources to answer that.",
+            "refused": True,
+            "refusal_reason": refusal_reason,
+            "provider": "policy",
+            "citations": [],
+        }
+        if debug:
+            out_internal["retrieval"] = _retrieval_debug_payload(retrieved, include_text=include_retrieval_text)
+        out_internal["explain"] = _build_explain_payload(
+            question=question,
+            top_k=top_k,
+            retrieved=retrieved,
+            citations_out=[],
+            refusal_reason=refusal_reason,
+            doc_map={},
+            debug=debug,
+        )
+        return out_internal
 
     # Enrich citations with doc metadata.
     citations_out: list[dict[str, Any]] = []
@@ -2293,7 +2340,30 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
     # Enforce grounding (citations required).
     # - In PUBLIC_DEMO_MODE this is always on.
     # - In private mode it is controlled by CITATIONS_REQUIRED (default: true).
-    if bool(settings.citations_required) and (not bool(getattr(ans, "refused", False))) and not citations_out:
+    if bool(getattr(ans, "refused", False)):
+        refusal_reason = "insufficient_evidence"
+        out_refused: dict[str, Any] = {
+            "question": question,
+            "answer": "I don’t have enough evidence in the indexed sources to answer that.",
+            "refused": True,
+            "refusal_reason": refusal_reason,
+            "provider": ans.provider,
+            "citations": [],
+        }
+        if debug:
+            out_refused["retrieval"] = _retrieval_debug_payload(retrieved, include_text=include_retrieval_text)
+        out_refused["explain"] = _build_explain_payload(
+            question=question,
+            top_k=top_k,
+            retrieved=retrieved,
+            citations_out=[],
+            refusal_reason=refusal_reason,
+            doc_map=doc_map,
+            debug=debug,
+        )
+        return out_refused
+
+    if bool(settings.citations_required) and _citations_are_weak(question, citations_out):
         refusal_reason = "insufficient_evidence"
         out_no_citations: dict[str, Any] = {
             "question": question,
@@ -2316,13 +2386,11 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
         )
         return out_no_citations
 
-    refusal_reason = "answerer_refused" if bool(getattr(ans, "refused", False)) else None
-
     out: dict[str, Any] = {
         "question": question,
         "answer": ans.text,
-        "refused": bool(ans.refused),
-        "refusal_reason": refusal_reason,
+        "refused": False,
+        "refusal_reason": None,
         "provider": ans.provider,
         "citations": citations_out,
         "explain": _build_explain_payload(
@@ -2330,7 +2398,7 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
             top_k=top_k,
             retrieved=retrieved,
             citations_out=citations_out,
-            refusal_reason=refusal_reason,
+            refusal_reason=None,
             doc_map=doc_map,
             debug=debug,
         ),
@@ -2366,7 +2434,7 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
             record_safety_scan_metric(latency_ms=(time.perf_counter() - safety_start) * 1000.0)
             if inj.is_injection:
                 refusal_text = "I can’t help with that request. I can only answer questions using the provided sources."
-                refusal_reason = f"prompt_injection:{','.join(inj.reasons)}"
+                refusal_reason = "safety_block"
                 yield _sse_event("token", {"text": refusal_text})
                 yield _sse_event("citations", [])
                 yield _sse_event(
@@ -2385,6 +2453,7 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                             refusal_reason=refusal_reason,
                             doc_map={},
                             debug=debug,
+                            safety_reasons=inj.reasons,
                         ),
                     },
                 )
@@ -2488,6 +2557,11 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                     refusal_reason = "insufficient_evidence"
                     answer_text = "I don’t have enough evidence in the indexed sources to answer that."
                     stream_citations = []
+                if bool(settings.citations_required) and not refused and _citations_are_weak(question, stream_citations):
+                    refused = True
+                    refusal_reason = "insufficient_evidence"
+                    answer_text = "I don’t have enough evidence in the indexed sources to answer that."
+                    stream_citations = []
 
                 yield _sse_event("citations", stream_citations)
                 yield _sse_event(
@@ -2543,14 +2617,19 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                 )
 
             refused = bool(getattr(ans, "refused", False))
-            refusal_reason = "answerer_refused" if refused else None
+            refusal_reason = "insufficient_evidence" if refused else None
             answer_text = ans.text
             provider = ans.provider
 
-            if bool(settings.citations_required) and not refused and not citations_out:
+            if refused:
+                answer_text = "I don’t have enough evidence in the indexed sources to answer that."
+                citations_out = []
+
+            if bool(settings.citations_required) and not refused and _citations_are_weak(question, citations_out):
                 refused = True
                 refusal_reason = "insufficient_evidence"
                 answer_text = "I don’t have enough evidence in the indexed sources to answer that."
+                citations_out = []
 
             for token in _stream_text_chunks(answer_text):
                 yield _sse_event("token", {"text": token})
