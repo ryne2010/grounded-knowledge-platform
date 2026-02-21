@@ -134,6 +134,7 @@ enable_cloudsql = false
 ```
 
 On apply, Terraform provisions Cloud SQL resources and injects `DATABASE_URL` into Cloud Run.
+When Cloud SQL is enabled, the Terraform root also creates/attaches a Serverless VPC Access connector so Cloud Run can connect over private IP.
 Operational runbook: `docs/RUNBOOKS/CLOUDSQL.md`.
 
 ---

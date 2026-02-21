@@ -15,6 +15,10 @@ Related (planned):
 - Event-driven ingestion via Pub/Sub push: `docs/SPECS/PUBSUB_EVENT_INGESTION.md`
 - Periodic sync via Cloud Scheduler: `docs/SPECS/SCHEDULER_PERIODIC_SYNC.md`
 
+Implemented endpoint:
+
+- `POST /api/connectors/gcs/notify` (Pub/Sub push envelope)
+
 ## Safety posture
 
 The connector is gated by:
@@ -109,6 +113,73 @@ Expected outcome:
 
 - Response includes `ingested` and `changed`
 - Re-running the same sync should produce many `changed=false` items
+
+## Event-driven ingestion (Pub/Sub push)
+
+Use this when you want object-finalize events to ingest automatically.
+
+### Endpoint behavior
+
+- `POST /api/connectors/gcs/notify`
+- accepts Pub/Sub push envelope
+- processes `OBJECT_FINALIZE` events (attributes-first, `message.data` fallback)
+- returns `202` for accepted events and idempotent duplicates
+- returns `404` when demo mode or connectors are disabled
+
+### Terraform setup (private deployments)
+
+Enable optional Pub/Sub resources in `infra/gcp/cloud_run_demo/terraform.tfvars`:
+
+```hcl
+allow_unauthenticated      = false
+enable_pubsub_push_ingest  = true
+pubsub_push_bucket         = "my-bucket"
+pubsub_push_prefix         = "knowledge/"
+```
+
+Recommended app overrides for private mode:
+
+```hcl
+app_env_overrides = {
+  PUBLIC_DEMO_MODE = "0"
+  ALLOW_CONNECTORS = "1"
+  AUTH_MODE        = "api_key"
+}
+```
+
+Then run:
+
+```bash
+make plan
+make apply
+```
+
+### Manual endpoint test
+
+```bash
+curl -sS -X POST "${GKP_API_URL:-http://127.0.0.1:8080}/api/connectors/gcs/notify" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: ${GKP_API_KEY:-}" \
+  -d '{
+    "message": {
+      "messageId": "manual-test-1",
+      "attributes": {
+        "eventType": "OBJECT_FINALIZE",
+        "bucketId": "my-bucket",
+        "objectId": "knowledge/guide.txt",
+        "objectGeneration": "1",
+        "objectSize": "128"
+      }
+    },
+    "subscription": "projects/demo/subscriptions/gkp-ingest-events-push"
+  }'
+```
+
+Expected outcome:
+
+- `202 Accepted`
+- response includes `run_id`, `gcs_uri`, and `result` (`changed|unchanged|skipped_unsupported|ignored_event`)
+- repeated delivery for the same object remains idempotent (no duplicate docs)
 
 ## Local development notes
 

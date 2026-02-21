@@ -34,7 +34,6 @@ locals {
     RATE_LIMIT_MAX_REQUESTS = "30"
   }
 
-  cloudsql_connection_name = var.enable_cloudsql ? google_sql_database_instance.cloudsql[0].connection_name : null
   cloudsql_database_url = var.enable_cloudsql ? format(
     "postgresql://%s:%s@/%s?host=/cloudsql/%s",
     var.cloudsql_user,
@@ -108,7 +107,8 @@ module "service_accounts" {
 }
 
 module "network" {
-  count  = var.enable_vpc_connector ? 1 : 0
+  # Cloud SQL private IP requires a VPC + serverless connector for Cloud Run egress.
+  count  = (var.enable_vpc_connector || var.enable_cloudsql) ? 1 : 0
   source = "../modules/network"
 
   project_id   = var.project_id
@@ -121,7 +121,7 @@ module "network" {
     }
   }
 
-  create_serverless_connector         = true
+  create_serverless_connector         = var.enable_vpc_connector || var.enable_cloudsql
   serverless_connector_name           = "${var.service_name}-connector"
   serverless_connector_region         = var.region
   serverless_connector_cidr           = "10.8.0.0/28"
@@ -153,7 +153,7 @@ module "cloud_run" {
   # For real client deployments, consider setting var.deletion_protection=true.
   deletion_protection = var.deletion_protection
 
-  vpc_connector_id = var.enable_vpc_connector ? module.network[0].serverless_connector_id : null
+  vpc_connector_id = (var.enable_vpc_connector || var.enable_cloudsql) ? module.network[0].serverless_connector_id : null
   vpc_egress       = var.vpc_egress
 }
 

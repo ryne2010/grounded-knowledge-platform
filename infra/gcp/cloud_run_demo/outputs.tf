@@ -24,7 +24,7 @@ output "runtime_service_account" {
 }
 
 output "serverless_connector_id" {
-  value       = var.enable_vpc_connector ? try(module.network[0].serverless_connector_id, null) : null
+  value       = (var.enable_vpc_connector || var.enable_cloudsql) ? try(module.network[0].serverless_connector_id, null) : null
   description = "Serverless VPC Access connector ID (if created)."
 }
 
@@ -52,4 +52,14 @@ output "cloudsql_database_url" {
   value       = var.enable_cloudsql ? local.cloudsql_database_url : null
   description = "DATABASE_URL injected into Cloud Run (if Cloud SQL is enabled)."
   sensitive   = true
+}
+
+output "pubsub_ingest_topic" {
+  value       = local.enable_pubsub_push_ingest ? google_pubsub_topic.gcs_ingest_events[0].id : null
+  description = "Pub/Sub topic for GCS finalize ingestion events (if enabled)."
+}
+
+output "pubsub_ingest_subscription" {
+  value       = local.enable_pubsub_push_ingest ? google_pubsub_subscription.gcs_ingest_events_push[0].id : null
+  description = "Pub/Sub push subscription id for GCS notify endpoint (if enabled)."
 }

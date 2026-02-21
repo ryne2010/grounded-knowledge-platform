@@ -8,10 +8,11 @@ What this demonstrates (staff-level):
 - **Safe public demo defaults** (`PUBLIC_DEMO_MODE=1`, no uploads, extractive-only)
 - Optional **private service IAM** via `allow_unauthenticated=false` + `private_invoker_members`
 - Optional **Secret Manager env wiring** via `secret_env` (no plaintext keys in tfvars)
+- Optional **Pub/Sub push ingestion plumbing** (topic, DLQ, push subscription, GCS notification)
 - **Scale-to-zero** (min instances 0)
 - **Cost guardrails** (max instances cap)
 - macOS-friendly **Cloud Build** based image builds
-- Optional (disabled by default): **Serverless VPC Access connector**
+- **Serverless VPC Access connector** (auto-enabled when Cloud SQL is enabled)
 - **Cloud SQL Postgres** persistence (enabled by default)
 - Optional: **Workspace IAM starter pack** (Google Groups → roles)
 - **Observability as code** (small dashboard + alert policies)
@@ -68,9 +69,11 @@ See `docs/IAM_STARTER_PACK.md` for the full role matrix.
 
 ---
 
-## Optional: VPC connector
+## VPC connector
 
-If you want to demonstrate private networking (Cloud Run → private IP resources), enable `enable_vpc_connector`.
+When Cloud SQL is enabled (default), this stack automatically creates and attaches a Serverless VPC Access connector so Cloud Run can reach Cloud SQL over private IP.
+
+You can also enable `enable_vpc_connector=true` when Cloud SQL is disabled and you still need private networking for other resources.
 
 > Note: Serverless VPC Access connectors are not free.
 
@@ -92,3 +95,18 @@ This stack will:
 - inject `DATABASE_URL` for app runtime
 
 Runbook: `docs/RUNBOOKS/CLOUDSQL.md`
+
+---
+
+## Optional: Pub/Sub push ingestion
+
+To wire event-driven ingestion (`POST /api/connectors/gcs/notify`) for private deployments:
+
+```hcl
+allow_unauthenticated     = false
+enable_pubsub_push_ingest = true
+pubsub_push_bucket        = "my-bucket"
+pubsub_push_prefix        = "knowledge/"
+```
+
+You must also run the app in private mode (`PUBLIC_DEMO_MODE=0`) and enable connectors (`ALLOW_CONNECTORS=1`) via `app_env_overrides`.

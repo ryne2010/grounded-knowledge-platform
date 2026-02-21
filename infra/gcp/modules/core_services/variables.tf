@@ -13,6 +13,7 @@ variable "services" {
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "compute.googleapis.com",
+    "servicenetworking.googleapis.com",
     "vpcaccess.googleapis.com",
     "pubsub.googleapis.com",
     "cloudscheduler.googleapis.com",

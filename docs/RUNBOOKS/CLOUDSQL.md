@@ -34,6 +34,8 @@ make apply ENV=dev
 
 When Cloud SQL is enabled, expected outcome:
 - Cloud SQL instance + DB + user created
+- Private IP connectivity is configured for Cloud SQL
+- Serverless VPC Access connector is created/attached for Cloud Run
 - Cloud Run mounts Cloud SQL socket at `/cloudsql`
 - `DATABASE_URL` injected into Cloud Run env
 - `/api/meta` reports `"database_backend": "postgres"`

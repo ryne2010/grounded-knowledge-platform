@@ -32,8 +32,14 @@ image_tag          = "latest"
 # app_env_overrides = {
 #   PUBLIC_DEMO_MODE = "0"
 #   AUTH_MODE        = "api_key"
+#   ALLOW_CONNECTORS = "1"
 #   OTEL_ENABLED     = "1"
 # }
+
+# Optional: event-driven ingestion (GCS finalize -> Pub/Sub push -> /api/connectors/gcs/notify)
+# enable_pubsub_push_ingest = true
+# pubsub_push_bucket        = "my-ingest-bucket"
+# pubsub_push_prefix        = "knowledge/"
 
 # Optional: demonstrate group-based IAM without Workspace/Cloud Identity.
 # clients_observers_group_email              = "gkp-observers@googlegroups.com"

@@ -103,7 +103,7 @@ variable "deletion_protection" {
 
 variable "enable_vpc_connector" {
   type        = bool
-  description = "Create and attach a Serverless VPC Access connector (NOT free)."
+  description = "Create and attach a Serverless VPC Access connector (NOT free). This is auto-enabled when Cloud SQL is enabled to support private IP connectivity."
   default     = false
 }
 
@@ -129,6 +129,41 @@ variable "app_env_overrides" {
   type        = map(string)
   description = "Map of Cloud Run plaintext env overrides merged on top of demo-safe defaults (for private/internal deployments)."
   default     = {}
+}
+
+variable "enable_pubsub_push_ingest" {
+  type        = bool
+  description = "Enable optional Pub/Sub push ingestion resources for GCS object finalize events."
+  default     = false
+
+  validation {
+    condition     = !var.enable_pubsub_push_ingest || !var.allow_unauthenticated
+    error_message = "enable_pubsub_push_ingest requires allow_unauthenticated=false (private service)."
+  }
+}
+
+variable "pubsub_push_bucket" {
+  type        = string
+  description = "Existing GCS bucket to attach OBJECT_FINALIZE notifications to when enable_pubsub_push_ingest=true."
+  default     = ""
+}
+
+variable "pubsub_push_prefix" {
+  type        = string
+  description = "Optional object prefix filter for GCS notification events."
+  default     = ""
+}
+
+variable "pubsub_push_ack_deadline_seconds" {
+  type        = number
+  description = "Pub/Sub push subscription ack deadline in seconds."
+  default     = 30
+}
+
+variable "pubsub_push_max_delivery_attempts" {
+  type        = number
+  description = "Dead-letter max delivery attempts for Pub/Sub push subscription."
+  default     = 5
 }
 
 variable "cloudsql_tier" {
