@@ -8,6 +8,7 @@ What this demonstrates (staff-level):
 - **Safe public demo defaults** (`PUBLIC_DEMO_MODE=1`, no uploads, extractive-only)
 - Optional **private service IAM** via `allow_unauthenticated=false` + `private_invoker_members`
 - Optional **Secret Manager env wiring** via `secret_env` (no plaintext keys in tfvars)
+- Optional **Pub/Sub push ingestion plumbing** (topic, DLQ, push subscription, GCS notification)
 - **Scale-to-zero** (min instances 0)
 - **Cost guardrails** (max instances cap)
 - macOS-friendly **Cloud Build** based image builds
@@ -92,3 +93,18 @@ This stack will:
 - inject `DATABASE_URL` for app runtime
 
 Runbook: `docs/RUNBOOKS/CLOUDSQL.md`
+
+---
+
+## Optional: Pub/Sub push ingestion
+
+To wire event-driven ingestion (`POST /api/connectors/gcs/notify`) for private deployments:
+
+```hcl
+allow_unauthenticated     = false
+enable_pubsub_push_ingest = true
+pubsub_push_bucket        = "my-bucket"
+pubsub_push_prefix        = "knowledge/"
+```
+
+You must also run the app in private mode (`PUBLIC_DEMO_MODE=0`) and enable connectors (`ALLOW_CONNECTORS=1`) via `app_env_overrides`.

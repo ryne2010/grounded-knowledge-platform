@@ -120,6 +120,93 @@ def download_object_to_file(
             f.write(chunk)
 
 
+def ingest_object(
+    *,
+    bucket: str,
+    object_name: str,
+    generation: str | None = None,
+    classification: str | None = None,
+    retention: str | None = None,
+    tags: str | list[str] | None = None,
+    notes: str | None = None,
+    run_id: str | None = None,
+    expected_size: int | None = None,
+) -> dict[str, Any]:
+    """Ingest a single GCS object (add/update only).
+
+    This is used by event-driven Pub/Sub push ingestion and shares behavior with
+    prefix sync: stable source URI + content hash-based idempotency.
+    """
+
+    if settings.public_demo_mode:
+        raise RuntimeError("GCS connectors are disabled in PUBLIC_DEMO_MODE")
+
+    bucket_name = str(bucket or "").strip()
+    name = str(object_name or "").strip()
+    if not bucket_name:
+        raise ValueError("bucket is required")
+    if not name:
+        raise ValueError("object_name is required")
+
+    suffix = Path(name).suffix.lower()
+    gcs_uri = f"gs://{bucket_name}/{name}"
+    size_hint = int(expected_size) if isinstance(expected_size, int) else 0
+
+    if suffix not in _SUPPORTED_SUFFIXES:
+        return {
+            "gcs_uri": gcs_uri,
+            "action": "skipped_unsupported",
+            "size": size_hint,
+            "generation": generation,
+            "changed": False,
+        }
+
+    title = Path(name).name
+    safe_base = re.sub(r"[^A-Za-z0-9._-]", "_", Path(name).stem)[:120] or "object"
+    tmp_dir = Path("/tmp/gkp_gcs_notify")
+    tmp_path = tmp_dir / f"{safe_base}_{uuid.uuid4().hex}{suffix}"
+
+    try:
+        with httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+            token = _get_access_token(client)
+            download_object_to_file(bucket=bucket_name, name=name, dest_path=tmp_path, client=client, token=token)
+
+        local_size = int(tmp_path.stat().st_size) if tmp_path.exists() else size_hint
+        extra_notes = notes or ""
+        connector_notes = json.dumps(
+            {"connector": "gcs", "bucket": bucket_name, "name": name, "generation": generation},
+            separators=(",", ":"),
+        )
+        merged_notes = (extra_notes + "\n\n" + connector_notes).strip()
+
+        res = ingest_file(
+            tmp_path,
+            title=title,
+            source=gcs_uri,
+            classification=classification,
+            retention=retention,
+            tags=tags,
+            notes=merged_notes,
+            run_id=run_id,
+        )
+        return {
+            "gcs_uri": gcs_uri,
+            "action": "changed" if res.changed else "unchanged",
+            "size": local_size,
+            "generation": generation,
+            "doc_id": res.doc_id,
+            "doc_version": res.doc_version,
+            "changed": bool(res.changed),
+            "num_chunks": res.num_chunks,
+            "content_sha256": res.content_sha256,
+        }
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def sync_prefix(
     *,
     bucket: str,

@@ -252,6 +252,11 @@ Response:
 ### Connectors (private only)
 
 - `POST /api/connectors/gcs/sync` (requires `ALLOW_CONNECTORS=1`, admin role, and not demo mode)
+- `POST /api/connectors/gcs/notify` (Pub/Sub push envelope; requires `ALLOW_CONNECTORS=1`, admin role, and not demo mode)
+
+`/api/connectors/gcs/notify` is intentionally hidden when disabled:
+- returns `404` in `PUBLIC_DEMO_MODE=1`
+- returns `404` when `ALLOW_CONNECTORS!=1`
 
 Request (JSON):
 
@@ -264,6 +269,13 @@ Response includes:
 - sync summary (`scanned`, `skipped_unsupported`, `ingested`, `changed`)
 - optional `errors`
 - `results[]` per processed object/doc
+
+Pub/Sub notify response includes:
+- `accepted: true`
+- `run_id: string | null`
+- `pubsub_message_id: string`
+- `gcs_uri: string`
+- `result: "changed" | "unchanged" | "skipped_unsupported" | "ignored_event"`
 
 ### Query
 

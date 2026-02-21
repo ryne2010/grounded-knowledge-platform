@@ -53,3 +53,13 @@ output "cloudsql_database_url" {
   description = "DATABASE_URL injected into Cloud Run (if Cloud SQL is enabled)."
   sensitive   = true
 }
+
+output "pubsub_ingest_topic" {
+  value       = local.enable_pubsub_push_ingest ? google_pubsub_topic.gcs_ingest_events[0].id : null
+  description = "Pub/Sub topic for GCS finalize ingestion events (if enabled)."
+}
+
+output "pubsub_ingest_subscription" {
+  value       = local.enable_pubsub_push_ingest ? google_pubsub_subscription.gcs_ingest_events_push[0].id : null
+  description = "Pub/Sub push subscription id for GCS notify endpoint (if enabled)."
+}

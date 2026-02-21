@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 import re
@@ -17,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .answering import get_answerer
-from .auth import AuthError, effective_auth_mode, require_role, resolve_auth_context
+from .auth import AuthContext, AuthError, effective_auth_mode, require_role, resolve_auth_context
 from .bootstrap import bootstrap_demo_corpus
 from .config import settings
 from .eval import run_eval
@@ -680,6 +682,90 @@ class GCSSyncRequest(BaseModel):
     retention: str | None = Field(None, description="none|30d|90d|1y|indefinite")
     tags: list[str] | None = Field(None, description="Optional tags to apply to all ingested docs")
     notes: str | None = Field(None, description="Optional ingest notes (applied to all docs)")
+
+
+_GCS_FINALIZE_EVENT_TYPES = {
+    "OBJECT_FINALIZE",
+    "OBJECT_FINALIZED",
+    "google.cloud.storage.object.v1.finalized",
+}
+
+
+def _first_nonempty_str(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        s = str(value).strip()
+        if s:
+            return s
+    return ""
+
+
+def _coerce_int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def _decode_pubsub_message_data(raw_data: str) -> dict[str, Any]:
+    data = str(raw_data or "").strip()
+    if not data:
+        return {}
+    try:
+        decoded = base64.b64decode(data)
+    except binascii.Error as e:
+        raise ValueError("Invalid Pub/Sub message.data (base64 decode failed)") from e
+    try:
+        payload = json.loads(decoded.decode("utf-8"))
+    except Exception as e:
+        raise ValueError("Invalid Pub/Sub message.data (JSON decode failed)") from e
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid Pub/Sub message.data (expected JSON object)")
+    return payload
+
+
+def _extract_gcs_notify_payload(body: dict[str, Any]) -> dict[str, Any]:
+    message = body.get("message")
+    if not isinstance(message, dict):
+        raise ValueError("Invalid Pub/Sub push payload: missing `message` object")
+
+    attributes = message.get("attributes")
+    attrs = attributes if isinstance(attributes, dict) else {}
+    data_payload: dict[str, Any] = {}
+    if "data" in message and message.get("data") is not None:
+        data_payload = _decode_pubsub_message_data(str(message.get("data")))
+
+    bucket = _first_nonempty_str(
+        attrs.get("bucketId"),
+        data_payload.get("bucketId"),
+        data_payload.get("bucket"),
+    )
+    object_name = _first_nonempty_str(
+        attrs.get("objectId"),
+        data_payload.get("objectId"),
+        data_payload.get("name"),
+    )
+    if not bucket or not object_name:
+        raise ValueError("Invalid Pub/Sub push payload: bucketId/objectId (or data fallback) required")
+
+    return {
+        "message_id": _first_nonempty_str(message.get("messageId"), message.get("message_id")),
+        "event_type": _first_nonempty_str(attrs.get("eventType"), data_payload.get("eventType")),
+        "bucket": bucket,
+        "object_name": object_name,
+        "generation": _first_nonempty_str(attrs.get("objectGeneration"), data_payload.get("generation")) or None,
+        "size": _coerce_int_or_none(_first_nonempty_str(attrs.get("objectSize"), data_payload.get("size"))),
+    }
+
+
+def _require_private_connectors_admin(request: Request) -> AuthContext:
+    # Keep endpoint hidden for demo/disabled deployments.
+    if settings.public_demo_mode or not settings.allow_connectors:
+        raise HTTPException(status_code=404, detail="Not found")
+    return require_role("admin")(request)
 
 
 
@@ -1467,6 +1553,170 @@ def gcs_sync_api(req: GCSSyncRequest, _auth: Any = Depends(require_role("admin")
 
     invalidate_cache()
     return res
+
+
+@app.post("/api/connectors/gcs/notify", status_code=202)
+def gcs_notify_api(
+    body: dict[str, Any],
+    _auth: AuthContext = Depends(_require_private_connectors_admin),
+) -> dict[str, Any]:
+    """Handle a Pub/Sub push envelope for a single GCS object finalize event."""
+
+    from .connectors.gcs import ingest_object
+
+    timer = Timer()
+    try:
+        event = _extract_gcs_notify_payload(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    message_id = str(event.get("message_id") or "")
+    event_type = str(event.get("event_type") or "")
+    bucket = str(event["bucket"])
+    object_name = str(event["object_name"])
+    generation = event.get("generation")
+    size = event.get("size")
+    gcs_uri = f"gs://{bucket}/{object_name}"
+
+    if event_type and event_type not in _GCS_FINALIZE_EVENT_TYPES:
+        logger.info(
+            json.dumps(
+                {
+                    "event": "connector.gcs.notify",
+                    "pubsub_message_id": message_id,
+                    "gcs_uri": gcs_uri,
+                    "result": "ignored_event",
+                    "event_type": event_type,
+                    "latency_ms": timer.ms(),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return {
+            "accepted": True,
+            "run_id": None,
+            "pubsub_message_id": message_id,
+            "gcs_uri": gcs_uri,
+            "result": "ignored_event",
+        }
+
+    run_id = uuid.uuid4().hex
+    trigger_payload = {
+        "source": "pubsub_push",
+        "bucket": bucket,
+        "object": object_name,
+        "generation": generation,
+        "message_id": message_id,
+        "event_type": event_type or "OBJECT_FINALIZE",
+    }
+    principal = getattr(_auth, "principal", None)
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        create_ingestion_run(
+            conn,
+            run_id=run_id,
+            trigger_type="connector",
+            trigger_payload_json=json.dumps(trigger_payload, ensure_ascii=False),
+            principal=principal,
+        )
+        conn.commit()
+
+    try:
+        result = ingest_object(
+            bucket=bucket,
+            object_name=object_name,
+            generation=generation if isinstance(generation, str) else None,
+            notes=f"pubsub_message_id={message_id}" if message_id else None,
+            run_id=run_id,
+            expected_size=size if isinstance(size, int) else None,
+        )
+        action = str(result.get("action") or "accepted")
+        docs_changed = 1 if bool(result.get("changed")) else 0
+        docs_unchanged = 1 if action == "unchanged" else 0
+        bytes_processed = int(result.get("size") or 0)
+
+        with connect(settings.sqlite_path) as conn:
+            init_db(conn)
+            complete_ingestion_run(
+                conn,
+                run_id=run_id,
+                status="succeeded",
+                objects_scanned=1,
+                docs_changed=docs_changed,
+                docs_unchanged=docs_unchanged,
+                bytes_processed=bytes_processed,
+                errors_json="[]",
+            )
+            conn.commit()
+    except ValueError as e:
+        with connect(settings.sqlite_path) as conn:
+            init_db(conn)
+            complete_ingestion_run(
+                conn,
+                run_id=run_id,
+                status="failed",
+                objects_scanned=1,
+                docs_changed=0,
+                docs_unchanged=0,
+                bytes_processed=0,
+                errors_json=json.dumps([str(e)], ensure_ascii=False),
+            )
+            conn.commit()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        with connect(settings.sqlite_path) as conn:
+            init_db(conn)
+            complete_ingestion_run(
+                conn,
+                run_id=run_id,
+                status="failed",
+                objects_scanned=1,
+                docs_changed=0,
+                docs_unchanged=0,
+                bytes_processed=0,
+                errors_json=json.dumps([str(e)], ensure_ascii=False),
+            )
+            conn.commit()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        with connect(settings.sqlite_path) as conn:
+            init_db(conn)
+            complete_ingestion_run(
+                conn,
+                run_id=run_id,
+                status="failed",
+                objects_scanned=1,
+                docs_changed=0,
+                docs_unchanged=0,
+                bytes_processed=0,
+                errors_json=json.dumps([str(e)], ensure_ascii=False),
+            )
+            conn.commit()
+        raise
+
+    invalidate_cache()
+    logger.info(
+        json.dumps(
+            {
+                "event": "connector.gcs.notify",
+                "pubsub_message_id": message_id,
+                "gcs_uri": gcs_uri,
+                "result": str(result.get("action") or "accepted"),
+                "run_id": run_id,
+                "latency_ms": timer.ms(),
+            },
+            ensure_ascii=False,
+        )
+    )
+    return {
+        "accepted": True,
+        "run_id": run_id,
+        "pubsub_message_id": message_id,
+        "gcs_uri": gcs_uri,
+        "result": str(result.get("action") or "accepted"),
+        "changed": bool(result.get("changed")),
+        "doc_id": result.get("doc_id"),
+    }
 
 
 

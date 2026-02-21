@@ -864,3 +864,99 @@ Completed Task #11 acceptance closure for data contracts + schema drift by addin
 
 - Commit `TASK_DATA_CONTRACTS` on this branch and open PR.
 - Move to queue item #12: `TASK_PUBSUB_PUSH_INGEST`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-pubsub-push-ingest`
+- Current task: `TASK_PUBSUB_PUSH_INGEST` (`agents/tasks/TASK_PUBSUB_PUSH_INGEST.md`)
+
+## Task summary
+
+Implemented event-driven GCS ingestion via Pub/Sub push for private deployments:
+
+- added backend endpoint: `POST /api/connectors/gcs/notify`
+- added private connectors gating dependency for notify endpoint:
+  - returns `404` when `PUBLIC_DEMO_MODE=1`
+  - returns `404` when `ALLOW_CONNECTORS!=1`
+  - requires admin role when enabled
+- added Pub/Sub payload parsing:
+  - attributes-first (`bucketId`, `objectId`, `eventType`)
+  - fallback to base64-decoded `message.data` JSON (`bucket`/`bucketId`, `name`/`objectId`)
+- added single-object GCS ingest helper in connector module to reuse existing ingest pipeline
+- wired ingestion run lifecycle + structured logs for notify path
+- added Terraform optional resources for private Pub/Sub push ingestion:
+  - topic + DLQ topic
+  - push subscription (OIDC push identity)
+  - Cloud Run invoker IAM binding for push service account
+  - bucket notification config (`OBJECT_FINALIZE`)
+  - required Pub/Sub publisher IAM bindings
+- updated runbook and contracts docs with setup/testing details
+
+## Decisions made
+
+- Keep notify processing synchronous and idempotent for this slice (returns `202` for accepted/duplicate events).
+- Restrict processing to finalize events; non-finalize events return `202` with `ignored_event` result.
+- Keep public demo safe-by-default by hiding endpoint availability (`404`) when connectors are disabled.
+
+## Files changed
+
+- `app/main.py`
+- `app/connectors/gcs.py`
+- `tests/test_pubsub_push_ingest.py`
+- `infra/gcp/cloud_run_demo/pubsub_ingest.tf`
+- `infra/gcp/cloud_run_demo/variables.tf`
+- `infra/gcp/cloud_run_demo/outputs.tf`
+- `infra/gcp/cloud_run_demo/README.md`
+- `infra/gcp/cloud_run_demo/terraform.tfvars.example`
+- `docs/RUNBOOKS/CONNECTORS_GCS.md`
+- `docs/CONTRACTS.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_PUBSUB_PUSH_INGEST.md`
+   - `sed -n ... docs/SPECS/PUBSUB_EVENT_INGESTION.md`
+2. Branching:
+   - `git checkout main`
+   - `git pull --ff-only`
+   - `git checkout -B codex/task-pubsub-push-ingest main`
+3. Targeted validation during implementation:
+   - `uv run ruff check app/main.py app/connectors/gcs.py tests/test_pubsub_push_ingest.py`
+   - `uv run mypy app`
+   - `uv run pytest -q tests/test_pubsub_push_ingest.py tests/test_ingestion_runs.py`
+   - `terraform -chdir=infra/gcp/cloud_run_demo fmt -recursive`
+   - `terraform -chdir=infra/gcp/cloud_run_demo init -backend=false -input=false`
+   - `terraform -chdir=infra/gcp/cloud_run_demo validate`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `terraform -chdir=infra/gcp/cloud_run_demo fmt -check -recursive`
+   - `terraform -chdir=infra/gcp/cloud_run_demo validate`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`46 passed, 3 skipped` in Python; `12 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `terraform -chdir=infra/gcp/cloud_run_demo fmt -check -recursive`: PASS
+- `terraform -chdir=infra/gcp/cloud_run_demo validate`: PASS
+
+## What’s next
+
+- Commit `TASK_PUBSUB_PUSH_INGEST` on this branch and open PR.
+- Move to queue item #13: `TASK_SCHEDULER_PERIODIC_SYNC`.
