@@ -156,3 +156,80 @@ Implemented Task #2 citation UX polish:
 
 - Commit `TASK_DOC_VIEWER_CITATIONS` on this branch and open PR.
 - Move to queue item #3: `TASK_QUERY_EXPLAIN_DRAWER`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-query-explain-drawer`
+- Current task: `TASK_QUERY_EXPLAIN_DRAWER` (`agents/tasks/TASK_QUERY_EXPLAIN_DRAWER.md`)
+
+## Task summary
+
+Implemented Task #3 retrieval transparency via an “Explain this answer” drawer and stable API payloads:
+
+- backend `/api/query` now returns an `explain` object for answered and refused responses
+- backend `/api/query/stream` now includes the same `explain` payload in `done` events
+- `explain` includes:
+  - `evidence_used`
+  - `how_retrieval_works`
+  - `refusal` (categorized, human-readable reason)
+- public demo mode keeps explanation safe-by-default (no chunk IDs/scores in explanation evidence)
+- private mode with debug enabled includes richer evidence detail (chunk IDs + scores)
+- Ask page now has an “Explain this answer” drawer with:
+  - “Evidence used”
+  - “How retrieval works”
+  - “Why the system refused”
+
+## Decisions made
+
+- Chose **Option A** from task requirements: extend `/api/query` contract with stable `explain` payload.
+- Mirrored `explain` into streaming `done` events so default streaming UX still supports explainability.
+- Kept explanation evidence snippet-first in public demo; private-only numeric/internal detail remains gated.
+- Replaced the old retrieval-debug modal in Ask flow with the dedicated explain drawer to avoid parallel UX paths.
+
+## Files changed
+
+- `app/main.py`
+- `web/src/api.ts`
+- `web/src/pages/Home.tsx`
+- `tests/test_query_explain.py`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git checkout main && git pull --ff-only`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_QUERY_EXPLAIN_DRAWER.md`
+   - `sed -n ... docs/SPECS/UI_UX_PRODUCTION_POLISH.md`
+2. Branching:
+   - `git checkout -b codex/task-query-explain-drawer`
+3. Targeted validation during implementation:
+   - `cd web && corepack pnpm run typecheck`
+   - `uv run pytest -q tests/test_query_explain.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`32 passed, 3 skipped` in Python; `1 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## What’s next
+
+- Commit `TASK_QUERY_EXPLAIN_DRAWER` on this branch and open PR.
+- Move to queue item #4: `TASK_DEMO_GUIDED_TOUR`.

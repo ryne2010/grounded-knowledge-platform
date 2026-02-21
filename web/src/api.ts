@@ -165,6 +165,38 @@ export type RetrievalDebug = {
   text?: string
 }
 
+export type QueryExplainEvidence = {
+  doc_id: string
+  doc_title: string | null
+  doc_source: string | null
+  snippet: string
+  selected: boolean
+  why_selected: string
+  chunk_id?: string
+  idx?: number
+  score?: number
+  lexical_score?: number
+  vector_score?: number
+}
+
+export type QueryExplain = {
+  question: string
+  evidence_used: QueryExplainEvidence[]
+  how_retrieval_works: {
+    summary: string
+    top_k: number
+    retrieved_chunks: number
+    public_demo_mode: boolean
+    debug_details_included: boolean
+  }
+  refusal: {
+    refused: boolean
+    code: string | null
+    category: string | null
+    message: string
+  }
+}
+
 export type QueryResponse = {
   question: string
   answer: string
@@ -173,6 +205,7 @@ export type QueryResponse = {
   provider: string
   citations: QueryCitation[]
   retrieval?: RetrievalDebug[]
+  explain?: QueryExplain
 }
 
 export type QueryStreamDone = {
@@ -181,12 +214,14 @@ export type QueryStreamDone = {
   refused: boolean
   refusal_reason: string | null
   provider: string
+  explain?: QueryExplain
 }
 
 export type QueryStreamHandlers = {
   onRetrieval?: (rows: RetrievalDebug[]) => void
   onToken?: (text: string) => void
   onCitations?: (citations: QueryCitation[]) => void
+  onExplain?: (explain: QueryExplain) => void
   onDone?: (done: QueryStreamDone) => void
   onError?: (message: string) => void
 }
@@ -478,6 +513,7 @@ export const api = {
     let answer = ''
     let citations: QueryCitation[] = []
     let retrieval: RetrievalDebug[] | undefined
+    let explain: QueryExplain | undefined
     let done: QueryStreamDone | null = null
 
     while (true) {
@@ -515,13 +551,28 @@ export const api = {
           handlers.onCitations?.(citations)
           continue
         }
+        if (evt.event === 'explain') {
+          if (parsed && typeof parsed === 'object') {
+            explain = parsed as QueryExplain
+            handlers.onExplain?.(explain)
+          }
+          continue
+        }
         if (evt.event === 'done') {
+          const doneExplain = parsed?.explain && typeof parsed.explain === 'object'
+            ? (parsed.explain as QueryExplain)
+            : undefined
+          if (doneExplain) {
+            explain = doneExplain
+            handlers.onExplain?.(doneExplain)
+          }
           done = {
             question: String(parsed?.question ?? question),
             answer: String(parsed?.answer ?? answer),
             refused: Boolean(parsed?.refused),
             refusal_reason: parsed?.refusal_reason ?? null,
             provider: String(parsed?.provider ?? 'unknown'),
+            explain: doneExplain ?? explain,
           }
           handlers.onDone?.(done)
           continue
@@ -542,17 +593,26 @@ export const api = {
           parsed = {}
         }
         if (evt.event === 'done') {
+          const doneExplain = parsed?.explain && typeof parsed.explain === 'object'
+            ? (parsed.explain as QueryExplain)
+            : undefined
+          if (doneExplain) {
+            explain = doneExplain
+          }
           done = {
             question: String(parsed?.question ?? question),
             answer: String(parsed?.answer ?? answer),
             refused: Boolean(parsed?.refused),
             refusal_reason: parsed?.refusal_reason ?? null,
             provider: String(parsed?.provider ?? 'unknown'),
+            explain: doneExplain ?? explain,
           }
         } else if (evt.event === 'citations' && Array.isArray(parsed)) {
           citations = parsed as QueryCitation[]
         } else if (evt.event === 'retrieval' && Array.isArray(parsed)) {
           retrieval = parsed as RetrievalDebug[]
+        } else if (evt.event === 'explain' && parsed && typeof parsed === 'object') {
+          explain = parsed as QueryExplain
         }
       }
     }
@@ -564,6 +624,7 @@ export const api = {
         refused: false,
         refusal_reason: null,
         provider: 'unknown',
+        explain,
       }
     }
 
@@ -575,6 +636,7 @@ export const api = {
       provider: done.provider,
       citations,
       retrieval,
+      explain: done.explain ?? explain,
     }
   },
 
