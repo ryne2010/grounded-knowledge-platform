@@ -53,6 +53,8 @@ from .storage import (
     get_ingestion_run,
     get_meta,
     init_db,
+    insert_audit_event,
+    list_audit_events,
     list_ingest_events_for_run,
     update_doc_metadata,
     list_ingestion_runs,
@@ -768,6 +770,64 @@ def _require_private_connectors_admin(request: Request) -> AuthContext:
     return require_role("admin")(request)
 
 
+_AUDIT_REDACT_KEY_FRAGMENTS = {
+    "secret",
+    "token",
+    "password",
+    "api_key",
+    "authorization",
+    "content",
+    "text",
+    "quote",
+}
+
+
+def _sanitize_audit_metadata(value: Any, *, key: str | None = None) -> Any:
+    if key is not None:
+        k = key.strip().lower()
+        if any(fragment in k for fragment in _AUDIT_REDACT_KEY_FRAGMENTS):
+            return "[redacted]"
+
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:500]
+    if isinstance(value, list):
+        return [_sanitize_audit_metadata(v) for v in value[:100]]
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            out[str(k)] = _sanitize_audit_metadata(v, key=str(k))
+        return out
+    return str(value)
+
+
+def _record_audit_event(
+    conn: Any,
+    *,
+    auth_ctx: AuthContext,
+    request: Request | None,
+    action: str,
+    target_type: str,
+    target_id: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    metadata_obj = metadata or {}
+    metadata_json = json.dumps(_sanitize_audit_metadata(metadata_obj), ensure_ascii=False)
+    request_id = getattr(getattr(request, "state", None), "request_id", None) if request is not None else None
+    insert_audit_event(
+        conn,
+        event_id=uuid.uuid4().hex,
+        principal=str(auth_ctx.principal),
+        role=str(auth_ctx.role),
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        metadata_json=metadata_json,
+        request_id=str(request_id) if request_id else None,
+    )
+
+
 
 class DocUpdateRequest(BaseModel):
     title: str | None = Field(None, description="Optional new title")
@@ -856,6 +916,22 @@ class IngestionRunsResponse(BaseModel):
 class IngestionRunDetailResponse(BaseModel):
     run: IngestionRunSummary
     events: list[dict[str, object]]
+
+
+class AuditEventItem(BaseModel):
+    event_id: str
+    occurred_at: int
+    principal: str
+    role: str
+    action: str
+    target_type: str
+    target_id: str | None = None
+    metadata: dict[str, Any]
+    request_id: str | None = None
+
+
+class AuditEventsResponse(BaseModel):
+    events: list[AuditEventItem]
 
 
 # ---- Health ----
@@ -1058,7 +1134,12 @@ def doc_detail(doc_id: str, _auth: Any = Depends(require_role("reader"))) -> dic
 
 
 @app.patch("/api/docs/{doc_id}")
-def doc_update(doc_id: str, req: DocUpdateRequest, _auth: Any = Depends(require_role("editor"))) -> dict[str, Any]:
+def doc_update(
+    doc_id: str,
+    req: DocUpdateRequest,
+    request: Request,
+    _auth: AuthContext = Depends(require_role("editor")),
+) -> dict[str, Any]:
     """Update doc metadata (title/source/classification/retention/tags).
 
     This endpoint is intentionally **disabled** in PUBLIC_DEMO_MODE.
@@ -1104,6 +1185,18 @@ def doc_update(doc_id: str, req: DocUpdateRequest, _auth: Any = Depends(require_
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid tags: {e}") from e
 
+    changed_fields = [
+        field
+        for field, value in (
+            ("title", title),
+            ("source", source),
+            ("classification", classification),
+            ("retention", retention),
+            ("tags", tags_json),
+        )
+        if value is not None
+    ]
+
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
         doc = get_doc(conn, doc_id)
@@ -1119,6 +1212,21 @@ def doc_update(doc_id: str, req: DocUpdateRequest, _auth: Any = Depends(require_
             retention=retention,
             tags_json=tags_json,
         )
+        if changed_fields:
+            _record_audit_event(
+                conn,
+                auth_ctx=_auth,
+                request=request,
+                action="doc.metadata.updated",
+                target_type="doc",
+                target_id=doc_id,
+                metadata={
+                    "fields": changed_fields,
+                    "classification": classification,
+                    "retention": retention,
+                    "tags_count": len(req.tags or []) if req.tags is not None else None,
+                },
+            )
         conn.commit()
 
         updated = get_doc(conn, doc_id)
@@ -1163,6 +1271,31 @@ def ingestion_run_detail_api(run_id: str, _auth: Any = Depends(require_role("rea
         run=IngestionRunSummary.model_validate(run.to_dict()),
         events=[e.to_dict() for e in events],
     )
+
+
+@app.get("/api/audit-events", response_model=AuditEventsResponse)
+def audit_events_api(
+    limit: int = 100,
+    action: str | None = None,
+    since: int | None = None,
+    until: int | None = None,
+    _auth: AuthContext = Depends(require_role("admin")),
+) -> AuditEventsResponse:
+    limit = max(1, min(int(limit), 1000))
+    if since is not None and until is not None and int(since) > int(until):
+        raise HTTPException(status_code=400, detail="since must be <= until")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        events = list_audit_events(
+            conn,
+            limit=limit,
+            action=action,
+            since=int(since) if since is not None else None,
+            until=int(until) if until is not None else None,
+        )
+
+    return AuditEventsResponse(events=[AuditEventItem.model_validate(e.to_dict()) for e in events])
 
 
 @app.get("/api/docs/{doc_id}/chunks")
@@ -1397,7 +1530,7 @@ def search_chunks(q: str, limit: int = 20, _auth: Any = Depends(require_role("re
 
 
 @app.delete("/api/docs/{doc_id}")
-def delete_doc_api(doc_id: str, _auth: Any = Depends(require_role("admin"))) -> dict[str, Any]:
+def delete_doc_api(doc_id: str, request: Request, _auth: AuthContext = Depends(require_role("admin"))) -> dict[str, Any]:
     if settings.public_demo_mode or not settings.allow_doc_delete:
         raise HTTPException(status_code=403, detail="Delete is disabled in this deployment")
 
@@ -1406,6 +1539,20 @@ def delete_doc_api(doc_id: str, _auth: Any = Depends(require_role("admin"))) -> 
         doc = get_doc(conn, doc_id)
         if doc is None:
             raise HTTPException(status_code=404, detail="Doc not found")
+        _record_audit_event(
+            conn,
+            auth_ctx=_auth,
+            request=request,
+            action="doc.deleted",
+            target_type="doc",
+            target_id=doc_id,
+            metadata={
+                "classification": str(doc.classification),
+                "retention": str(doc.retention),
+                "doc_version": int(doc.doc_version),
+                "num_chunks": int(doc.num_chunks),
+            },
+        )
         delete_doc(conn, doc_id)
         conn.commit()
 
@@ -1445,7 +1592,7 @@ def ingest_text_api(req: IngestTextRequest, _auth: Any = Depends(require_role("e
 # ---- Connectors ----
 @app.post("/api/connectors/gcs/sync")
 def gcs_sync_api(
-    req: GCSSyncRequest, request: Request, _auth: Any = Depends(require_role("admin"))
+    req: GCSSyncRequest, request: Request, _auth: AuthContext = Depends(require_role("admin"))
 ) -> dict[str, Any]:
     """Trigger a one-off sync from a GCS prefix (private deployments only).
 
@@ -1479,6 +1626,23 @@ def gcs_sync_api(
             trigger_type="connector",
             trigger_payload_json=json.dumps(trigger_payload, ensure_ascii=False),
             principal=principal,
+        )
+        _record_audit_event(
+            conn,
+            auth_ctx=_auth,
+            request=request,
+            action="connector.gcs.sync.triggered",
+            target_type="ingestion_run",
+            target_id=run_id,
+            metadata={
+                "bucket": req.bucket,
+                "prefix": req.prefix or "",
+                "max_objects": int(req.max_objects),
+                "dry_run": bool(req.dry_run),
+                "classification": req.classification,
+                "retention": req.retention,
+                "tags_count": len(req.tags or []),
+            },
         )
         conn.commit()
 
@@ -2448,10 +2612,32 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
 
 # ---- Eval ----
 @app.post("/api/eval/run")
-def eval_api(req: EvalRequest, _auth: Any = Depends(require_role("admin"))) -> dict[str, Any]:
+def eval_api(req: EvalRequest, request: Request, _auth: AuthContext = Depends(require_role("admin"))) -> dict[str, Any]:
     if settings.public_demo_mode or not settings.allow_eval:
         raise HTTPException(status_code=403, detail="Eval endpoint disabled in this deployment")
+
+    eval_run_id = uuid.uuid4().hex
     res = run_eval(req.golden_path, k=req.k, include_details=req.include_details)
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        _record_audit_event(
+            conn,
+            auth_ctx=_auth,
+            request=request,
+            action="eval.run.created",
+            target_type="eval_run",
+            target_id=eval_run_id,
+            metadata={
+                "golden_path": req.golden_path,
+                "k": int(req.k),
+                "include_details": bool(req.include_details),
+                "examples": int(res.n),
+                "hit_at_k": round(float(res.hit_at_k), 6),
+                "mrr": round(float(res.mrr), 6),
+            },
+        )
+        conn.commit()
     return res.to_dict(include_details=req.include_details)
 
 

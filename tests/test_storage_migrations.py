@@ -104,3 +104,26 @@ def test_init_db_migrates_ingest_events_schema(tmp_path: Path):
     assert "ingestion_runs" in run_tables
     assert "status" in run_cols
     assert "errors_json" in run_cols
+
+
+def test_init_db_creates_audit_events_table(tmp_path: Path):
+    db_path = tmp_path / "audit_events.sqlite"
+
+    with connect(str(db_path)) as c:
+        init_db(c)
+        tables = {
+            str(r["name"])
+            for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='audit_events'").fetchall()
+        }
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(audit_events)").fetchall()}
+
+    assert "audit_events" in tables
+    assert "event_id" in cols
+    assert "occurred_at" in cols
+    assert "principal" in cols
+    assert "role" in cols
+    assert "action" in cols
+    assert "target_type" in cols
+    assert "target_id" in cols
+    assert "metadata_json" in cols
+    assert "request_id" in cols

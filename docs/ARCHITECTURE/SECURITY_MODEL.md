@@ -82,8 +82,7 @@ Mitigations:
 
 ---
 
-## Auditability (planned)
+## Auditability
 
-- Add append-only `audit_events` for admin actions (connector sync, deletes, config changes).
+- Append-only `audit_events` capture admin actions (connector sync, deletes, metadata updates, eval runs).
 - Keep operational workflows documented in `docs/RUNBOOKS/`.
-

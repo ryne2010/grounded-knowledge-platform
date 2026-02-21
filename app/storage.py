@@ -273,6 +273,42 @@ class IngestionRun:
         }
 
 
+@dataclass(frozen=True)
+class AuditEvent:
+    event_id: str
+    occurred_at: int
+    principal: str
+    role: str
+    action: str
+    target_type: str
+    target_id: str | None
+    metadata_json: str
+    request_id: str | None
+
+    @property
+    def metadata(self) -> dict[str, object]:
+        try:
+            raw = json.loads(self.metadata_json or "{}")
+            if isinstance(raw, dict):
+                return {str(k): v for k, v in raw.items()}
+        except Exception:
+            pass
+        return {}
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "event_id": self.event_id,
+            "occurred_at": int(self.occurred_at),
+            "principal": self.principal,
+            "role": self.role,
+            "action": self.action,
+            "target_type": self.target_type,
+            "target_id": self.target_id,
+            "metadata": self.metadata,
+            "request_id": self.request_id,
+        }
+
+
 def _ensure_parent_dir(sqlite_path: str) -> None:
     Path(os.path.dirname(sqlite_path) or ".").mkdir(parents=True, exist_ok=True)
 
@@ -436,6 +472,21 @@ def init_db(conn: Any) -> None:
         );
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS audit_events (
+            event_id TEXT PRIMARY KEY,
+            occurred_at INTEGER NOT NULL,
+            principal TEXT NOT NULL,
+            role TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            request_id TEXT
+        );
+        """
+    )
 
     # --- Key/value metadata (for index compatibility + lightweight migrations) ---
     conn.execute(
@@ -500,6 +551,9 @@ def init_db(conn: Any) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_run_id ON ingest_events(run_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ingestion_runs_started_at ON ingestion_runs(started_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ingestion_runs_status ON ingestion_runs(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_occurred_at ON audit_events(occurred_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_request_id ON audit_events(request_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_updated_at ON docs(updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_title ON docs(title)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_source ON docs(source)")
@@ -1311,6 +1365,113 @@ def get_ingestion_run(conn: Any, run_id: str) -> IngestionRun | None:
         )
     row = cur.fetchone()
     return IngestionRun(**dict(row)) if row is not None else None
+
+
+def insert_audit_event(
+    conn: Any,
+    *,
+    event_id: str,
+    principal: str,
+    role: str,
+    action: str,
+    target_type: str,
+    target_id: str | None = None,
+    metadata_json: str = "{}",
+    request_id: str | None = None,
+    occurred_at: int | None = None,
+) -> AuditEvent:
+    ts = int(occurred_at if occurred_at is not None else time.time())
+    if _is_postgres_conn(conn):
+        conn.execute(
+            """
+            INSERT INTO audit_events (
+              event_id, occurred_at, principal, role, action, target_type, target_id, metadata_json, request_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                event_id,
+                ts,
+                principal,
+                role,
+                action,
+                target_type,
+                target_id,
+                metadata_json,
+                request_id,
+            ),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO audit_events (
+              event_id, occurred_at, principal, role, action, target_type, target_id, metadata_json, request_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                ts,
+                principal,
+                role,
+                action,
+                target_type,
+                target_id,
+                metadata_json,
+                request_id,
+            ),
+        )
+    return AuditEvent(
+        event_id=event_id,
+        occurred_at=ts,
+        principal=principal,
+        role=role,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        metadata_json=metadata_json,
+        request_id=request_id,
+    )
+
+
+def list_audit_events(
+    conn: Any,
+    *,
+    limit: int = 100,
+    action: str | None = None,
+    since: int | None = None,
+    until: int | None = None,
+) -> list[AuditEvent]:
+    limit = max(1, min(int(limit), 1000))
+    ph = _ph(conn)
+
+    where: list[str] = []
+    params: list[object] = []
+
+    action_clean = str(action or "").strip()
+    if action_clean:
+        where.append(f"action={ph}")
+        params.append(action_clean)
+    if since is not None:
+        where.append(f"occurred_at>={ph}")
+        params.append(int(since))
+    if until is not None:
+        where.append(f"occurred_at<={ph}")
+        params.append(int(until))
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    params.append(limit)
+    cur = conn.execute(
+        f"""
+        SELECT event_id, occurred_at, principal, role, action, target_type, target_id, metadata_json, request_id
+        FROM audit_events
+        {where_sql}
+        ORDER BY occurred_at DESC, event_id DESC
+        LIMIT {ph}
+        """,
+        tuple(params),
+    )
+    return [AuditEvent(**dict(r)) for r in cur.fetchall()]
 
 
 def list_doc_ids_for_run(conn: Any, run_id: str, *, limit: int = 10000) -> list[str]:
