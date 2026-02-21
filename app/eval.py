@@ -43,9 +43,11 @@ class EvalRetrieved:
 
 @dataclass(frozen=True)
 class EvalExample:
+    case_id: str
     question: str
     expected_doc_ids: tuple[str, ...]
     expected_chunk_ids: tuple[str, ...]
+    status: str
     hit: bool
     rank: int | None
     rr: float
@@ -53,9 +55,11 @@ class EvalExample:
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "case_id": self.case_id,
             "question": self.question,
             "expected_doc_ids": list(self.expected_doc_ids),
             "expected_chunk_ids": list(self.expected_chunk_ids),
+            "status": self.status,
             "hit": self.hit,
             "rank": self.rank,
             "rr": self.rr,
@@ -68,10 +72,19 @@ class EvalResult:
     n: int
     hit_at_k: float
     mrr: float
+    passed: int = 0
+    failed: int = 0
     examples: tuple[EvalExample, ...] = ()
 
     def to_dict(self, *, include_details: bool = False) -> dict[str, object]:
-        out: dict[str, object] = {"examples": self.n, "hit_at_k": self.hit_at_k, "mrr": self.mrr}
+        out: dict[str, object] = {
+            "examples": self.n,
+            "passed": self.passed,
+            "failed": self.failed,
+            "pass_rate": (float(self.passed) / float(self.n)) if self.n > 0 else 0.0,
+            "hit_at_k": self.hit_at_k,
+            "mrr": self.mrr,
+        }
         if include_details:
             out["details"] = [ex.to_dict() for ex in self.examples]
         return out
@@ -95,7 +108,7 @@ def run_eval(golden_path: str | Path, *, k: int = 5, include_details: bool = Fal
     rr_sum = 0.0
     examples: list[EvalExample] = []
 
-    for line in golden_path.read_text(encoding="utf-8").splitlines():
+    for row_idx, line in enumerate(golden_path.read_text(encoding="utf-8").splitlines()):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -103,6 +116,7 @@ def run_eval(golden_path: str | Path, *, k: int = 5, include_details: bool = Fal
         q = str(row.get("question", "")).strip()
         if not q:
             continue
+        case_id = str(row.get("id") or f"case-{row_idx + 1:04d}")
 
         expected_docs = {str(x) for x in row.get("expected_doc_ids", []) if str(x).strip()}
         expected_chunks = {str(x) for x in row.get("expected_chunk_ids", []) if str(x).strip()}
@@ -129,9 +143,11 @@ def run_eval(golden_path: str | Path, *, k: int = 5, include_details: bool = Fal
         if include_details:
             examples.append(
                 EvalExample(
+                    case_id=case_id,
                     question=q,
                     expected_doc_ids=tuple(sorted(expected_docs)),
                     expected_chunk_ids=tuple(sorted(expected_chunks)),
+                    status="pass" if hit else "fail",
                     hit=hit,
                     rank=rank,
                     rr=rr,
@@ -140,6 +156,13 @@ def run_eval(golden_path: str | Path, *, k: int = 5, include_details: bool = Fal
             )
 
     if n == 0:
-        return EvalResult(n=0, hit_at_k=0.0, mrr=0.0, examples=tuple(examples))
+        return EvalResult(n=0, hit_at_k=0.0, mrr=0.0, passed=0, failed=0, examples=tuple(examples))
 
-    return EvalResult(n=n, hit_at_k=hits / n, mrr=rr_sum / n, examples=tuple(examples))
+    return EvalResult(
+        n=n,
+        hit_at_k=hits / n,
+        mrr=rr_sum / n,
+        passed=hits,
+        failed=n - hits,
+        examples=tuple(examples),
+    )

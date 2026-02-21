@@ -309,6 +309,108 @@ class AuditEvent:
         }
 
 
+@dataclass(frozen=True)
+class EvalRun:
+    run_id: str
+    started_at: int
+    finished_at: int | None
+    status: str
+    dataset_name: str
+    dataset_sha256: str
+    k: int
+    include_details: int
+    app_version: str
+    embeddings_backend: str
+    embeddings_model: str
+    retrieval_config_json: str
+    provider_config_json: str
+    summary_json: str
+    diff_from_prev_json: str
+    details_json: str
+    error: str | None = None
+
+    @property
+    def include_details_bool(self) -> bool:
+        return bool(self.include_details)
+
+    @property
+    def retrieval_config(self) -> dict[str, object]:
+        try:
+            raw = json.loads(self.retrieval_config_json or "{}")
+            if isinstance(raw, dict):
+                return {str(k): v for k, v in raw.items()}
+        except Exception:
+            pass
+        return {}
+
+    @property
+    def provider_config(self) -> dict[str, object]:
+        try:
+            raw = json.loads(self.provider_config_json or "{}")
+            if isinstance(raw, dict):
+                return {str(k): v for k, v in raw.items()}
+        except Exception:
+            pass
+        return {}
+
+    @property
+    def summary(self) -> dict[str, object]:
+        try:
+            raw = json.loads(self.summary_json or "{}")
+            if isinstance(raw, dict):
+                return {str(k): v for k, v in raw.items()}
+        except Exception:
+            pass
+        return {}
+
+    @property
+    def diff_from_prev(self) -> dict[str, object]:
+        try:
+            raw = json.loads(self.diff_from_prev_json or "{}")
+            if isinstance(raw, dict):
+                return {str(k): v for k, v in raw.items()}
+        except Exception:
+            pass
+        return {}
+
+    @property
+    def details(self) -> list[dict[str, object]]:
+        try:
+            raw = json.loads(self.details_json or "[]")
+            if isinstance(raw, list):
+                out: list[dict[str, object]] = []
+                for item in raw:
+                    if isinstance(item, dict):
+                        out.append({str(k): v for k, v in item.items()})
+                return out
+        except Exception:
+            pass
+        return []
+
+    def to_dict(self, *, include_case_details: bool = False) -> dict[str, object]:
+        out: dict[str, object] = {
+            "run_id": self.run_id,
+            "started_at": int(self.started_at),
+            "finished_at": int(self.finished_at) if self.finished_at is not None else None,
+            "status": self.status,
+            "dataset_name": self.dataset_name,
+            "dataset_sha256": self.dataset_sha256,
+            "k": int(self.k),
+            "include_details": self.include_details_bool,
+            "app_version": self.app_version,
+            "embeddings_backend": self.embeddings_backend,
+            "embeddings_model": self.embeddings_model,
+            "retrieval_config": self.retrieval_config,
+            "provider_config": self.provider_config,
+            "summary": self.summary,
+            "diff_from_prev": self.diff_from_prev,
+            "error": self.error,
+        }
+        if include_case_details:
+            out["details"] = self.details
+        return out
+
+
 def _ensure_parent_dir(sqlite_path: str) -> None:
     Path(os.path.dirname(sqlite_path) or ".").mkdir(parents=True, exist_ok=True)
 
@@ -487,6 +589,29 @@ def init_db(conn: Any) -> None:
         );
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS eval_runs (
+            run_id TEXT PRIMARY KEY,
+            started_at INTEGER NOT NULL,
+            finished_at INTEGER,
+            status TEXT NOT NULL,
+            dataset_name TEXT NOT NULL,
+            dataset_sha256 TEXT NOT NULL,
+            k INTEGER NOT NULL,
+            include_details INTEGER NOT NULL DEFAULT 0,
+            app_version TEXT NOT NULL,
+            embeddings_backend TEXT NOT NULL,
+            embeddings_model TEXT NOT NULL,
+            retrieval_config_json TEXT NOT NULL DEFAULT '{}',
+            provider_config_json TEXT NOT NULL DEFAULT '{}',
+            summary_json TEXT NOT NULL DEFAULT '{}',
+            diff_from_prev_json TEXT NOT NULL DEFAULT '{}',
+            details_json TEXT NOT NULL DEFAULT '[]',
+            error TEXT
+        );
+        """
+    )
 
     # --- Key/value metadata (for index compatibility + lightweight migrations) ---
     conn.execute(
@@ -554,6 +679,9 @@ def init_db(conn: Any) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_occurred_at ON audit_events(occurred_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_request_id ON audit_events(request_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_runs_started_at ON eval_runs(started_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_runs_status ON eval_runs(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_runs_dataset_name ON eval_runs(dataset_name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_updated_at ON docs(updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_title ON docs(title)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_source ON docs(source)")
@@ -1472,6 +1600,172 @@ def list_audit_events(
         tuple(params),
     )
     return [AuditEvent(**dict(r)) for r in cur.fetchall()]
+
+
+def insert_eval_run(
+    conn: Any,
+    *,
+    run_id: str,
+    started_at: int,
+    finished_at: int | None,
+    status: str,
+    dataset_name: str,
+    dataset_sha256: str,
+    k: int,
+    include_details: bool,
+    app_version: str,
+    embeddings_backend: str,
+    embeddings_model: str,
+    retrieval_config_json: str,
+    provider_config_json: str,
+    summary_json: str,
+    diff_from_prev_json: str = "{}",
+    details_json: str = "[]",
+    error: str | None = None,
+) -> EvalRun:
+    include_details_i = 1 if include_details else 0
+    if _is_postgres_conn(conn):
+        conn.execute(
+            """
+            INSERT INTO eval_runs (
+              run_id, started_at, finished_at, status, dataset_name, dataset_sha256,
+              k, include_details, app_version, embeddings_backend, embeddings_model,
+              retrieval_config_json, provider_config_json, summary_json, diff_from_prev_json, details_json, error
+            )
+            VALUES (
+              %s, %s, %s, %s, %s, %s,
+              %s, %s, %s, %s, %s,
+              %s, %s, %s, %s, %s, %s
+            )
+            """,
+            (
+                run_id,
+                int(started_at),
+                int(finished_at) if finished_at is not None else None,
+                status,
+                dataset_name,
+                dataset_sha256,
+                int(k),
+                include_details_i,
+                app_version,
+                embeddings_backend,
+                embeddings_model,
+                retrieval_config_json,
+                provider_config_json,
+                summary_json,
+                diff_from_prev_json,
+                details_json,
+                error,
+            ),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO eval_runs (
+              run_id, started_at, finished_at, status, dataset_name, dataset_sha256,
+              k, include_details, app_version, embeddings_backend, embeddings_model,
+              retrieval_config_json, provider_config_json, summary_json, diff_from_prev_json, details_json, error
+            )
+            VALUES (
+              ?, ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?, ?
+            )
+            """,
+            (
+                run_id,
+                int(started_at),
+                int(finished_at) if finished_at is not None else None,
+                status,
+                dataset_name,
+                dataset_sha256,
+                int(k),
+                include_details_i,
+                app_version,
+                embeddings_backend,
+                embeddings_model,
+                retrieval_config_json,
+                provider_config_json,
+                summary_json,
+                diff_from_prev_json,
+                details_json,
+                error,
+            ),
+        )
+
+    return EvalRun(
+        run_id=run_id,
+        started_at=int(started_at),
+        finished_at=int(finished_at) if finished_at is not None else None,
+        status=status,
+        dataset_name=dataset_name,
+        dataset_sha256=dataset_sha256,
+        k=int(k),
+        include_details=include_details_i,
+        app_version=app_version,
+        embeddings_backend=embeddings_backend,
+        embeddings_model=embeddings_model,
+        retrieval_config_json=retrieval_config_json,
+        provider_config_json=provider_config_json,
+        summary_json=summary_json,
+        diff_from_prev_json=diff_from_prev_json,
+        details_json=details_json,
+        error=error,
+    )
+
+
+def list_eval_runs(conn: Any, *, limit: int = 50) -> list[EvalRun]:
+    limit = max(1, min(int(limit), 500))
+    ph = _ph(conn)
+    cur = conn.execute(
+        f"""
+        SELECT
+          run_id, started_at, finished_at, status, dataset_name, dataset_sha256,
+          k, include_details, app_version, embeddings_backend, embeddings_model,
+          retrieval_config_json, provider_config_json, summary_json, diff_from_prev_json, details_json, error
+        FROM eval_runs
+        ORDER BY started_at DESC, run_id DESC
+        LIMIT {ph}
+        """,
+        (limit,),
+    )
+    return [EvalRun(**dict(r)) for r in cur.fetchall()]
+
+
+def get_eval_run(conn: Any, run_id: str) -> EvalRun | None:
+    ph = _ph(conn)
+    cur = conn.execute(
+        f"""
+        SELECT
+          run_id, started_at, finished_at, status, dataset_name, dataset_sha256,
+          k, include_details, app_version, embeddings_backend, embeddings_model,
+          retrieval_config_json, provider_config_json, summary_json, diff_from_prev_json, details_json, error
+        FROM eval_runs
+        WHERE run_id={ph}
+        """,
+        (run_id,),
+    )
+    row = cur.fetchone()
+    return EvalRun(**dict(row)) if row is not None else None
+
+
+def get_previous_eval_run(conn: Any, *, started_before: int, dataset_name: str) -> EvalRun | None:
+    ph = _ph(conn)
+    cur = conn.execute(
+        f"""
+        SELECT
+          run_id, started_at, finished_at, status, dataset_name, dataset_sha256,
+          k, include_details, app_version, embeddings_backend, embeddings_model,
+          retrieval_config_json, provider_config_json, summary_json, diff_from_prev_json, details_json, error
+        FROM eval_runs
+        WHERE dataset_name={ph} AND started_at<={ph}
+        ORDER BY started_at DESC, run_id DESC
+        LIMIT 1
+        """,
+        (dataset_name, int(started_before)),
+    )
+    row = cur.fetchone()
+    return EvalRun(**dict(row)) if row is not None else None
 
 
 def list_doc_ids_for_run(conn: Any, run_id: str, *, limit: int = 10000) -> list[str]:

@@ -1413,3 +1413,98 @@ Implemented Task #17 safety hardening across API, streaming, UI refusal messagin
 
 - Commit `TASK_SAFETY_HARDENING` on this branch and open PR.
 - Move to queue item #18: `TASK_EVAL_PRODUCTIZATION`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-eval-productization`
+- Current task: `TASK_EVAL_PRODUCTIZATION` (`agents/tasks/TASK_EVAL_PRODUCTIZATION.md`)
+
+## Task summary
+
+Implemented Task #18 evaluation productization with persisted runs, run history APIs, and UI run history/detail experience:
+
+- added persisted `eval_runs` data model for SQLite + Postgres migrations
+- expanded eval run payload to include aggregate pass/fail metrics and stable per-case detail records
+- implemented eval run persistence with required metadata snapshots:
+  - app version
+  - embeddings backend/model
+  - retrieval config (`k` + hybrid weights)
+  - provider config
+- added API endpoints for run history and run detail:
+  - `GET /api/eval/runs`
+  - `GET /api/eval/runs/{run_id}`
+- enhanced `POST /api/eval/run` to persist runs and return `run_id` + metadata/diff summary
+- added run-to-run diff calculation (delta metrics + regressions/improvements)
+- updated Eval UI to show:
+  - aggregate metrics
+  - per-case pass/fail
+  - run history list
+  - simple pass-rate sparkline trend
+  - dedicated run detail page with case-level diff signals
+
+## Decisions made
+
+- Kept eval endpoints private/admin-only and disabled in `PUBLIC_DEMO_MODE`, preserving ADR non-negotiables for public demo safety.
+- Used a single persisted `eval_runs` table with JSON columns (`summary_json`, `details_json`, `diff_from_prev_json`) for small, reviewable implementation scope while still enabling history/detail/diff UX.
+- Always materialized per-case details during run execution for reliable persistence/diffing; `include_details` now controls response verbosity rather than storage completeness.
+- Modeled hybrid retrieval weights in metadata from actual runtime behavior (`0.5/0.5` with vector enabled, `1.0/0.0` lexical-only).
+
+## Files changed
+
+- `app/eval.py`
+- `app/main.py`
+- `app/storage.py`
+- `app/migrations/postgres/005_eval_runs.sql`
+- `tests/test_eval_runs.py`
+- `tests/test_storage_migrations.py`
+- `web/src/api.ts`
+- `web/src/pages/Eval.tsx`
+- `web/src/pages/EvalRunDetail.tsx`
+- `web/src/router.tsx`
+- `docs/CONTRACTS.md`
+- `docs/ARCHITECTURE/DATA_MODEL.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `git fetch --all --prune && git log --oneline --decorate -n 8 --all --simplify-by-decoration`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... agents/tasks/TASK_EVAL_PRODUCTIZATION.md`
+   - `sed -n ... docs/SPECS/EVAL_HARNESS_PRODUCTIZATION.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only && git checkout -b codex/task-eval-productization`
+3. Targeted validation during implementation:
+   - `uv run ruff check app/eval.py app/main.py app/storage.py tests/test_eval_runs.py tests/test_storage_migrations.py`
+   - `uv run mypy app`
+   - `uv run pytest -q tests/test_eval_runs.py tests/test_storage_migrations.py`
+   - `cd web && corepack pnpm run typecheck`
+   - `cd web && corepack pnpm run test -- --run ...`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`69 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## What’s next
+
+- Commit `TASK_EVAL_PRODUCTIZATION` on this branch and open PR.
+- Move to queue item #19: `TASK_EVAL_CI_SMOKE`.

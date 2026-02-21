@@ -340,18 +340,40 @@ Streaming event schema (`/api/query/stream`):
 
 ### Eval
 
-- `POST /api/eval/run` (requires `ALLOW_EVAL=1` and not demo mode)
+- All eval endpoints require `ALLOW_EVAL=1`, `PUBLIC_DEMO_MODE=0`, and `admin` role.
 
-Request:
+- `POST /api/eval/run`
+  - runs evaluation and persists a run record.
+  - Request:
+    - `golden_path: string`
+    - `k: number`
+    - `include_details?: boolean` (default: `false`)
+  - Response (stable keys):
+    - `run_id: string`
+    - `examples: number`
+    - `passed: number`
+    - `failed: number`
+    - `pass_rate: number`
+    - `hit_at_k: number`
+    - `mrr: number`
+    - `status: string`
+    - `dataset_name: string`
+    - `dataset_sha256: string`
+    - `k: number`
+    - `include_details: boolean`
+    - `app_version: string`
+    - `embeddings_backend: string`
+    - `embeddings_model: string`
+    - `retrieval_config: object` (includes `k` and `hybrid_weights`)
+    - `provider_config: object` (provider/model)
+    - `diff_from_prev: object`
+    - optional `details: EvalExample[]` when `include_details=true`
 
-- `golden_path: string`
-- `k: number`
-- `include_details?: boolean` (default: `false`)
+- `GET /api/eval/runs?limit=50`
+  - returns `{ runs: EvalRunSummary[] }` ordered by newest-first.
 
-Response:
-
-- `{ examples, hit_at_k, mrr }`
-  - When `include_details=true`, response also includes `details: EvalExample[]` with per-example hits/ranks and the retrieved top-k list.
+- `GET /api/eval/runs/{run_id}`
+  - returns `{ run: EvalRunSummary, details: EvalExample[] }`.
 
 ### Maintenance
 

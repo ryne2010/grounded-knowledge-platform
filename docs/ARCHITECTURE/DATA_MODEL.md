@@ -87,18 +87,19 @@ Tracks applied SQL migration filenames.
 
 ---
 
-## Planned tables (roadmap)
-
-These are defined in the backlog but not all are implemented yet.
-
 ### `eval_runs`
-Persisted evaluation history:
+Persisted evaluation history (private deployments only):
 
-- dataset hash / version
-- app version / git sha
-- retrieval config snapshot
-- metrics
-- per-case outputs (optional, possibly stored separately)
+- run identity and timing (`run_id`, `started_at`, `finished_at`, `status`)
+- dataset provenance (`dataset_name`, `dataset_sha256`)
+- config snapshot:
+  - app version
+  - embeddings backend/model
+  - retrieval config (`k`, hybrid weights)
+  - provider config (effective provider/model)
+- aggregated metrics (`summary_json`: examples, pass/fail, pass rate, hit@k, mrr)
+- run-to-run diff (`diff_from_prev_json`)
+- per-case details (`details_json`)
 
 ---
 
