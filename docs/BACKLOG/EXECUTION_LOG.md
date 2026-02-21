@@ -458,3 +458,93 @@ Completed Task #6 auth/authz hardening pass by closing remaining operational gap
 
 - Commit `TASK_AUTH` on this branch and open PR.
 - Move to queue item #7: `TASK_CONNECTORS_GCS_UI`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-connectors-gcs-ui`
+- Current task: `TASK_CONNECTORS_GCS_UI` (`agents/tasks/TASK_CONNECTORS_GCS_UI.md`)
+
+## Task summary
+
+Implemented the private-deployment GCS connector UX in the Ingest workspace:
+
+- added a dedicated **GCS connector sync** card with inputs for:
+  - bucket (required)
+  - prefix
+  - max_objects (bounded 1-5000)
+  - dry_run toggle
+  - classification / retention / tags / notes
+- added safe gating behavior:
+  - explicit disabled explanation in `PUBLIC_DEMO_MODE`
+  - explicit disabled explanation when `ALLOW_CONNECTORS=0`
+  - action remains backend-admin-gated; UI notes admin requirement when auth is enabled
+- integrated API call to `POST /api/connectors/gcs/sync`
+- added result rendering:
+  - run metadata (run_id, start/end, target)
+  - summary badges (scanned, ingested, changed, unchanged, would_ingest, skipped)
+  - actionable errors list (if returned)
+  - per-object results table with doc deep links when available
+- persisted latest run in UI state and added **Copy JSON** + **Export JSON** actions
+
+## Decisions made
+
+- Keep changes frontend-only (no backend contract changes) because the sync endpoint and auth gates already existed.
+- Add a small pure helper module for connector availability + run summaries to keep Ingest page readable and testable.
+- Treat backend as source of truth for admin enforcement; UI communicates requirement and surfaces 401/403 errors clearly.
+
+## Files changed
+
+- `web/src/api.ts`
+- `web/src/pages/Ingest.tsx`
+- `web/src/lib/gcsConnector.ts`
+- `web/src/lib/gcsConnector.test.ts`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_CONNECTORS_GCS_UI.md`
+   - `sed -n ... docs/SPECS/CONNECTOR_GCS_INGESTION.md`
+2. Branching:
+   - `git checkout main`
+   - `git pull --ff-only`
+   - `git checkout -b codex/task-connectors-gcs-ui`
+3. Discovery:
+   - `rg -n "connectors|gcs sync|/api/connectors/gcs/sync|..."`
+   - `sed -n ... web/src/pages/Ingest.tsx`
+   - `sed -n ... web/src/api.ts`
+   - `sed -n ... app/connectors/gcs.py`
+4. Targeted validation:
+   - `cd web && corepack pnpm run test`
+   - `cd web && corepack pnpm run typecheck`
+5. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `make web-typecheck`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`34 passed, 3 skipped` in Python; `7 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make web-typecheck`: PASS
+
+## What’s next
+
+- Commit `TASK_CONNECTORS_GCS_UI` on this branch and open PR.
+- Move to queue item #8: `TASK_INGESTION_RUNS`.
