@@ -4,11 +4,14 @@ import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
 import { cn } from '../lib/utils'
 import { Separator } from '../ui/separator'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
 import { useOfflineStatus } from '../../lib/offline'
 
 export type NavItem = {
   to: string
   label: string
+  disabled?: boolean
+  disabledReason?: string
 }
 
 export type AppShellProps = {
@@ -18,6 +21,7 @@ export type AppShellProps = {
   docsHref?: string
   repoHref?: string
   headerRight?: React.ReactNode
+  statusBanner?: React.ReactNode
   children: React.ReactNode
 }
 
@@ -32,6 +36,7 @@ function getInitialTheme(): 'light' | 'dark' {
 
 export function AppShell(props: AppShellProps) {
   const [theme, setTheme] = React.useState<'light' | 'dark'>(() => getInitialTheme())
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false)
   const offline = useOfflineStatus()
 
   React.useEffect(() => {
@@ -42,6 +47,11 @@ export function AppShell(props: AppShellProps) {
       localStorage.setItem('theme', theme)
     } catch {}
   }, [theme])
+
+  const navLinkBase =
+    'block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+  const navLinkActive = 'block rounded-md px-3 py-2 text-sm bg-accent text-accent-foreground'
+  const navDisabled = 'cursor-not-allowed rounded-md px-3 py-2 text-sm text-muted-foreground/60'
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -64,26 +74,21 @@ export function AppShell(props: AppShellProps) {
           </div>
 
           {/* Mobile nav (desktop uses sidebar) */}
-          <nav className="ml-2 flex items-center gap-1 md:hidden">
-            {props.nav.map((item) => (
-              <Link
-                key={item.to}
-                to={item.to as any}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                )}
-                activeProps={{
-                  className:
-                    'rounded-md px-3 py-1.5 text-sm bg-accent text-accent-foreground',
-                }}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
+          <div className="ml-2 md:hidden">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMobileNavOpen(true)}
+              aria-haspopup="dialog"
+              aria-expanded={mobileNavOpen}
+              aria-label="Open navigation menu"
+            >
+              Menu
+            </Button>
+          </div>
 
           {/* Header utilities */}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex min-w-0 items-center gap-2">
             {props.headerRight}
             {props.docsHref ? (
               <a
@@ -121,12 +126,49 @@ export function AppShell(props: AppShellProps) {
           </div>
         </div>
 
+        {props.statusBanner ? (
+          <div className="border-t border-border/80 bg-muted/60 px-4 py-2 text-xs">
+            <div className="mx-auto w-full max-w-[1440px] text-muted-foreground">{props.statusBanner}</div>
+          </div>
+        ) : null}
+
         {offline ? (
           <div className="border-t border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
             Connection unavailable. Cached pages are still accessible, but live API responses may be stale.
           </div>
         ) : null}
       </header>
+
+      <Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <DialogContent className="left-4 top-4 w-[min(22rem,calc(100vw-2rem))] translate-x-0 translate-y-0">
+          <DialogHeader>
+            <DialogTitle>Navigation</DialogTitle>
+            <DialogDescription>Use this menu on smaller screens.</DialogDescription>
+          </DialogHeader>
+          <nav className="mt-3 space-y-1">
+            {props.nav.map((item) =>
+              item.disabled ? (
+                <div key={item.to} className={navDisabled} role="note" aria-disabled="true">
+                  <div>{item.label}</div>
+                  {item.disabledReason ? (
+                    <div className="mt-1 text-[11px] text-muted-foreground/80">{item.disabledReason}</div>
+                  ) : null}
+                </div>
+              ) : (
+                <Link
+                  key={item.to}
+                  to={item.to as any}
+                  className={navLinkBase}
+                  activeProps={{ className: navLinkActive }}
+                  onClick={() => setMobileNavOpen(false)}
+                >
+                  {item.label}
+                </Link>
+              ),
+            )}
+          </nav>
+        </DialogContent>
+      </Dialog>
 
       {/* Desktop shell */}
       <div className="mx-auto flex w-full max-w-[1440px] flex-1">
@@ -136,21 +178,25 @@ export function AppShell(props: AppShellProps) {
               Navigation
             </div>
             <nav className="space-y-1">
-              {props.nav.map((item) => (
-                <Link
-                  key={item.to}
-                  to={item.to as any}
-                  className={cn(
-                    'block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                  )}
-                  activeProps={{
-                    className:
-                      'block rounded-md px-3 py-2 text-sm bg-accent text-accent-foreground',
-                  }}
-                >
-                  {item.label}
-                </Link>
-              ))}
+              {props.nav.map((item) =>
+                item.disabled ? (
+                  <div key={item.to} className={navDisabled} role="note" aria-disabled="true">
+                    <div>{item.label}</div>
+                    {item.disabledReason ? (
+                      <div className="mt-1 text-[11px] text-muted-foreground/80">{item.disabledReason}</div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <Link
+                    key={item.to}
+                    to={item.to as any}
+                    className={cn(navLinkBase)}
+                    activeProps={{ className: navLinkActive }}
+                  >
+                    {item.label}
+                  </Link>
+                ),
+              )}
             </nav>
 
             {(props.docsHref || props.repoHref) ? (

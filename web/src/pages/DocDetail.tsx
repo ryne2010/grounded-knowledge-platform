@@ -249,8 +249,11 @@ export function DocDetailPage() {
   const deleteEnabled = Boolean(meta?.doc_delete_enabled)
 
   return (
-    <Page>
-      <Section title="Doc detail" description="Metadata, ingest lineage, and chunk browser.">
+    <Page
+      title={doc?.title ?? 'Doc detail'}
+      description={doc?.source ?? 'Metadata, ingest lineage, and chunk browser.'}
+    >
+      <Section title="Document record" description="Metadata, ingest lineage, and chunk browser.">
         <div className="mb-4 flex items-center justify-between">
           <Link to="/docs" className="text-sm underline">
             ← Back to docs

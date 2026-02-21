@@ -727,7 +727,7 @@ def insert_chunks(conn: Any, chunks: Iterable[Chunk]) -> None:
     # FTS5 index is maintained via triggers when available; do not write to chunks_fts directly.
 
 
-def insert_embeddings(conn: Any, rows: Iterable[tuple[str, int, bytes]]) -> None:
+def insert_embeddings(conn: Any, rows: Iterable[tuple[str, int, bytes | str]]) -> None:
     payload = list(rows)
     if not payload:
         return

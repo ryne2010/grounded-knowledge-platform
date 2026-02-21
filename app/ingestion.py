@@ -13,16 +13,6 @@ from threading import Lock
 import numpy as np
 
 
-def _vec_to_pgvector_literal(vec: np.ndarray) -> str:
-    """Convert a 1D numpy vector to pgvector text format: "[1,2,3]"."""
-    v = vec.astype(np.float32).reshape(-1)
-    n = float(np.linalg.norm(v))
-    if n > 0:
-        v = v / n
-    vals = v.tolist()
-    return "[" + ",".join(str(float(x)) for x in vals) + "]"
-
-
 from .config import settings
 from .contracts.tabular_contract import TabularSnapshot, build_snapshot, load_contract, validate_snapshot
 from .embeddings import Embedder, HashEmbedder, NoEmbedder, SentenceTransformerEmbedder
@@ -42,6 +32,17 @@ from .storage import (
     list_ingest_events,
     upsert_doc,
 )
+
+
+def _vec_to_pgvector_literal(vec: np.ndarray) -> str:
+    """Convert a 1D numpy vector to pgvector text format: "[1,2,3]"."""
+    v = vec.astype(np.float32).reshape(-1)
+    n = float(np.linalg.norm(v))
+    if n > 0:
+        v = v / n
+    vals = v.tolist()
+    return "[" + ",".join(str(float(x)) for x in vals) + "]"
+
 
 logger = logging.getLogger(__name__)
 

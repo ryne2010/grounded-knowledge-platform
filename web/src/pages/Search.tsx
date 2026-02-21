@@ -139,9 +139,9 @@ export function SearchPage() {
   )
 
   return (
-    <Page>
+    <Page title="Search" description="Find relevant evidence across indexed chunks and jump to source documents.">
       <Section
-        title="Search"
+        title="Chunk search"
         description={
           <span>
             Search across indexed chunks. Uses SQLite FTS5 when available, otherwise falls back to a simple token-overlap

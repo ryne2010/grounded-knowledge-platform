@@ -197,9 +197,16 @@ export function IngestPage() {
   const tabularSelected = Boolean(file && /\.(csv|tsv|xlsx|xlsm)$/i.test(file.name))
 
   return (
-    <Page>
+    <Page
+      title="Ingest"
+      description={
+        uploadsEnabled
+          ? 'Add documents to the index and review ingestion lineage.'
+          : 'Ingestion controls are disabled for this deployment.'
+      }
+    >
       <Section
-        title="Ingest"
+        title="Ingestion workspace"
         description="Add documents to the index and review the ingest lineage (audit feed)."
       >
         <div className="grid gap-4 lg:grid-cols-2">
