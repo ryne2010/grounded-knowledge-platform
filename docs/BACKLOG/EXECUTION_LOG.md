@@ -314,3 +314,73 @@ Implemented Task #4 onboarding improvements for public demo mode:
 
 - Commit `TASK_DEMO_GUIDED_TOUR` on this branch and open PR.
 - Move to queue item #5: `TASK_ACCESSIBILITY_AUDIT`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-accessibility-audit`
+- Current task: `TASK_ACCESSIBILITY_AUDIT` (`agents/tasks/TASK_ACCESSIBILITY_AUDIT.md`)
+
+## Task summary
+
+Completed the accessibility baseline audit/fix pass for core flows:
+
+- Ask flow: improved keyboard and focus affordances for key links and error announcements
+- Docs list + Doc detail: added missing explicit labels for filters and alert semantics for surfaced errors
+- App shell/demo banners: added skip link, focus-visible link styles, and polite live-region status semantics
+- Dialogs: added a keyboard-reachable close control in dialog content while preserving focus trap + ESC behavior
+- Updated in-repo checklist with tested flows, fixes, and residual risks
+
+## Decisions made
+
+- Kept changes dependency-light (no new a11y lint plugin) and focused on high-impact keyboard/focus/labeling gaps.
+- Implemented a shared dialog close affordance at the `DialogContent` primitive level to eliminate modal escape ambiguity.
+- Prioritized explicit labels and announcement roles for user-visible form/error/status surfaces in scope.
+
+## Files changed
+
+- `web/src/portfolio-ui/ui/dialog.tsx`
+- `web/src/portfolio-ui/components/AppShell.tsx`
+- `web/src/pages/Home.tsx`
+- `web/src/pages/Docs.tsx`
+- `web/src/pages/DocDetail.tsx`
+- `docs/QUALITY/A11Y_CHECKLIST.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git checkout main && git pull --ff-only`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_ACCESSIBILITY_AUDIT.md`
+   - `sed -n ... docs/SPECS/UI_UX_PRODUCTION_POLISH.md`
+2. Branching:
+   - `git checkout -b codex/task-accessibility-audit`
+3. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `make web-typecheck`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`32 passed, 3 skipped` in Python; `3 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make web-typecheck`: PASS
+
+## What’s next
+
+- Commit `TASK_ACCESSIBILITY_AUDIT` on this branch and open PR.
+- Move to queue item #6: `TASK_AUTH`.

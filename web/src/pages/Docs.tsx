@@ -5,7 +5,20 @@ import { useMemo, useState } from 'react'
 import { api, Doc } from '../api'
 import { useOfflineStatus } from '../lib/offline'
 import { formatUnixSeconds } from '../lib/time'
-import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, DataTable, Input, Page, Section, Spinner } from '../portfolio-ui'
+import {
+  Badge,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  DataTable,
+  Input,
+  Label,
+  Page,
+  Section,
+  Spinner,
+} from '../portfolio-ui'
 
 
 const RETENTION_TTLS_SECONDS: Record<string, number> = {
@@ -51,7 +64,11 @@ export function DocsPage() {
           return (
             <div className="space-y-1">
               <div className="font-medium">
-                <Link to="/docs/$docId" params={{ docId: d.doc_id }} className="hover:underline">
+                <Link
+                  to="/docs/$docId"
+                  params={{ docId: d.doc_id }}
+                  className="rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   {d.title}
                 </Link>
               </div>
@@ -142,10 +159,18 @@ export function DocsPage() {
                 Offline: showing cached docs if available.
               </div>
             ) : null}
-            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by title/source/tag…" />
+            <div className="space-y-2">
+              <Label htmlFor="docsFilter">Filter documents</Label>
+              <Input
+                id="docsFilter"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Filter by title/source/tag…"
+              />
+            </div>
             {docsQuery.isLoading ? <Spinner /> : null}
             {docsQuery.isError ? (
-              <div className="rounded-md border bg-destructive/10 p-3 text-sm">
+              <div className="rounded-md border bg-destructive/10 p-3 text-sm" role="alert">
                 {offline ? 'Offline and no cached docs available.' : (docsQuery.error as Error).message}
               </div>
             ) : null}

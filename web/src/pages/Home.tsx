@@ -764,7 +764,9 @@ export function HomePage() {
                           <Separator className="my-3" />
 
                           {t.error ? (
-                            <div className="text-sm text-destructive">Error: {t.error}</div>
+                            <div className="text-sm text-destructive" role="alert">
+                              Error: {t.error}
+                            </div>
                           ) : !t.response ? (
                             <div className="text-sm text-muted-foreground">Working…</div>
                           ) : (
@@ -815,7 +817,10 @@ export function HomePage() {
                                             <div className="mt-2 text-xs text-muted-foreground">No quote available.</div>
                                           )}
                                           <div className="mt-3 flex flex-wrap items-center gap-2">
-                                            <a href={citationHref} className="text-sm underline">
+                                            <a
+                                              href={citationHref}
+                                              className="rounded-sm text-sm underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                            >
                                               Open doc context
                                             </a>
                                             <Button
@@ -1035,19 +1040,31 @@ export function HomePage() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap gap-2">
-                <Link to="/docs" className="underline">
+                <Link
+                  to="/docs"
+                  className="rounded-sm underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   Docs
                 </Link>
                 <span className="text-muted-foreground">·</span>
-                <Link to="/search" className="underline">
+                <Link
+                  to="/search"
+                  className="rounded-sm underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   Search
                 </Link>
                 <span className="text-muted-foreground">·</span>
-                <Link to="/dashboard" className="underline">
+                <Link
+                  to="/dashboard"
+                  className="rounded-sm underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   Dashboard
                 </Link>
                 <span className="text-muted-foreground">·</span>
-                <Link to="/ingest" className="underline">
+                <Link
+                  to="/ingest"
+                  className="rounded-sm underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
                   Ingest
                 </Link>
               </div>
@@ -1077,7 +1094,11 @@ export function HomePage() {
                   <div className="space-y-1">
                     {docsQuery.data.docs.slice(0, 6).map((d) => (
                       <div key={d.doc_id} className="text-sm">
-                        <Link to="/docs/$docId" params={{ docId: d.doc_id }} className="underline">
+                        <Link
+                          to="/docs/$docId"
+                          params={{ docId: d.doc_id }}
+                          className="rounded-sm underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
                           {d.title || d.doc_id}
                         </Link>
                       </div>
