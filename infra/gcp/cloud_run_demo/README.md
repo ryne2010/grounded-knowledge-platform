@@ -163,3 +163,14 @@ For private deployments, the ingestion failure log-based metric name is also exp
 ```bash
 terraform -chdir=infra/gcp/cloud_run_demo output -raw ingestion_failure_metric_name
 ```
+
+When `enable_slo=true`, this stack also creates availability + latency SLOs with burn-rate alerts:
+
+```bash
+terraform -chdir=infra/gcp/cloud_run_demo output -raw slo_full_name
+terraform -chdir=infra/gcp/cloud_run_demo output -raw latency_slo_full_name
+terraform -chdir=infra/gcp/cloud_run_demo output -raw alert_policy_slo_burn_rate_availability_name
+terraform -chdir=infra/gcp/cloud_run_demo output -raw alert_policy_slo_burn_rate_latency_name
+```
+
+Runbook: `docs/RUNBOOKS/SLOS.md`

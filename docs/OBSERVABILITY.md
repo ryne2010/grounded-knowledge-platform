@@ -89,13 +89,17 @@ How to find it after `terraform apply`:
 `slo.tf` creates:
 - a **Service Monitoring service** for the Cloud Run service
 - an **availability SLO** (2xx / total)
-- **burn-rate alerts**:
-  - fast burn (5m > 14.4x)
-  - slow burn (1h > 6x)
+- a **latency SLO** (request latency threshold target)
+- **burn-rate alerts** for both SLOs:
+  - fast burn (1h window)
+  - slow burn (6h window)
 
 Why burn rate alerts?
 - They reflect **error budget consumption** instead of static thresholds.
 - They are robust across traffic volume changes.
+
+Runbook:
+- `docs/RUNBOOKS/SLOS.md`
 
 ---
 

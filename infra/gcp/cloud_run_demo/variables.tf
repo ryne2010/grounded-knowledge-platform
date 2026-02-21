@@ -412,6 +412,75 @@ EOT
 
 variable "enable_slo" {
   type        = bool
-  description = "Create a Service Monitoring Service + Availability SLO + burn-rate alert policy."
+  description = "Create Service Monitoring SLOs (availability + latency) with burn-rate alert policies."
   default     = true
+}
+
+variable "slo_rolling_period_days" {
+  type        = number
+  description = "Rolling period for SLO evaluation windows."
+  default     = 28
+
+  validation {
+    condition     = var.slo_rolling_period_days >= 1 && var.slo_rolling_period_days <= 30
+    error_message = "slo_rolling_period_days must be between 1 and 30."
+  }
+}
+
+variable "slo_availability_goal" {
+  type        = number
+  description = "Availability SLO goal as ratio (e.g., 0.995 for 99.5%)."
+  default     = 0.995
+
+  validation {
+    condition     = var.slo_availability_goal > 0 && var.slo_availability_goal <= 1
+    error_message = "slo_availability_goal must be in (0, 1]."
+  }
+}
+
+variable "slo_latency_goal" {
+  type        = number
+  description = "Latency SLO goal as ratio of requests under threshold (e.g., 0.95)."
+  default     = 0.95
+
+  validation {
+    condition     = var.slo_latency_goal > 0 && var.slo_latency_goal <= 1
+    error_message = "slo_latency_goal must be in (0, 1]."
+  }
+}
+
+variable "slo_latency_threshold_ms" {
+  type        = number
+  description = "Latency SLO threshold in milliseconds."
+  default     = 1200
+
+  validation {
+    condition     = var.slo_latency_threshold_ms > 0 && var.slo_latency_threshold_ms <= 60000
+    error_message = "slo_latency_threshold_ms must be between 1 and 60000."
+  }
+}
+
+variable "slo_burn_rate_fast_threshold" {
+  type        = number
+  description = "Fast-window burn-rate multiplier threshold."
+  default     = 6
+
+  validation {
+    condition     = var.slo_burn_rate_fast_threshold > 0
+    error_message = "slo_burn_rate_fast_threshold must be greater than 0."
+  }
+}
+
+variable "slo_burn_rate_slow_threshold" {
+  type        = number
+  description = "Slow-window burn-rate multiplier threshold."
+  default     = 3
+
+  validation {
+    condition = (
+      var.slo_burn_rate_slow_threshold > 0 &&
+      var.slo_burn_rate_slow_threshold <= var.slo_burn_rate_fast_threshold
+    )
+    error_message = "slo_burn_rate_slow_threshold must be > 0 and <= slo_burn_rate_fast_threshold."
+  }
 }
