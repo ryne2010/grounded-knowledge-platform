@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import json
+import uuid
 from pathlib import Path
 
 from .eval import run_eval
-from .ingestion import ingest_file
+from .ingestion import ingest_file, replay_doc
 
 
 def cmd_ingest_folder(
@@ -125,6 +127,153 @@ def cmd_purge_expired(*, apply: bool, now: int | None) -> None:
         print(f"  - {doc_id}")
 
 
+def cmd_replay_doc(*, doc_id: str, force: bool) -> None:
+    from .config import settings
+    from .storage import complete_ingestion_run, connect, create_ingestion_run, init_db
+
+    if settings.public_demo_mode:
+        raise SystemExit("Replay/backfill commands are disabled in PUBLIC_DEMO_MODE")
+
+    run_id = uuid.uuid4().hex
+    trigger_payload = {"mode": "replay-doc", "doc_id": doc_id, "force": bool(force)}
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        create_ingestion_run(
+            conn,
+            run_id=run_id,
+            trigger_type="cli",
+            trigger_payload_json=json.dumps(trigger_payload, ensure_ascii=False),
+            principal="cli:replay-doc",
+        )
+        conn.commit()
+
+    errors: list[str] = []
+    docs_changed = 0
+    docs_unchanged = 0
+    bytes_processed = 0
+
+    try:
+        res = replay_doc(doc_id=doc_id, force=force, run_id=run_id)
+        if res.changed:
+            docs_changed += 1
+        else:
+            docs_unchanged += 1
+        if res.action == "reprocessed":
+            bytes_processed += int(res.content_bytes)
+    except Exception as e:
+        errors.append(f"{doc_id}: {type(e).__name__}: {e}")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        complete_ingestion_run(
+            conn,
+            run_id=run_id,
+            status="failed" if errors else "succeeded",
+            objects_scanned=1,
+            docs_changed=docs_changed,
+            docs_unchanged=docs_unchanged,
+            bytes_processed=bytes_processed,
+            errors_json=json.dumps(errors, ensure_ascii=False),
+        )
+        conn.commit()
+
+    if errors:
+        print("Replay doc failed:")
+        for err in errors:
+            print(f"- {err}")
+        raise SystemExit(1)
+
+    action = "reprocessed" if force else "skipped-if-unchanged"
+    print(
+        f"Replay doc completed: run_id={run_id} doc_id={doc_id} "
+        f"mode={action} changed={docs_changed} unchanged={docs_unchanged}"
+    )
+
+
+def cmd_replay_run(*, run_id: str, force: bool) -> None:
+    from .config import settings
+    from .storage import (
+        complete_ingestion_run,
+        connect,
+        create_ingestion_run,
+        get_ingestion_run,
+        init_db,
+        list_doc_ids_for_run,
+    )
+
+    if settings.public_demo_mode:
+        raise SystemExit("Replay/backfill commands are disabled in PUBLIC_DEMO_MODE")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        src_run = get_ingestion_run(conn, run_id)
+        if src_run is None:
+            raise SystemExit(f"Ingestion run not found: {run_id}")
+        doc_ids = list_doc_ids_for_run(conn, run_id, limit=10000)
+
+    replay_run_id = uuid.uuid4().hex
+    trigger_payload = {
+        "mode": "replay-run",
+        "source_run_id": run_id,
+        "force": bool(force),
+        "doc_count": len(doc_ids),
+    }
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        create_ingestion_run(
+            conn,
+            run_id=replay_run_id,
+            trigger_type="cli",
+            trigger_payload_json=json.dumps(trigger_payload, ensure_ascii=False),
+            principal="cli:replay-run",
+        )
+        conn.commit()
+
+    errors: list[str] = []
+    docs_changed = 0
+    docs_unchanged = 0
+    bytes_processed = 0
+
+    for doc_id in doc_ids:
+        try:
+            res = replay_doc(doc_id=doc_id, force=force, run_id=replay_run_id)
+            if res.changed:
+                docs_changed += 1
+            else:
+                docs_unchanged += 1
+            if res.action == "reprocessed":
+                bytes_processed += int(res.content_bytes)
+        except Exception as e:
+            errors.append(f"{doc_id}: {type(e).__name__}: {e}")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        complete_ingestion_run(
+            conn,
+            run_id=replay_run_id,
+            status="failed" if errors else "succeeded",
+            objects_scanned=len(doc_ids),
+            docs_changed=docs_changed,
+            docs_unchanged=docs_unchanged,
+            bytes_processed=bytes_processed,
+            errors_json=json.dumps(errors, ensure_ascii=False),
+        )
+        conn.commit()
+
+    if errors:
+        print(f"Replay run failed: replay_run_id={replay_run_id} source_run_id={run_id}")
+        for err in errors:
+            print(f"- {err}")
+        raise SystemExit(1)
+
+    action = "force-reprocess" if force else "skip-if-unchanged"
+    print(
+        f"Replay run completed: replay_run_id={replay_run_id} source_run_id={run_id} "
+        f"docs={len(doc_ids)} mode={action} changed={docs_changed} unchanged={docs_unchanged}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="grounded-kp")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -165,6 +314,15 @@ def main() -> None:
     p_purge.add_argument("--apply", action="store_true", help="Actually delete expired docs (default: dry-run).")
     p_purge.add_argument("--now", type=int, default=None, help="Override 'now' unix timestamp (testing).")
 
+    # --- Replay / backfill (private deployments only) ---
+    p_replay_doc = sub.add_parser("replay-doc", help="Replay one doc safely (skip unchanged unless --force).")
+    p_replay_doc.add_argument("--doc-id", required=True, help="Document id to replay.")
+    p_replay_doc.add_argument("--force", action="store_true", help="Force re-chunk/re-embed even if unchanged.")
+
+    p_replay_run = sub.add_parser("replay-run", help="Replay all docs linked to an ingestion run.")
+    p_replay_run.add_argument("--run-id", required=True, help="Ingestion run id to replay.")
+    p_replay_run.add_argument("--force", action="store_true", help="Force re-chunk/re-embed even if unchanged.")
+
     args = parser.parse_args()
     if args.cmd == "ingest-file":
         cmd_ingest_file(
@@ -190,6 +348,10 @@ def main() -> None:
         cmd_eval(args.golden, args.k)
     elif args.cmd == "purge-expired":
         cmd_purge_expired(apply=bool(args.apply), now=args.now)
+    elif args.cmd == "replay-doc":
+        cmd_replay_doc(doc_id=str(args.doc_id), force=bool(args.force))
+    elif args.cmd == "replay-run":
+        cmd_replay_run(run_id=str(args.run_id), force=bool(args.force))
     elif args.cmd == "safety-eval":
         from app.safety_eval import run_safety_eval
 

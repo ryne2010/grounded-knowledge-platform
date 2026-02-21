@@ -29,6 +29,7 @@ from .storage import (
     insert_chunks,
     insert_embeddings,
     insert_ingest_event,
+    list_all_chunks_for_doc,
     list_ingest_events,
     upsert_doc,
 )
@@ -118,6 +119,19 @@ class IngestResult:
     embedding_dim: int
     content_sha256: str
     changed: bool
+
+
+@dataclass(frozen=True)
+class ReplayDocResult:
+    doc_id: str
+    action: str  # skipped | reprocessed
+    forced: bool
+    changed: bool
+    doc_version: int
+    num_chunks: int
+    embedding_dim: int
+    content_sha256: str
+    content_bytes: int
 
 
 _embedder_singleton: Embedder | None = None
@@ -287,6 +301,107 @@ def ingest_text(
         embedding_dim=int(embs.shape[1]),
         content_sha256=content_sha256,
         changed=changed,
+    )
+
+
+def _reconstruct_doc_text_for_replay(doc_id: str) -> tuple[str, IngestEvent | None]:
+    """Rebuild best-effort document text from stored chunks for replay."""
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        doc = get_doc(conn, doc_id)
+        if doc is None:
+            raise ValueError(f"Doc not found: {doc_id}")
+        latest_events = list_ingest_events(conn, doc_id, limit=1)
+        latest_event = latest_events[0] if latest_events else None
+        overlap = int(latest_event.chunk_overlap_chars) if latest_event is not None else int(settings.chunk_overlap_chars)
+        chunks = list_all_chunks_for_doc(conn, doc_id, limit=max(1, int(doc.num_chunks)))
+
+    out_parts: list[str] = []
+    prev_text: str | None = None
+    for c in chunks:
+        txt = c.text
+        if prev_text is not None and overlap > 0:
+            prev_tail = prev_text[-overlap:]
+            if txt.startswith(prev_tail + "\n"):
+                txt = txt[len(prev_tail) + 1 :]
+            elif txt.startswith(prev_tail):
+                txt = txt[len(prev_tail) :]
+                txt = txt.lstrip("\n")
+        out_parts.append(txt.strip())
+        prev_text = c.text
+    return "\n\n".join([p for p in out_parts if p]).strip(), latest_event
+
+
+def replay_doc(*, doc_id: str, force: bool = False, run_id: str | None = None) -> ReplayDocResult:
+    """Replay a previously ingested doc using stored chunk text.
+
+    Behavior:
+    - default (`force=False`): skip when a stored content hash exists
+    - force (`force=True`): re-chunk/re-embed even if unchanged
+    """
+
+    if settings.public_demo_mode:
+        raise RuntimeError("Replay/backfill commands are disabled in PUBLIC_DEMO_MODE")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        doc = get_doc(conn, doc_id)
+        if doc is None:
+            raise ValueError(f"Doc not found: {doc_id}")
+
+        latest_events = list_ingest_events(conn, doc_id, limit=1)
+        latest_event = latest_events[0] if latest_events else None
+
+        if not force and doc.content_sha256:
+            return ReplayDocResult(
+                doc_id=doc.doc_id,
+                action="skipped",
+                forced=False,
+                changed=False,
+                doc_version=int(doc.doc_version),
+                num_chunks=int(doc.num_chunks),
+                embedding_dim=int(latest_event.embedding_dim) if latest_event is not None else int(settings.embedding_dim),
+                content_sha256=str(doc.content_sha256),
+                content_bytes=int(doc.content_bytes),
+            )
+
+    text, latest_event = _reconstruct_doc_text_for_replay(doc_id)
+    if not text.strip():
+        raise RuntimeError(f"Cannot replay doc {doc_id}: no chunk text available")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        doc = get_doc(conn, doc_id)
+        if doc is None:
+            raise ValueError(f"Doc not found: {doc_id}")
+
+    res = ingest_text(
+        title=doc.title,
+        source=doc.source,
+        text=text,
+        doc_id=doc.doc_id,
+        classification=doc.classification,
+        retention=doc.retention,
+        tags=doc.tags,
+        notes=latest_event.notes if latest_event is not None else None,
+        schema_fingerprint=latest_event.schema_fingerprint if latest_event is not None else None,
+        contract_sha256=latest_event.contract_sha256 if latest_event is not None else None,
+        validation_status=latest_event.validation_status if latest_event is not None else None,
+        validation_errors=latest_event.validation_errors if latest_event is not None else None,
+        schema_drifted=bool(latest_event.schema_drifted) if latest_event is not None else False,
+        run_id=run_id,
+    )
+    return ReplayDocResult(
+        doc_id=res.doc_id,
+        action="reprocessed",
+        forced=bool(force),
+        changed=bool(res.changed),
+        doc_version=int(res.doc_version),
+        num_chunks=int(res.num_chunks),
+        embedding_dim=int(res.embedding_dim),
+        content_sha256=res.content_sha256,
+        content_bytes=len(text.encode("utf-8", errors="replace")),
     )
 
 

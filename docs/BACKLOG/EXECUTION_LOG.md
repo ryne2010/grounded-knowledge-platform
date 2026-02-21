@@ -711,3 +711,86 @@ Implemented the ingestion-runs operator UI in the Ingest workspace:
 
 - Commit `TASK_INGESTION_RUNS_UI` on this branch and open PR.
 - Move to queue item #10: `TASK_REPLAY_BACKFILL`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-replay-backfill`
+- Current task: `TASK_REPLAY_BACKFILL` (`agents/tasks/TASK_REPLAY_BACKFILL.md`)
+
+## Task summary
+
+Implemented safe replay/backfill tooling for private deployments:
+
+- added CLI commands:
+  - `uv run python -m app.cli replay-doc --doc-id <id> [--force]`
+  - `uv run python -m app.cli replay-run --run-id <id> [--force]`
+- added replay behavior:
+  - default skip-if-unchanged when a content hash exists
+  - `--force` path re-chunks/re-embeds even when unchanged
+- added ingestion-run tracking for CLI replay operations (`trigger_type=cli`)
+- added a storage helper to enumerate run-linked doc ids for run replay
+- added runbook: `docs/RUNBOOKS/REPLAY_BACKFILL.md`
+- added tests covering:
+  - replay-run idempotency (no duplicate docs/chunks when not forced)
+  - replay-doc `--force` reprocessing behavior on unchanged content
+  - replay command blocking in public demo mode + no replay API exposure
+
+## Decisions made
+
+- Keep replay/backfill implementation CLI-only for this task; do not add replay API endpoints.
+- Preserve public demo safety posture by hard-blocking replay commands in `PUBLIC_DEMO_MODE`.
+- Reuse existing ingestion pipeline for forced replay (`ingest_text`) and keep skip logic explicit in replay path.
+
+## Files changed
+
+- `app/cli.py`
+- `app/ingestion.py`
+- `app/storage.py`
+- `tests/test_replay_backfill.py`
+- `docs/RUNBOOKS/REPLAY_BACKFILL.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_REPLAY_BACKFILL.md`
+   - `sed -n ... docs/ARCHITECTURE/INGESTION_PIPELINE.md`
+   - `sed -n ... docs/ARCHITECTURE/DATA_MODEL.md`
+2. Branching:
+   - `git checkout main`
+   - `git pull --ff-only`
+   - `git checkout -b codex/task-replay-backfill`
+3. Targeted checks while implementing:
+   - `uv run ruff check app/cli.py app/ingestion.py app/storage.py tests/test_replay_backfill.py`
+   - `uv run mypy app`
+   - `uv run pytest -q tests/test_replay_backfill.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `make test-postgres`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`40 passed, 3 skipped` in Python; `12 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make test-postgres`: PASS (`1 skipped` when Docker/Postgres unavailable)
+
+## What’s next
+
+- Commit `TASK_REPLAY_BACKFILL` on this branch and open PR.
+- Move to queue item #11: `TASK_DATA_CONTRACTS`.
