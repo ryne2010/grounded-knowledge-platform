@@ -960,3 +960,97 @@ Implemented event-driven GCS ingestion via Pub/Sub push for private deployments:
 
 - Commit `TASK_PUBSUB_PUSH_INGEST` on this branch and open PR.
 - Move to queue item #13: `TASK_SCHEDULER_PERIODIC_SYNC`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-scheduler-periodic-sync`
+- Current task: `TASK_SCHEDULER_PERIODIC_SYNC` (`agents/tasks/TASK_SCHEDULER_PERIODIC_SYNC.md`)
+
+## Task summary
+
+Implemented Task #13 periodic private sync via Cloud Scheduler:
+
+- added optional Terraform scheduler stack:
+  - dedicated scheduler service account
+  - Cloud Run `roles/run.invoker` IAM binding
+  - Cloud Scheduler HTTP job posting to `POST /api/connectors/gcs/sync`
+- added configurable scheduler controls (schedule/timezone/pause and sync payload inputs including bucket/prefix)
+- added optional API-key header injection for `AUTH_MODE=api_key` private deployments
+- added backend structured logging for scheduled sync triggers with:
+  - `event=connector.gcs.sync.scheduled`
+  - `job_name`, `bucket`, `prefix`, `run_id`
+- updated connector runbook and Terraform docs for configure/force-run/pause/disable workflows
+
+## Decisions made
+
+- Used Cloud Scheduler OIDC identity + Cloud Run invoker IAM as the baseline invocation model for private services.
+- Kept app auth behavior unchanged (OIDC mode remains unimplemented); added optional `scheduler_sync_api_key` for current `AUTH_MODE=api_key` operator workflows.
+- Kept periodic sync private-only by validating `allow_unauthenticated=false` and requiring private-mode connector overrides (`PUBLIC_DEMO_MODE=0`, `ALLOW_CONNECTORS=1`) when enabled.
+- Implemented scheduled-trigger observability in the existing sync endpoint rather than adding a new endpoint surface.
+
+## Files changed
+
+- `infra/gcp/cloud_run_demo/scheduler_sync.tf`
+- `infra/gcp/cloud_run_demo/variables.tf`
+- `infra/gcp/cloud_run_demo/outputs.tf`
+- `infra/gcp/cloud_run_demo/terraform.tfvars.example`
+- `infra/gcp/cloud_run_demo/README.md`
+- `app/main.py`
+- `tests/test_ingestion_runs.py`
+- `docs/RUNBOOKS/CONNECTORS_GCS.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_SCHEDULER_PERIODIC_SYNC.md`
+   - `sed -n ... docs/SPECS/SCHEDULER_PERIODIC_SYNC.md`
+2. Branching:
+   - `git checkout main`
+   - `git pull --ff-only`
+   - `git checkout -b codex/task-scheduler-periodic-sync`
+3. Targeted validation during implementation:
+   - `uv run pytest -q tests/test_ingestion_runs.py`
+   - `terraform -chdir=infra/gcp/cloud_run_demo fmt -check -recursive`
+   - `terraform -chdir=infra/gcp/cloud_run_demo init -reconfigure -backend=false`
+   - `terraform -chdir=infra/gcp/cloud_run_demo validate`
+   - `docker run ... tflint`
+   - `docker run ... tfsec`
+   - `docker run ... checkov --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18,CKV_GCP_79,CKV_GCP_6,CKV_GCP_83,CKV_SECRET_4"`
+   - `docker run ... conftest`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`47 passed, 3 skipped` in Python; `12 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- Terraform checks:
+  - `fmt -check -recursive`: PASS
+  - `validate`: PASS
+  - `tflint`: PASS
+  - `tfsec`: PASS
+  - `checkov` (workflow-aligned skip list): PASS
+  - `conftest`: PASS
+
+## What’s next
+
+- Commit `TASK_SCHEDULER_PERIODIC_SYNC` on this branch and open PR.
+- Move to queue item #14: `TASK_GOVERNANCE_METADATA_UI`.

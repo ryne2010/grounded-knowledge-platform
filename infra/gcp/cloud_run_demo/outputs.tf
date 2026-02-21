@@ -63,3 +63,13 @@ output "pubsub_ingest_subscription" {
   value       = local.enable_pubsub_push_ingest ? google_pubsub_subscription.gcs_ingest_events_push[0].id : null
   description = "Pub/Sub push subscription id for GCS notify endpoint (if enabled)."
 }
+
+output "scheduler_sync_job_name" {
+  value       = local.enable_scheduler_sync ? google_cloud_scheduler_job.gcs_periodic_sync[0].name : null
+  description = "Cloud Scheduler periodic sync job name (if enabled)."
+}
+
+output "scheduler_sync_service_account" {
+  value       = local.enable_scheduler_sync ? google_service_account.scheduler_sync_invoker[0].email : null
+  description = "Service account email used by Cloud Scheduler to invoke Cloud Run (if enabled)."
+}

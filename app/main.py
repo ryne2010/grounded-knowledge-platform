@@ -1442,7 +1442,9 @@ def ingest_text_api(req: IngestTextRequest, _auth: Any = Depends(require_role("e
 
 # ---- Connectors ----
 @app.post("/api/connectors/gcs/sync")
-def gcs_sync_api(req: GCSSyncRequest, _auth: Any = Depends(require_role("admin"))) -> dict[str, Any]:
+def gcs_sync_api(
+    req: GCSSyncRequest, request: Request, _auth: Any = Depends(require_role("admin"))
+) -> dict[str, Any]:
     """Trigger a one-off sync from a GCS prefix (private deployments only).
 
     This is intentionally disabled in PUBLIC_DEMO_MODE and when ALLOW_CONNECTORS=0.
@@ -1464,6 +1466,8 @@ def gcs_sync_api(req: GCSSyncRequest, _auth: Any = Depends(require_role("admin")
         "tags": req.tags,
     }
     principal = getattr(_auth, "principal", None)
+    scheduler_job_name = (request.headers.get("x-cloudscheduler-jobname") or "").strip()
+    is_scheduled_trigger = bool((request.headers.get("x-cloudscheduler") or "").strip() or scheduler_job_name)
 
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
@@ -1552,6 +1556,19 @@ def gcs_sync_api(req: GCSSyncRequest, _auth: Any = Depends(require_role("admin")
         raise
 
     invalidate_cache()
+    if is_scheduled_trigger:
+        logger.info(
+            json.dumps(
+                {
+                    "event": "connector.gcs.sync.scheduled",
+                    "job_name": scheduler_job_name or "unknown",
+                    "bucket": req.bucket,
+                    "prefix": req.prefix or "",
+                    "run_id": run_id,
+                },
+                ensure_ascii=False,
+            )
+        )
     return res
 
 
