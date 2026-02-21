@@ -242,7 +242,7 @@ BASE   ?= http://127.0.0.1:8080
 ENDPOINT ?= /api/query
 K ?= 5
 
-.PHONY: eval safety-eval purge-expired purge-expired-apply
+.PHONY: eval safety-eval retention-sweep retention-sweep-apply purge-expired purge-expired-apply
 
 eval: ## Run retrieval evaluation on a golden set (JSONL)
 	uv run python -m app.cli eval $(GOLDEN) --k $(K)
@@ -250,11 +250,15 @@ eval: ## Run retrieval evaluation on a golden set (JSONL)
 safety-eval: ## Run prompt-injection safety regression (JSONL)
 	uv run python -m app.cli safety-eval $(SUITE) --base $(BASE) --endpoint $(ENDPOINT) --k $(K)
 
-purge-expired: ## Dry-run: list docs whose retention policy has expired
-	uv run python -m app.cli purge-expired
+retention-sweep: ## Dry-run: list docs whose retention policy has expired
+	uv run python -m app.cli retention-sweep
 
-purge-expired-apply: ## Delete docs whose retention policy has expired (DANGEROUS)
-	uv run python -m app.cli purge-expired --apply
+retention-sweep-apply: ## Delete docs whose retention policy has expired (DANGEROUS)
+	uv run python -m app.cli retention-sweep --apply
+
+purge-expired: retention-sweep ## Deprecated alias: use retention-sweep
+
+purge-expired-apply: retention-sweep-apply ## Deprecated alias: use retention-sweep-apply
 
 dev-doctor: ## Run full local quality harness
 	bash scripts/doctor.sh

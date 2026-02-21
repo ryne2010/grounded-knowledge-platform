@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+import time
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Optional
@@ -12,6 +13,7 @@ import numpy as np
 from .config import settings
 from .embeddings import Embedder, HashEmbedder, NoEmbedder, SentenceTransformerEmbedder, cosine_sim
 from .index_maintenance import ensure_index_compatible
+from .maintenance import retention_is_expired
 from .storage import Chunk, connect, get_chunks_by_ids, get_embeddings_by_ids, init_db, list_chunks
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
@@ -78,6 +80,36 @@ def _get_embedder() -> Embedder:
 
 def _tokenize(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text)]
+
+
+def _is_postgres_conn(conn: Any) -> bool:
+    return "psycopg" in type(conn).__module__
+
+
+def _ph(conn: Any) -> str:
+    return "%s" if _is_postgres_conn(conn) else "?"
+
+
+def _expired_doc_ids_for_doc_ids(conn: Any, doc_ids: set[str], *, now: int) -> set[str]:
+    """Return doc_ids that are retention-expired at `now`."""
+    if not doc_ids:
+        return set()
+
+    ordered_ids = sorted(doc_ids)
+    placeholders = ",".join([_ph(conn)] * len(ordered_ids))
+    cur = conn.execute(
+        f"SELECT doc_id, retention, updated_at FROM docs WHERE doc_id IN ({placeholders})",
+        tuple(ordered_ids),
+    )
+
+    expired: set[str] = set()
+    for row in cur.fetchall():
+        doc_id = str(row["doc_id"])
+        retention = str(row["retention"])
+        updated_at = int(row["updated_at"])
+        if retention_is_expired(retention, updated_at=updated_at, now=now):
+            expired.add(doc_id)
+    return expired
 
 
 def invalidate_cache() -> None:
@@ -268,12 +300,16 @@ def _retrieve_postgres(
     # Fetch chunk records for candidates.
     chunk_ids = list(cand_ids)
     chunks = get_chunks_by_ids(conn, chunk_ids)
+    now_i = int(time.time())
+    expired_doc_ids = _expired_doc_ids_for_doc_ids(conn, {c.doc_id for c in chunks}, now=now_i)
     by_id = {c.chunk_id: c for c in chunks}
 
     scored: list[RetrievedChunk] = []
     for cid in cand_ids:
         c = by_id.get(cid)
         if c is None:
+            continue
+        if c.doc_id in expired_doc_ids:
             continue
         lex_s = float(lex.get(cid, 0.0))
         vec_s = float(vec.get(cid, 0.0))
@@ -354,6 +390,7 @@ def retrieve(
 
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
+        now_i = int(time.time())
 
         # Postgres path: use DB-native lexical + pgvector search (avoid loading entire corpus into memory).
         if settings.database_url:
@@ -379,13 +416,27 @@ def retrieve(
         if not chunks:
             return []
 
+        expired_doc_ids = _expired_doc_ids_for_doc_ids(conn, {c.doc_id for c in chunks}, now=now_i)
+        if len(expired_doc_ids) == len({c.doc_id for c in chunks}):
+            return []
+        active_chunk_indexes = [i for i, c in enumerate(chunks) if c.doc_id not in expired_doc_ids]
+        active_chunk_index_set = set(active_chunk_indexes)
+        if not active_chunk_indexes:
+            return []
+
         # Lexical
         lex_fts = _lexical_scores_fts(conn, question, lexical_limit)
         if lex_fts is not None:
             index_of = {c.chunk_id: i for i, c in enumerate(chunks)}
-            lex_scores = {index_of[cid]: s for cid, s in lex_fts.items() if cid in index_of}
+            lex_scores = {
+                index_of[cid]: s
+                for cid, s in lex_fts.items()
+                if cid in index_of and index_of[cid] in active_chunk_index_set
+            }
         else:
-            lex_scores = _lexical_scores_bm25(tokenized, question)
+            lex_scores = {
+                i: s for i, s in _lexical_scores_bm25(tokenized, question).items() if i in active_chunk_index_set
+            }
 
         # Vector (optional)
         if use_vector:
@@ -410,11 +461,13 @@ def retrieve(
 
         if use_vector:
             top_vec_idx = np.argsort(-sims)[:vector_limit].tolist()
-            cand_idx.update(int(i) for i in top_vec_idx)
+            cand_idx.update(int(i) for i in top_vec_idx if int(i) in active_chunk_index_set)
 
         results: list[RetrievedChunk] = []
         for i in cand_idx:
             c = chunks[i]
+            if c.doc_id in expired_doc_ids:
+                continue
             lex_score = float(lex_scores.get(i, 0.0))
             vec_score = float(sims[i])
             score = (0.5 * lex_score + 0.5 * vec_score) if use_vector else lex_score

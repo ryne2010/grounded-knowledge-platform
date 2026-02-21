@@ -340,6 +340,7 @@ Response:
 ### Maintenance
 
 These endpoints are **read-only** helpers intended for operators.
+Retention delete/sweep operations are CLI-only (`app.cli retention-sweep`) and are not exposed as API writes.
 
 - `GET /api/maintenance/retention/expired?now=<optional unix_ts>`
 

@@ -34,15 +34,28 @@ RETENTION_TTLS_SECONDS: dict[str, int] = {
 }
 
 
+def retention_expires_at(retention: str, *, updated_at: int) -> int | None:
+    """Return unix timestamp when retention expires, or None when non-expiring."""
+    ttl = RETENTION_TTLS_SECONDS.get(str(retention))
+    if ttl is None:
+        return None
+    return int(updated_at) + int(ttl)
+
+
+def retention_is_expired(retention: str, *, updated_at: int, now: int | None = None) -> bool:
+    """Return True when the provided retention policy has expired."""
+    now_i = int(time.time()) if now is None else int(now)
+    expiry_ts = retention_expires_at(str(retention), updated_at=int(updated_at))
+    if expiry_ts is None:
+        return False
+    return now_i >= expiry_ts
+
+
 def iter_expired_docs(docs: Iterable[Doc], *, now: int | None = None) -> list[Doc]:
     """Return the subset of docs whose retention policy has expired."""
-    now_i = int(time.time()) if now is None else int(now)
     expired: list[Doc] = []
     for d in docs:
-        ttl = RETENTION_TTLS_SECONDS.get(str(d.retention))
-        if ttl is None:
-            continue
-        if int(d.updated_at) <= (now_i - ttl):
+        if retention_is_expired(str(d.retention), updated_at=int(d.updated_at), now=now):
             expired.append(d)
     return expired
 

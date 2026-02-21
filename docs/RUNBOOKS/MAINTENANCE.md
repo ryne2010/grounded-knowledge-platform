@@ -6,7 +6,7 @@ This runbook covers periodic operational tasks for private deployments.
 
 ---
 
-## Retention purge
+## Retention sweep
 
 ### What it does
 
@@ -18,13 +18,13 @@ Deletes documents whose retention policy has expired:
 ### Dry-run
 
 ```bash
-make purge-expired
+make retention-sweep
 ```
 
 ### Apply deletes
 
 ```bash
-make purge-expired-apply
+make retention-sweep-apply
 ```
 
 ### Cloud Scheduler / Cloud Run Jobs (recommended)
@@ -32,7 +32,7 @@ make purge-expired-apply
 In production, schedule this as a Cloud Run Job that runs:
 
 ```bash
-uv run python -m app.cli purge-expired --apply
+uv run python -m app.cli retention-sweep --apply
 ```
 
 ---
