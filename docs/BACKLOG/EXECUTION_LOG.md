@@ -794,3 +794,73 @@ Implemented safe replay/backfill tooling for private deployments:
 
 - Commit `TASK_REPLAY_BACKFILL` on this branch and open PR.
 - Move to queue item #11: `TASK_DATA_CONTRACTS`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-data-contracts`
+- Current task: `TASK_DATA_CONTRACTS` (`agents/tasks/TASK_DATA_CONTRACTS.md`)
+
+## Task summary
+
+Completed Task #11 acceptance closure for data contracts + schema drift by adding explicit invalid-type validation coverage and re-validating the full contract/drift implementation already present on `main`:
+
+- verified existing implementation includes:
+  - optional contract parsing for tabular ingests (`contract_file` / `--contract`)
+  - safe YAML parsing + max size cap + Pydantic validation
+  - lineage fields (`schema_fingerprint`, `contract_sha256`, `validation_status`, `validation_errors`, `schema_drifted`)
+  - UI rendering for validation status and drift indicators
+- added missing acceptance-focused test for clear invalid-type error messaging on contract mismatch
+
+## Decisions made
+
+- Keep this task slice minimal and reviewable because core task functionality is already in `main`.
+- Add explicit test coverage for “invalid type” error clarity, which was the remaining acceptance criterion not directly asserted.
+- Avoid broad refactors or behavior changes to already-validated ingestion contract paths.
+
+## Files changed
+
+- `tests/test_data_contracts.py`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_DATA_CONTRACTS.md`
+   - `sed -n ... docs/DATA_CONTRACTS.md`
+2. Discovery:
+   - `sed -n ... app/contracts/tabular_contract.py`
+   - `sed -n ... tests/test_data_contracts.py`
+   - `rg -n ... web/src app/main.py tests`
+3. Targeted validation:
+   - `uv run pytest -q tests/test_data_contracts.py`
+   - `uv run ruff check tests/test_data_contracts.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `make test-postgres`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`41 passed, 3 skipped` in Python; `12 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make test-postgres`: PASS (`1 skipped` when Docker/Postgres unavailable)
+
+## What’s next
+
+- Commit `TASK_DATA_CONTRACTS` on this branch and open PR.
+- Move to queue item #12: `TASK_PUBSUB_PUSH_INGEST`.
