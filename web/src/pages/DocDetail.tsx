@@ -330,7 +330,10 @@ export function DocDetailPage() {
     >
       <Section title="Document record" description="Metadata, ingest lineage, and chunk browser.">
         <div className="mb-4 flex items-center justify-between">
-          <Link to="/docs" className="text-sm underline">
+          <Link
+            to="/docs"
+            className="rounded-sm text-sm underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             ← Back to docs
           </Link>
           <div className="flex items-center gap-2">
@@ -358,7 +361,9 @@ export function DocDetailPage() {
 
         {docQuery.isLoading ? <Spinner /> : null}
         {docQuery.isError ? (
-          <div className="rounded-md border bg-destructive/10 p-3 text-sm">{(docQuery.error as Error).message}</div>
+          <div className="rounded-md border bg-destructive/10 p-3 text-sm" role="alert">
+            {(docQuery.error as Error).message}
+          </div>
         ) : null}
 
         {doc ? (
@@ -418,7 +423,11 @@ export function DocDetailPage() {
                   </div>
                 ) : null}
 
-                {copyStatus ? <div className="text-xs text-muted-foreground">{copyStatus}</div> : null}
+                {copyStatus ? (
+                  <div className="text-xs text-muted-foreground" role="status" aria-live="polite">
+                    {copyStatus}
+                  </div>
+                ) : null}
 
                 <div className="grid grid-cols-1 gap-2 text-sm text-muted-foreground sm:grid-cols-2">
                   <div>
@@ -554,10 +563,20 @@ export function DocDetailPage() {
               <CardContent className="space-y-3">
                 {chunkViewEnabled ? (
                   <>
-                    <Input value={chunkFilter} onChange={(e) => setChunkFilter(e.target.value)} placeholder="Filter chunks…" />
+                    <div className="space-y-2">
+                      <Label htmlFor="chunkFilter">Filter chunks</Label>
+                      <Input
+                        id="chunkFilter"
+                        value={chunkFilter}
+                        onChange={(e) => setChunkFilter(e.target.value)}
+                        placeholder="Filter chunks…"
+                      />
+                    </div>
                     {chunksQuery.isLoading ? <Spinner /> : null}
                     {chunksQuery.isError ? (
-                      <div className="rounded-md border bg-destructive/10 p-3 text-sm">{(chunksQuery.error as Error).message}</div>
+                      <div className="rounded-md border bg-destructive/10 p-3 text-sm" role="alert">
+                        {(chunksQuery.error as Error).message}
+                      </div>
                     ) : null}
                     <div data-citation-table="doc-chunks">
                       <DataTable<ChunkSummary>
@@ -642,7 +661,7 @@ export function DocDetailPage() {
               </datalist>
 
               {updateMutation.isError ? (
-                <div className="rounded-md border bg-destructive/10 p-3 text-sm">
+                <div className="rounded-md border bg-destructive/10 p-3 text-sm" role="alert">
                   {(updateMutation.error as Error).message}
                 </div>
               ) : null}
@@ -693,7 +712,9 @@ export function DocDetailPage() {
             <div className="mt-3 max-h-[60vh] overflow-auto rounded-lg border bg-muted p-3">
               {chunkDetailQuery.isLoading ? <Spinner /> : null}
               {chunkDetailQuery.isError ? (
-                <div className="rounded-md border bg-destructive/10 p-3 text-sm">{(chunkDetailQuery.error as Error).message}</div>
+                <div className="rounded-md border bg-destructive/10 p-3 text-sm" role="alert">
+                  {(chunkDetailQuery.error as Error).message}
+                </div>
               ) : null}
               <div className="whitespace-pre-wrap text-sm leading-relaxed">{chunkDetailQuery.data?.chunk.text ?? ''}</div>
             </div>

@@ -49,12 +49,18 @@ export function AppShell(props: AppShellProps) {
   }, [theme])
 
   const navLinkBase =
-    'block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+    'block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
   const navLinkActive = 'block rounded-md px-3 py-2 text-sm bg-accent text-accent-foreground'
   const navDisabled = 'cursor-not-allowed rounded-md px-3 py-2 text-sm text-muted-foreground/60'
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      <a
+        href="#main-content"
+        className="sr-only z-50 rounded-md bg-background px-3 py-2 text-sm focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        Skip to main content
+      </a>
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto flex w-full max-w-[1440px] items-center gap-4 px-4 py-3">
           {/* Brand */}
@@ -93,7 +99,7 @@ export function AppShell(props: AppShellProps) {
             {props.docsHref ? (
               <a
                 href={props.docsHref}
-                className="hidden text-sm text-muted-foreground hover:text-foreground md:inline"
+                className="hidden rounded-sm text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:inline"
                 target="_blank"
                 rel="noreferrer"
               >
@@ -105,7 +111,7 @@ export function AppShell(props: AppShellProps) {
                 <Separator className="hidden h-5 w-px bg-border md:block" />
                 <a
                   href={props.repoHref}
-                  className="hidden text-sm text-muted-foreground hover:text-foreground md:inline"
+                  className="hidden rounded-sm text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:inline"
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -127,13 +133,17 @@ export function AppShell(props: AppShellProps) {
         </div>
 
         {props.statusBanner ? (
-          <div className="border-t border-border/80 bg-muted/60 px-4 py-2 text-xs">
+          <div className="border-t border-border/80 bg-muted/60 px-4 py-2 text-xs" role="status" aria-live="polite">
             <div className="mx-auto w-full max-w-[1440px] text-muted-foreground">{props.statusBanner}</div>
           </div>
         ) : null}
 
         {offline ? (
-          <div className="border-t border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+          <div
+            className="border-t border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900"
+            role="status"
+            aria-live="polite"
+          >
             Connection unavailable. Cached pages are still accessible, but live API responses may be stale.
           </div>
         ) : null}
@@ -204,12 +214,22 @@ export function AppShell(props: AppShellProps) {
                 <div className="mb-2 font-medium uppercase tracking-wide">Links</div>
                 <div className="flex flex-col gap-1">
                   {props.docsHref ? (
-                    <a href={props.docsHref} target="_blank" rel="noreferrer" className="hover:text-foreground">
+                    <a
+                      href={props.docsHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-sm hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
                       API Docs
                     </a>
                   ) : null}
                   {props.repoHref ? (
-                    <a href={props.repoHref} target="_blank" rel="noreferrer" className="hover:text-foreground">
+                    <a
+                      href={props.repoHref}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-sm hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
                       Repo
                     </a>
                   ) : null}
@@ -219,7 +239,9 @@ export function AppShell(props: AppShellProps) {
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1 px-4 py-6">{props.children}</main>
+        <main id="main-content" className="min-w-0 flex-1 px-4 py-6">
+          {props.children}
+        </main>
       </div>
 
       <footer className="border-t py-6">
