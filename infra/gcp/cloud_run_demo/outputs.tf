@@ -43,6 +43,11 @@ output "alert_policy_latency_name" {
   description = "Alert policy name for latency p95 (if enabled)."
 }
 
+output "ingestion_failure_metric_name" {
+  value       = (var.enable_observability && !var.allow_unauthenticated) ? try(google_logging_metric.ingestion_failures[0].name, null) : null
+  description = "Log-based metric name for ingestion failures (private deployments only)."
+}
+
 output "cloudsql_connection_name" {
   value       = var.enable_cloudsql ? try(google_sql_database_instance.cloudsql[0].connection_name, null) : null
   description = "Cloud SQL connection name (if Cloud SQL is enabled)."

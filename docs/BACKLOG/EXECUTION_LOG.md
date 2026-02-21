@@ -1749,3 +1749,91 @@ Completed Task #21 OpenTelemetry observability hardening slice focused on trace/
 
 - Commit `TASK_OTEL` on this branch and open PR.
 - Move to queue item #22: `TASK_DASHBOARDS_TERRAFORM`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-dashboards-terraform`
+- Current task: `TASK_DASHBOARDS_TERRAFORM` (`agents/tasks/TASK_DASHBOARDS_TERRAFORM.md`)
+
+## Task summary
+
+Implemented Task #22 Terraform-managed observability dashboards with expanded operator coverage and docs:
+
+- upgraded `infra/gcp/cloud_run_demo/observability.tf` dashboard model to include:
+  - Cloud Run request count, 5xx, p95 latency
+  - query latency breakdown (retrieval vs answer generation OTEL metrics)
+  - ingestion failures widget for private deployments
+  - Cloud SQL health widgets (CPU utilization + active backends) when Cloud SQL is enabled
+  - existing recent error logs panel
+- added Terraform-managed log-based metric for ingestion failures in private deployments:
+  - `google_logging_metric.ingestion_failures`
+- added output for the ingestion failure metric name:
+  - `ingestion_failure_metric_name`
+- updated observability docs/runbook references explaining dashboard contents and how to fetch dashboard outputs
+- aligned local `make tf-check` behavior with CI by syncing checkov skip IDs and conftest file selection in `Makefile`
+
+## Decisions made
+
+- Kept ingestion failure metric/dashboard coverage private-only (`allow_unauthenticated=false`) to align with “private deployment operator workflows” and avoid irrelevant public-demo noise.
+- Used existing OTEL metric names (`workload.googleapis.com/gkp.query.*`) for query stage latency instead of adding new custom app instrumentation.
+- Included Cloud SQL widgets conditionally (`enable_cloudsql=true`) to preserve the one-project-per-client Cloud SQL baseline while keeping non-CloudSQL experiments valid.
+- Updated local Terraform hygiene commands to mirror CI skip logic and conftest invocation so local validation matches pipeline behavior.
+
+## Files changed
+
+- `infra/gcp/cloud_run_demo/observability.tf`
+- `infra/gcp/cloud_run_demo/outputs.tf`
+- `infra/gcp/cloud_run_demo/README.md`
+- `docs/OBSERVABILITY.md`
+- `Makefile`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_DASHBOARDS_TERRAFORM.md`
+   - `sed -n ... docs/SPECS/OBSERVABILITY_OPS.md`
+   - `sed -n ... infra/gcp/cloud_run_demo/*.tf`
+2. Branching:
+   - `git checkout main && git pull --ff-only && git checkout -b codex/task-dashboards-terraform`
+3. Targeted Terraform validation:
+   - `terraform -chdir=infra/gcp/cloud_run_demo fmt -recursive`
+   - `terraform -chdir=infra/gcp/cloud_run_demo init -backend=false -upgrade`
+   - `terraform -chdir=infra/gcp/cloud_run_demo validate`
+   - `make tf-check`
+   - `terraform plan` proof run in backendless temp copy (to avoid remote backend dependency) with active project vars; confirmed planned resources:
+     - `google_logging_metric.ingestion_failures[0]`
+     - `google_monitoring_alert_policy.cloudrun_5xx[0]`
+     - `google_monitoring_alert_policy.cloudrun_latency_p95[0]`
+     - `google_monitoring_dashboard.cloudrun[0]`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make tf-check`: PASS
+- `terraform plan` resource check: PASS (dashboard + alert + ingestion metric resources in plan output)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`73 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## What’s next
+
+- Commit `TASK_DASHBOARDS_TERRAFORM` on this branch and open PR.
+- Move to queue item #23: `TASK_SLOS_BURN_RATE`.

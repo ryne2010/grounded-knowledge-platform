@@ -70,9 +70,17 @@ This is a common pattern for:
 The default dashboard includes:
 - request volume
 - error (5xx) rate
-- p95-ish latency (via Cloud Run metrics)
+- p95 latency (Cloud Run request latency)
+- query-stage latency breakdown (retrieval vs answer generation via OTEL metrics)
+- ingestion failure count (private deployments; log-based metric)
+- Cloud SQL health (CPU utilization + active backends when Cloud SQL is enabled)
 
 Dashboards are safe to share with view-only audiences via `roles/monitoring.viewer`.
+
+How to find it after `terraform apply`:
+- `terraform -chdir=infra/gcp/cloud_run_demo output -raw monitoring_dashboard_name`
+- optional private-deployment metric output:
+  - `terraform -chdir=infra/gcp/cloud_run_demo output -raw ingestion_failure_metric_name`
 
 ---
 

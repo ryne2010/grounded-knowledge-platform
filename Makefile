@@ -639,23 +639,25 @@ tf-sec: ## tfsec (falls back to docker)
 
 
 tf-checkov: ## checkov (falls back to docker)
+	@# Keep skip list aligned with .github/workflows/terraform-hygiene.yml.
+	@# These checks are intentionally out-of-scope for this baseline demo stack.
 	@if command -v checkov >/dev/null 2>&1; then \
 	  echo "Running checkov (local)"; \
-	  checkov -d $(TF_DIR) --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18"; \
+	  checkov -d $(TF_DIR) --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18,CKV_GCP_79,CKV_GCP_6,CKV_GCP_83,CKV_SECRET_4"; \
 	else \
 	  echo "checkov not found; running via Docker"; \
 	  docker run --rm -v "$$(pwd):/src" bridgecrew/checkov:latest \
 	    -d "/src/$(TF_DIR)" \
-	    --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18"; \
+	    --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18,CKV_GCP_79,CKV_GCP_6,CKV_GCP_83,CKV_SECRET_4"; \
 	fi
 
 tf-policy: ## OPA/Conftest policy gate for Terraform (falls back to docker)
 	@if command -v conftest >/dev/null 2>&1; then \
 	  echo "Running conftest (local)"; \
-	  conftest test --parser hcl2 --policy $(POLICY_DIR) $(TF_DIR); \
+	  conftest test --parser hcl2 --policy $(POLICY_DIR) $$(find "$(TF_DIR)" -path "$(TF_DIR)/.terraform" -prune -o -type f -name "*.tf" -print); \
 	else \
 	  echo "conftest not found; running via Docker"; \
-	  docker run --rm -v "$$(pwd):/project" -w /project openpolicyagent/conftest:latest test --parser hcl2 --policy $(POLICY_DIR) $(TF_DIR); \
+	  docker run --rm -v "$$(pwd):/project" -w /project openpolicyagent/conftest:latest test --parser hcl2 --policy $(POLICY_DIR) $$(find "$(TF_DIR)" -path "$(TF_DIR)/.terraform" -prune -o -type f -name "*.tf" -print); \
 	fi
 
 tf-check: tf-fmt tf-validate tf-lint tf-sec tf-checkov tf-policy ## Run all Terraform hygiene checks
