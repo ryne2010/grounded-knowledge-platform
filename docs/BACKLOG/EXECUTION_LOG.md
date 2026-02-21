@@ -548,3 +548,90 @@ Implemented the private-deployment GCS connector UX in the Ingest workspace:
 
 - Commit `TASK_CONNECTORS_GCS_UI` on this branch and open PR.
 - Move to queue item #8: `TASK_INGESTION_RUNS`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-ingestion-runs`
+- Current task: `TASK_INGESTION_RUNS` (`agents/tasks/TASK_INGESTION_RUNS.md`)
+
+## Task summary
+
+Implemented the backend ingestion-runs capability for connector operations:
+
+- added persistent `ingestion_runs` storage with lifecycle/status + summaries
+- added `run_id` linkage on `ingest_events` so a run can be tied to its emitted lineage events
+- added API endpoints:
+  - `GET /api/ingestion-runs`
+  - `GET /api/ingestion-runs/{run_id}`
+- wired GCS sync endpoint to:
+  - create a run record as `running`
+  - propagate `run_id` into ingested events
+  - complete run as `succeeded` with summary counters
+  - mark run `failed` with retained actionable errors on failures
+- added tests covering:
+  - successful sync creates run summary + detail/event linkage
+  - failed sync persists failed run with error context
+  - rerunning same sync remains idempotent at doc level (no duplicate docs)
+
+## Decisions made
+
+- Used the task-allowed simpler linkage strategy: add `run_id` to `ingest_events` instead of introducing a separate `ingestion_run_events` table.
+- Kept run creation/update in the API layer for connector-triggered runs (explicitly satisfies acceptance without introducing wider ingestion orchestration changes).
+- Added Postgres migration (`003_ingestion_runs.sql`) and SQLite additive migration path in `init_db` for parity.
+
+## Files changed
+
+- `app/storage.py`
+- `app/ingestion.py`
+- `app/connectors/gcs.py`
+- `app/main.py`
+- `app/migrations/postgres/003_ingestion_runs.sql`
+- `tests/test_ingestion_runs.py`
+- `tests/test_storage_migrations.py`
+- `docs/CONTRACTS.md`
+- `docs/ARCHITECTURE/DATA_MODEL.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_INGESTION_RUNS.md`
+   - `sed -n ... docs/ARCHITECTURE/INGESTION_PIPELINE.md`
+2. Branching:
+   - `git checkout main`
+   - `git pull --ff-only`
+   - `git checkout -b codex/task-ingestion-runs`
+3. Targeted validation during implementation:
+   - `uv run pytest -q tests/test_ingestion_runs.py tests/test_storage_migrations.py`
+   - `python scripts/harness.py typecheck`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `make test-postgres`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`37 passed, 3 skipped` in Python; `7 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make test-postgres`: PASS (`1 skipped` when Docker unavailable)
+
+## What’s next
+
+- Commit `TASK_INGESTION_RUNS` on this branch and open PR.
+- Move to queue item #9: `TASK_INGESTION_RUNS_UI`.

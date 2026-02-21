@@ -42,13 +42,18 @@ from .ratelimit import SlidingWindowRateLimiter
 from .retrieval import RetrievedChunk, invalidate_cache, retrieve
 from .safety import detect_prompt_injection
 from .storage import (
+    complete_ingestion_run,
     connect,
+    create_ingestion_run,
     delete_doc,
     get_chunk,
     get_doc,
+    get_ingestion_run,
     get_meta,
     init_db,
+    list_ingest_events_for_run,
     update_doc_metadata,
+    list_ingestion_runs,
     list_all_chunks_for_doc,
     list_chunks_for_doc,
     list_docs,
@@ -742,6 +747,31 @@ class ExpiredDocsResponse(BaseModel):
     expired: list[ExpiredDoc]
 
 
+class IngestionRunSummary(BaseModel):
+    run_id: str
+    started_at: int
+    finished_at: int | None = None
+    status: str
+    trigger_type: str
+    trigger_payload: dict[str, object]
+    principal: str | None = None
+    objects_scanned: int
+    docs_changed: int
+    docs_unchanged: int
+    bytes_processed: int
+    errors: list[str]
+    event_count: int
+
+
+class IngestionRunsResponse(BaseModel):
+    runs: list[IngestionRunSummary]
+
+
+class IngestionRunDetailResponse(BaseModel):
+    run: IngestionRunSummary
+    events: list[dict[str, object]]
+
+
 # ---- Health ----
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -1022,6 +1052,29 @@ def list_ingest_events_api(
         init_db(conn)
         events = list_recent_ingest_events(conn, limit=limit, doc_id=doc_id)
     return {"events": [e.to_dict() for e in events]}
+
+
+@app.get("/api/ingestion-runs", response_model=IngestionRunsResponse)
+def ingestion_runs_api(limit: int = 100, _auth: Any = Depends(require_role("reader"))) -> IngestionRunsResponse:
+    limit = max(1, min(int(limit), 500))
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        runs = list_ingestion_runs(conn, limit=limit)
+    return IngestionRunsResponse(runs=[IngestionRunSummary.model_validate(r.to_dict()) for r in runs])
+
+
+@app.get("/api/ingestion-runs/{run_id}", response_model=IngestionRunDetailResponse)
+def ingestion_run_detail_api(run_id: str, _auth: Any = Depends(require_role("reader"))) -> IngestionRunDetailResponse:
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        run = get_ingestion_run(conn, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Ingestion run not found")
+        events = list_ingest_events_for_run(conn, run_id, limit=1000)
+    return IngestionRunDetailResponse(
+        run=IngestionRunSummary.model_validate(run.to_dict()),
+        events=[e.to_dict() for e in events],
+    )
 
 
 @app.get("/api/docs/{doc_id}/chunks")
@@ -1314,6 +1367,29 @@ def gcs_sync_api(req: GCSSyncRequest, _auth: Any = Depends(require_role("admin")
 
     from .connectors.gcs import sync_prefix
 
+    run_id = uuid.uuid4().hex
+    trigger_payload = {
+        "bucket": req.bucket,
+        "prefix": req.prefix or "",
+        "max_objects": int(req.max_objects),
+        "dry_run": bool(req.dry_run),
+        "classification": req.classification,
+        "retention": req.retention,
+        "tags": req.tags,
+    }
+    principal = getattr(_auth, "principal", None)
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        create_ingestion_run(
+            conn,
+            run_id=run_id,
+            trigger_type="connector",
+            trigger_payload_json=json.dumps(trigger_payload, ensure_ascii=False),
+            principal=principal,
+        )
+        conn.commit()
+
     try:
         res = sync_prefix(
             bucket=req.bucket,
@@ -1324,11 +1400,70 @@ def gcs_sync_api(req: GCSSyncRequest, _auth: Any = Depends(require_role("admin")
             retention=req.retention,
             tags=req.tags,
             notes=req.notes,
+            run_id=run_id,
         )
+        bytes_processed = sum(int(r.get("size") or 0) for r in (res.get("results") or []))
+        docs_changed = int(res.get("changed") or 0)
+        docs_ingested = int(res.get("ingested") or 0)
+        docs_unchanged = max(0, docs_ingested - docs_changed)
+        with connect(settings.sqlite_path) as conn:
+            init_db(conn)
+            complete_ingestion_run(
+                conn,
+                run_id=run_id,
+                status="succeeded",
+                objects_scanned=int(res.get("scanned") or 0),
+                docs_changed=docs_changed,
+                docs_unchanged=docs_unchanged,
+                bytes_processed=bytes_processed,
+                errors_json=json.dumps(res.get("errors") or [], ensure_ascii=False),
+            )
+            conn.commit()
     except ValueError as e:
+        with connect(settings.sqlite_path) as conn:
+            init_db(conn)
+            complete_ingestion_run(
+                conn,
+                run_id=run_id,
+                status="failed",
+                objects_scanned=0,
+                docs_changed=0,
+                docs_unchanged=0,
+                bytes_processed=0,
+                errors_json=json.dumps([str(e)], ensure_ascii=False),
+            )
+            conn.commit()
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
+        with connect(settings.sqlite_path) as conn:
+            init_db(conn)
+            complete_ingestion_run(
+                conn,
+                run_id=run_id,
+                status="failed",
+                objects_scanned=0,
+                docs_changed=0,
+                docs_unchanged=0,
+                bytes_processed=0,
+                errors_json=json.dumps([str(e)], ensure_ascii=False),
+            )
+            conn.commit()
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        with connect(settings.sqlite_path) as conn:
+            init_db(conn)
+            complete_ingestion_run(
+                conn,
+                run_id=run_id,
+                status="failed",
+                objects_scanned=0,
+                docs_changed=0,
+                docs_unchanged=0,
+                bytes_processed=0,
+                errors_json=json.dumps([str(e)], ensure_ascii=False),
+            )
+            conn.commit()
+        raise
 
     invalidate_cache()
     return res

@@ -56,6 +56,17 @@ Captures:
 - embedding config (`embedding_backend`, `embeddings_model`, `embedding_dim`)
 - optional contract validation fields for tabular ingests:
   - `schema_fingerprint`, `contract_sha256`, `validation_status`, `validation_errors_json`, `schema_drifted`
+- optional ingestion run linkage:
+  - `run_id`
+
+### `ingestion_runs`
+Higher-level grouping for connector-triggered or batch ingestion operations.
+
+Captures:
+- run lifecycle (`started_at`, `finished_at`, `status`)
+- trigger metadata (`trigger_type`, `trigger_payload_json`, `principal`)
+- summary counters (`objects_scanned`, `docs_changed`, `docs_unchanged`, `bytes_processed`)
+- retained actionable errors (`errors_json`)
 
 ### `meta`
 Small key/value store for app metadata.
@@ -68,14 +79,6 @@ Tracks applied SQL migration filenames.
 ## Planned tables (roadmap)
 
 These are defined in the backlog but not all are implemented yet.
-
-### `ingestion_runs`
-A higher-level grouping for connector-triggered ingestion operations:
-
-- run status (running/succeeded/failed)
-- trigger source (manual UI, CLI, connector)
-- summary counts (docs changed, errors, bytes)
-- linkage to a list of `ingest_events`
 
 ### `audit_events`
 Append-only audit log for security-sensitive actions:
@@ -102,4 +105,3 @@ Persisted evaluation history:
 - Postgres is the production baseline; SQLite is a local fallback only.
 - Governance fields should be queryable (classification/retention/tags), even in a small demo.
 - Keep ingestion idempotent by using content hashes and connector object fingerprints.
-
