@@ -9,9 +9,21 @@ from typing import List, Tuple
 # This is intentionally strict for PUBLIC_DEMO_MODE and generally appropriate for regulated deployments.
 _INJECTION_PATTERNS: List[Tuple[str, re.Pattern]] = [
     # Attempts to extract system/dev messages or hidden policies.
-    ("reveal_system_prompt", re.compile(r"\b(system prompt|developer message|hidden instructions)\b", re.I)),
+    ("reveal_system_prompt", re.compile(r"\b(system prompt|developer (?:message|instructions)|hidden instructions)\b", re.I)),
+    (
+        "reveal_instruction_hierarchy",
+        re.compile(r"\b(reveal|show|print|repeat|dump)\b.*\b(system|developer|hidden)\b.*\b(prompt|instruction|rules)\b", re.I),
+    ),
     # Attempts to override instructions/policies.
     ("ignore_instructions", re.compile(r"\b(ignore|disregard)\b.*\b(instruction|policy|previous)\b", re.I)),
+    (
+        "priority_override",
+        re.compile(r"\b(override|supersede|highest priority|priority over)\b.*\b(instruction|policy|rules|system|developer)\b", re.I),
+    ),
+    (
+        "jailbreak_roleplay",
+        re.compile(r"\b(pretend to be|act as|roleplay as|you are now)\b.*\b(system|developer|administrator|root)\b", re.I),
+    ),
     ("admin_mode", re.compile(r"\b(admin mode|override|bypass|disable safety)\b", re.I)),
     # Attempts to suppress grounding/citations or force ungrounded answers.
     (
@@ -75,4 +87,4 @@ def detect_prompt_injection(text: str) -> InjectionCheck:
         if pat.search(t):
             reasons.append(name)
 
-    return InjectionCheck(len(reasons) > 0, reasons)
+    return InjectionCheck(len(reasons) > 0, sorted(set(reasons)))

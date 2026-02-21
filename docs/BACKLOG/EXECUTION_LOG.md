@@ -1325,3 +1325,91 @@ Implemented Task #16 audit events for security-sensitive admin actions:
 
 - Commit `TASK_AUDIT_EVENTS` on this branch and open PR.
 - Move to queue item #17: `TASK_SAFETY_HARDENING`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-safety-hardening`
+- Current task: `TASK_SAFETY_HARDENING` (`agents/tasks/TASK_SAFETY_HARDENING.md`)
+
+## Task summary
+
+Implemented Task #17 safety hardening across API, streaming, UI refusal messaging, and safety eval coverage:
+
+- expanded prompt-injection detection coverage for subtle instruction-hijack/system-reveal attempts
+- standardized refusal reasons to canonical categories:
+  - `safety_block`
+  - `insufficient_evidence`
+  - `internal_error`
+- hardened refusal behavior for weak/unrelated citation support (query + stream paths)
+- added explicit internal-error refusal handling when answer generation throws
+- updated UI fallback refusal mapping to align with canonical refusal codes
+- extended prompt-injection eval dataset and added dedicated backend tests for safety detection/hardening
+
+## Decisions made
+
+- Kept public demo safe-by-default and extractive-only posture unchanged; no new privileged data exposure paths were introduced.
+- Used a citation relevance heuristic based on question-term overlap against citation quotes (rather than quote length alone) to avoid false refusals on valid short evidence.
+- Mapped provider/model refusals to `insufficient_evidence` so refusal semantics remain user-safe and contract-stable.
+- Preserved debug/contract behavior while documenting canonical refusal codes in architecture/contracts docs.
+
+## Files changed
+
+- `app/main.py`
+- `app/safety.py`
+- `tests/test_safety_detection.py`
+- `tests/test_safety_hardening.py`
+- `data/eval/prompt_injection.jsonl`
+- `web/src/pages/Home.tsx`
+- `docs/CONTRACTS.md`
+- `docs/ARCHITECTURE/RETRIEVAL_PIPELINE.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... harness.toml`
+   - `sed -n ... docs/PRODUCT/PRODUCT_BRIEF.md`
+   - `sed -n ... docs/ARCHITECTURE/README.md`
+   - `sed -n ... docs/DOMAIN.md`
+   - `sed -n ... docs/DESIGN.md`
+   - `sed -n ... docs/CONTRACTS.md`
+   - `sed -n ... docs/WORKFLOW.md`
+   - `sed -n ... agents/tasks/TASK_SAFETY_HARDENING.md`
+   - `sed -n ... docs/ARCHITECTURE/SECURITY_MODEL.md`
+   - `sed -n ... docs/ARCHITECTURE/RETRIEVAL_PIPELINE.md`
+2. Branching:
+   - `git switch -c codex/task-safety-hardening`
+3. Targeted validation during implementation:
+   - `uv run ruff check app/main.py app/safety.py tests/test_safety_detection.py tests/test_safety_hardening.py`
+   - `uv run mypy app`
+   - `uv run pytest -q tests/test_safety_detection.py tests/test_safety_hardening.py`
+   - `uv run pytest -q tests/test_streaming.py tests/test_safety_detection.py tests/test_safety_hardening.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`66 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## What’s next
+
+- Commit `TASK_SAFETY_HARDENING` on this branch and open PR.
+- Move to queue item #18: `TASK_EVAL_PRODUCTIZATION`.

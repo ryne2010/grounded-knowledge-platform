@@ -30,6 +30,7 @@ Retrieval is designed to be:
 
 5) **Refusal**
    - If evidence is weak/insufficient, refuse with a clear explanation.
+   - Refusal codes in this build: `insufficient_evidence`, `safety_block`, `internal_error`.
 
 ---
 
@@ -46,4 +47,3 @@ Retrieval should emit (planned / partially implemented):
 - retrieval latency (lexical/vector/rerank)
 - hit counts and score distributions
 - refusal rates and reasons (without logging sensitive content)
-

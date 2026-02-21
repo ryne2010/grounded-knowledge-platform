@@ -211,12 +211,12 @@ function fallbackRefusal(reason: string | null, refused: boolean): QueryExplain[
       message: 'Answer grounded in cited evidence from the indexed corpus.',
     }
   }
-  if (reason?.startsWith('prompt_injection:')) {
+  if (reason === 'safety_block' || reason?.startsWith('prompt_injection:')) {
     return {
       refused: true,
-      code: reason,
+      code: reason === 'safety_block' ? reason : 'safety_block',
       category: 'safety',
-      message: 'The request matched prompt-injection safeguards, so the system refused.',
+      message: 'The request triggered safety protections, so the system refused.',
     }
   }
   if (reason === 'insufficient_evidence') {
@@ -227,12 +227,12 @@ function fallbackRefusal(reason: string | null, refused: boolean): QueryExplain[
       message: 'Retrieved evidence was insufficient or unrelated to safely answer.',
     }
   }
-  if (reason === 'answerer_refused') {
+  if (reason === 'internal_error') {
     return {
       refused: true,
       code: reason,
-      category: 'model',
-      message: 'The answering model declined to produce an answer.',
+      category: 'system',
+      message: 'The system hit an internal error while answering.',
     }
   }
   return {

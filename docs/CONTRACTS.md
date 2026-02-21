@@ -310,6 +310,7 @@ Response (stable):
 - `answer: string`
 - `refused: boolean`
 - `refusal_reason: string | null`
+  - canonical values in this build: `insufficient_evidence | safety_block | internal_error | null`
 - `provider: string`
 - `citations: Citation[]`
 - optional: `retrieval: RetrievalDebug[]` (debug-only)
