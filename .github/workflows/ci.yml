@@ -23,7 +23,23 @@ jobs:
           version: 'latest'
 
       - name: Install Python deps
-        run: uv sync --dev
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=5
+          for attempt in $(seq 1 "$max_attempts"); do
+            echo "uv sync attempt ${attempt}/${max_attempts}"
+            if uv sync --dev; then
+              exit 0
+            fi
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              echo "uv sync failed after ${max_attempts} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 10))
+            echo "Retrying in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+          done
 
       - name: Set up Node
         uses: actions/setup-node@v4
