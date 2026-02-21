@@ -101,3 +101,45 @@ def test_query_request_emits_key_spans_and_preserves_request_id(tmp_path):
     assert "safety.prompt_injection_scan" in names
     assert "retrieval.retrieve" in names
     assert "generation.answer" in names
+
+
+def test_query_request_logs_include_trace_and_span_ids_without_incoming_trace_header(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    main = _reload_app(str(tmp_path / "otel_logs.sqlite"))
+    captured_logs: list[dict[str, object]] = []
+
+    def _capture_log_http_request(**kwargs):
+        captured_logs.append(dict(kwargs))
+
+    monkeypatch.setattr(main, "log_http_request", _capture_log_http_request)
+
+    client = TestClient(main.app)
+    ingest = client.post(
+        "/api/ingest/text",
+        json={
+            "title": "OTEL Log Doc",
+            "source": "unit-test",
+            "text": "Cloud Trace correlation should include trace ids when OTEL is enabled.",
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    rid = "req-otel-log-456"
+    query = client.post(
+        "/api/query",
+        headers={"X-Request-Id": rid},
+        json={"question": "What does Cloud Trace correlation include?", "top_k": 3},
+    )
+    assert query.status_code == 200, query.text
+    assert query.headers.get("x-request-id") == rid
+
+    query_logs = [entry for entry in captured_logs if entry.get("path") == "/api/query"]
+    assert query_logs, "expected at least one structured log for /api/query"
+
+    latest = query_logs[-1]
+    assert latest.get("request_id") == rid
+    trace_id = latest.get("trace_id")
+    span_id = latest.get("span_id")
+    assert isinstance(trace_id, str) and len(trace_id) == 32
+    assert isinstance(span_id, str) and len(span_id) == 16

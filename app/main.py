@@ -37,6 +37,7 @@ from .otel import (
 from .observability import (
     Timer,
     configure_logging,
+    current_trace_context,
     log_http_request,
     parse_cloud_trace_context,
     request_id_from_headers,
@@ -442,6 +443,17 @@ async def _request_middleware(request: Request, call_next):
     # Cloud Trace correlation (if present).
     trace_id, span_id = parse_cloud_trace_context({k.lower(): v for k, v in request.headers.items()})
 
+    def _effective_trace_context() -> tuple[str | None, str | None]:
+        nonlocal trace_id, span_id
+        if trace_id and span_id:
+            return trace_id, span_id
+        active_trace_id, active_span_id = current_trace_context()
+        if not trace_id and active_trace_id:
+            trace_id = active_trace_id
+        if not span_id and active_span_id:
+            span_id = active_span_id
+        return trace_id, span_id
+
     # ---- Auth context (if enabled) ----
     try:
         auth_ctx = resolve_auth_context(request)
@@ -459,6 +471,7 @@ async def _request_middleware(request: Request, call_next):
             status_code=int(ae.status_code),
             latency_ms=latency_ms,
         )
+        log_trace_id, log_span_id = _effective_trace_context()
         log_http_request(
             request_id=rid,
             method=request.method,
@@ -468,8 +481,8 @@ async def _request_middleware(request: Request, call_next):
             latency_ms=latency_ms,
             remote_ip=remote_ip,
             user_agent=user_agent,
-            trace_id=trace_id,
-            span_id=span_id,
+            trace_id=log_trace_id,
+            span_id=log_span_id,
             error_type="AuthError",
             severity="WARNING",
         )
@@ -493,6 +506,7 @@ async def _request_middleware(request: Request, call_next):
                 status_code=429,
                 latency_ms=latency_ms,
             )
+            log_trace_id, log_span_id = _effective_trace_context()
             log_http_request(
                 request_id=rid,
                 method=request.method,
@@ -502,8 +516,8 @@ async def _request_middleware(request: Request, call_next):
                 latency_ms=latency_ms,
                 remote_ip=remote_ip,
                 user_agent=user_agent,
-                trace_id=trace_id,
-                span_id=span_id,
+                trace_id=log_trace_id,
+                span_id=log_span_id,
                 limited=True,
                 severity="WARNING",
             )
@@ -531,6 +545,7 @@ async def _request_middleware(request: Request, call_next):
             status_code=int(he.status_code),
             latency_ms=latency_ms,
         )
+        log_trace_id, log_span_id = _effective_trace_context()
         log_http_request(
             request_id=rid,
             method=request.method,
@@ -540,8 +555,8 @@ async def _request_middleware(request: Request, call_next):
             latency_ms=latency_ms,
             remote_ip=remote_ip,
             user_agent=user_agent,
-            trace_id=trace_id,
-            span_id=span_id,
+            trace_id=log_trace_id,
+            span_id=log_span_id,
             error_type="HTTPException",
             severity="WARNING" if he.status_code < 500 else "ERROR",
         )
@@ -554,6 +569,7 @@ async def _request_middleware(request: Request, call_next):
             status_code=500,
             latency_ms=latency_ms,
         )
+        log_trace_id, log_span_id = _effective_trace_context()
         log_http_request(
             request_id=rid,
             method=request.method,
@@ -563,8 +579,8 @@ async def _request_middleware(request: Request, call_next):
             latency_ms=latency_ms,
             remote_ip=remote_ip,
             user_agent=user_agent,
-            trace_id=trace_id,
-            span_id=span_id,
+            trace_id=log_trace_id,
+            span_id=log_span_id,
             error_type=type(e).__name__,
             severity="ERROR",
         )
@@ -608,6 +624,7 @@ async def _request_middleware(request: Request, call_next):
         status_code=status_code,
         latency_ms=latency_ms,
     )
+    log_trace_id, log_span_id = _effective_trace_context()
     log_http_request(
         request_id=rid,
         method=request.method,
@@ -617,8 +634,8 @@ async def _request_middleware(request: Request, call_next):
         latency_ms=latency_ms,
         remote_ip=remote_ip,
         user_agent=user_agent,
-        trace_id=trace_id,
-        span_id=span_id,
+        trace_id=log_trace_id,
+        span_id=log_span_id,
         severity="INFO",
     )
     return response
