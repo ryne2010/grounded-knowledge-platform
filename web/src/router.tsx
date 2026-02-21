@@ -8,6 +8,7 @@ import { DashboardPage } from './pages/Dashboard'
 import { IngestPage } from './pages/Ingest'
 import { DocDetailPage } from './pages/DocDetail'
 import { EvalPage } from './pages/Eval'
+import { EvalRunDetailPage } from './pages/EvalRunDetail'
 import { HomePage } from './pages/Home'
 import { MaintenancePage } from './pages/Maintenance'
 import { MetaPage } from './pages/Meta'
@@ -144,6 +145,12 @@ const evalRoute = createRoute({
   component: EvalPage,
 })
 
+const evalRunDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/eval/runs/$runId',
+  component: EvalRunDetailPage,
+})
+
 const maintenanceRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/maintenance',
@@ -170,6 +177,7 @@ const routeTree = rootRoute.addChildren([
   ingestRoute,
   docDetailRoute,
   evalRoute,
+  evalRunDetailRoute,
   maintenanceRoute,
   metaRoute,
 ])

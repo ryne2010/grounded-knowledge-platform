@@ -127,3 +127,34 @@ def test_init_db_creates_audit_events_table(tmp_path: Path):
     assert "target_id" in cols
     assert "metadata_json" in cols
     assert "request_id" in cols
+
+
+def test_init_db_creates_eval_runs_table(tmp_path: Path):
+    db_path = tmp_path / "eval_runs.sqlite"
+
+    with connect(str(db_path)) as c:
+        init_db(c)
+        tables = {
+            str(r["name"])
+            for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='eval_runs'").fetchall()
+        }
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(eval_runs)").fetchall()}
+
+    assert "eval_runs" in tables
+    assert "run_id" in cols
+    assert "started_at" in cols
+    assert "finished_at" in cols
+    assert "status" in cols
+    assert "dataset_name" in cols
+    assert "dataset_sha256" in cols
+    assert "k" in cols
+    assert "include_details" in cols
+    assert "app_version" in cols
+    assert "embeddings_backend" in cols
+    assert "embeddings_model" in cols
+    assert "retrieval_config_json" in cols
+    assert "provider_config_json" in cols
+    assert "summary_json" in cols
+    assert "diff_from_prev_json" in cols
+    assert "details_json" in cols
+    assert "error" in cols

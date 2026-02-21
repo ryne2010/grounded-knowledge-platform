@@ -312,19 +312,101 @@ export type EvalRetrieved = {
 }
 
 export type EvalExample = {
+  case_id: string
   question: string
   expected_doc_ids: string[]
   expected_chunk_ids: string[]
+  status: 'pass' | 'fail'
   hit: boolean
   rank: number | null
   rr: number
   retrieved: EvalRetrieved[]
 }
 
+export type EvalDiff = {
+  previous_run_id: string | null
+  delta: {
+    hit_at_k: number
+    mrr: number
+    pass_rate: number
+  }
+  case_changes: {
+    regressions: number
+    improvements: number
+    unchanged: number
+    new_cases: number
+    dropped_cases: number
+    regression_case_ids: string[]
+    improvement_case_ids: string[]
+  }
+}
+
+export type EvalRunSummary = {
+  run_id: string
+  started_at: number
+  finished_at: number | null
+  status: string
+  dataset_name: string
+  dataset_sha256: string
+  k: number
+  include_details: boolean
+  app_version: string
+  embeddings_backend: string
+  embeddings_model: string
+  retrieval_config: {
+    k: number
+    top_k_default: number
+    max_top_k: number
+    hybrid_weights: {
+      lexical: number
+      vector: number
+    }
+    vector_enabled: boolean
+  }
+  provider_config: {
+    provider: string
+    model: string | null
+  }
+  summary: {
+    examples: number
+    passed: number
+    failed: number
+    pass_rate: number
+    hit_at_k: number
+    mrr: number
+  }
+  diff_from_prev: EvalDiff
+  error: string | null
+}
+
+export type EvalRunsResponse = {
+  runs: EvalRunSummary[]
+}
+
+export type EvalRunDetailResponse = {
+  run: EvalRunSummary
+  details: EvalExample[]
+}
+
 export type EvalResponse = {
+  run_id: string
   examples: number
+  passed: number
+  failed: number
+  pass_rate: number
   hit_at_k: number
   mrr: number
+  status: string
+  dataset_name: string
+  dataset_sha256: string
+  k: number
+  include_details: boolean
+  app_version: string
+  embeddings_backend: string
+  embeddings_model: string
+  retrieval_config: EvalRunSummary['retrieval_config']
+  provider_config: EvalRunSummary['provider_config']
+  diff_from_prev: EvalDiff
   details?: EvalExample[]
 }
 
@@ -718,4 +800,6 @@ export const api = {
   },
 
   runEval: (req: EvalRequest) => postJson<EvalRequest, EvalResponse>('/api/eval/run', req),
+  listEvalRuns: (limit = 50) => getJson<EvalRunsResponse>(`/api/eval/runs?limit=${encodeURIComponent(String(limit))}`),
+  getEvalRun: (runId: string) => getJson<EvalRunDetailResponse>(`/api/eval/runs/${encodeURIComponent(runId)}`),
 }

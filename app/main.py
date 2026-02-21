@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import logging
 import re
@@ -48,13 +49,17 @@ from .storage import (
     connect,
     create_ingestion_run,
     delete_doc,
+    get_eval_run,
     get_chunk,
     get_doc,
     get_ingestion_run,
     get_meta,
+    get_previous_eval_run,
     init_db,
+    insert_eval_run,
     insert_audit_event,
     list_audit_events,
+    list_eval_runs,
     list_ingest_events_for_run,
     update_doc_metadata,
     list_ingestion_runs,
@@ -847,6 +852,34 @@ class EvalRequest(BaseModel):
     golden_path: str = "data/eval/golden.jsonl"
     k: int = 5
     include_details: bool = False
+
+
+class EvalRunSummary(BaseModel):
+    run_id: str
+    started_at: int
+    finished_at: int | None = None
+    status: str
+    dataset_name: str
+    dataset_sha256: str
+    k: int
+    include_details: bool
+    app_version: str
+    embeddings_backend: str
+    embeddings_model: str
+    retrieval_config: dict[str, Any]
+    provider_config: dict[str, Any]
+    summary: dict[str, Any]
+    diff_from_prev: dict[str, Any]
+    error: str | None = None
+
+
+class EvalRunsResponse(BaseModel):
+    runs: list[EvalRunSummary]
+
+
+class EvalRunDetailResponse(BaseModel):
+    run: EvalRunSummary
+    details: list[dict[str, Any]]
 
 
 class ChunkSearchResult(BaseModel):
@@ -2690,16 +2723,205 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
 
 
 # ---- Eval ----
+def _eval_dataset_sha256(path: str) -> str:
+    p = Path(path)
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _eval_retrieval_config(*, k: int) -> dict[str, object]:
+    use_vector = settings.embeddings_backend != "none"
+    lexical_weight = 0.5 if use_vector else 1.0
+    vector_weight = 0.5 if use_vector else 0.0
+    return {
+        "k": int(k),
+        "top_k_default": int(settings.top_k_default),
+        "max_top_k": int(settings.max_top_k),
+        "hybrid_weights": {"lexical": lexical_weight, "vector": vector_weight},
+        "vector_enabled": bool(use_vector),
+    }
+
+
+def _eval_provider_config() -> dict[str, object]:
+    provider = str(settings.effective_llm_provider)
+    model: str | None = None
+    if provider == "openai":
+        model = settings.openai_model
+    elif provider == "gemini":
+        model = settings.gemini_model
+    elif provider == "ollama":
+        model = settings.ollama_model
+    return {
+        "provider": provider,
+        "model": model,
+    }
+
+
+def _normalize_eval_details(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for idx, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        case = {str(k): v for k, v in item.items()}
+        if "case_id" not in case or not str(case.get("case_id", "")).strip():
+            case["case_id"] = f"case-{idx:04d}"
+        status = str(case.get("status", "")).strip().lower()
+        if status not in {"pass", "fail"}:
+            status = "pass" if bool(case.get("hit", False)) else "fail"
+            case["status"] = status
+        out.append(case)
+    return out
+
+
+def _eval_summary_from_payload(payload: dict[str, Any], details: list[dict[str, Any]]) -> dict[str, Any]:
+    examples = max(0, int(payload.get("examples", len(details))))
+    hit_at_k = float(payload.get("hit_at_k", 0.0))
+    mrr = float(payload.get("mrr", 0.0))
+
+    passed_raw = payload.get("passed")
+    if passed_raw is None:
+        if details:
+            passed = sum(1 for d in details if str(d.get("status", "")).strip().lower() == "pass")
+        else:
+            passed = int(round(hit_at_k * examples))
+    else:
+        passed = int(passed_raw)
+    passed = max(0, min(passed, examples))
+
+    failed_raw = payload.get("failed")
+    if failed_raw is None:
+        failed = max(0, examples - passed)
+    else:
+        failed = int(failed_raw)
+    failed = max(0, min(failed, examples))
+    if passed + failed != examples:
+        failed = max(0, examples - passed)
+
+    pass_rate = float(passed) / float(examples) if examples > 0 else 0.0
+    return {
+        "examples": examples,
+        "passed": passed,
+        "failed": failed,
+        "pass_rate": pass_rate,
+        "hit_at_k": hit_at_k,
+        "mrr": mrr,
+    }
+
+
+def _eval_case_status_map(details: list[dict[str, Any]]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for d in details:
+        cid = str(d.get("case_id", "")).strip()
+        if not cid:
+            continue
+        status = str(d.get("status", "")).strip().lower()
+        if status not in {"pass", "fail"}:
+            status = "pass" if bool(d.get("hit", False)) else "fail"
+        out[cid] = status
+    return out
+
+
+def _eval_diff_from_previous(
+    *,
+    previous_run_id: str | None,
+    previous_summary: dict[str, Any] | None,
+    previous_details: list[dict[str, Any]] | None,
+    current_summary: dict[str, Any],
+    current_details: list[dict[str, Any]],
+) -> dict[str, Any]:
+    prev_summary = previous_summary or {}
+    prev_details = previous_details or []
+    prev_map = _eval_case_status_map(prev_details)
+    curr_map = _eval_case_status_map(current_details)
+
+    common_case_ids = sorted(set(prev_map.keys()) & set(curr_map.keys()))
+    regressions = sorted([cid for cid in common_case_ids if prev_map[cid] == "pass" and curr_map[cid] == "fail"])
+    improvements = sorted([cid for cid in common_case_ids if prev_map[cid] == "fail" and curr_map[cid] == "pass"])
+    unchanged = len(common_case_ids) - len(regressions) - len(improvements)
+    new_case_ids = sorted(set(curr_map.keys()) - set(prev_map.keys()))
+    dropped_case_ids = sorted(set(prev_map.keys()) - set(curr_map.keys()))
+
+    prev_hit_at_k = float(prev_summary.get("hit_at_k", 0.0))
+    prev_mrr = float(prev_summary.get("mrr", 0.0))
+    prev_pass_rate = float(prev_summary.get("pass_rate", 0.0))
+    cur_hit_at_k = float(current_summary.get("hit_at_k", 0.0))
+    cur_mrr = float(current_summary.get("mrr", 0.0))
+    cur_pass_rate = float(current_summary.get("pass_rate", 0.0))
+
+    return {
+        "previous_run_id": previous_run_id,
+        "delta": {
+            "hit_at_k": cur_hit_at_k - prev_hit_at_k,
+            "mrr": cur_mrr - prev_mrr,
+            "pass_rate": cur_pass_rate - prev_pass_rate,
+        },
+        "case_changes": {
+            "regressions": len(regressions),
+            "improvements": len(improvements),
+            "unchanged": int(unchanged),
+            "new_cases": len(new_case_ids),
+            "dropped_cases": len(dropped_case_ids),
+            "regression_case_ids": regressions,
+            "improvement_case_ids": improvements,
+        },
+    }
+
+
 @app.post("/api/eval/run")
 def eval_api(req: EvalRequest, request: Request, _auth: AuthContext = Depends(require_role("admin"))) -> dict[str, Any]:
     if settings.public_demo_mode or not settings.allow_eval:
         raise HTTPException(status_code=403, detail="Eval endpoint disabled in this deployment")
 
+    golden_path = str(req.golden_path or "").strip() or "data/eval/golden.jsonl"
+    started_at = int(time.time())
     eval_run_id = uuid.uuid4().hex
-    res = run_eval(req.golden_path, k=req.k, include_details=req.include_details)
+
+    try:
+        dataset_sha256 = _eval_dataset_sha256(golden_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=400, detail=f"Golden set not found: {golden_path}") from None
+
+    # Always capture per-case details for persistence and run-to-run diffs.
+    res = run_eval(golden_path, k=req.k, include_details=True)
+    payload_full = res.to_dict(include_details=True)
+    details = _normalize_eval_details(payload_full.get("details"))
+    summary = _eval_summary_from_payload(payload_full, details)
+    retrieval_config = _eval_retrieval_config(k=req.k)
+    provider_config = _eval_provider_config()
+
+    finished_at = int(time.time())
 
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
+        prev_run = get_previous_eval_run(conn, started_before=started_at, dataset_name=golden_path)
+        diff_from_prev = _eval_diff_from_previous(
+            previous_run_id=prev_run.run_id if prev_run is not None else None,
+            previous_summary=prev_run.summary if prev_run is not None else {},
+            previous_details=prev_run.details if prev_run is not None else [],
+            current_summary=summary,
+            current_details=details,
+        )
+        insert_eval_run(
+            conn,
+            run_id=eval_run_id,
+            started_at=started_at,
+            finished_at=finished_at,
+            status="succeeded",
+            dataset_name=golden_path,
+            dataset_sha256=dataset_sha256,
+            k=int(req.k),
+            include_details=bool(req.include_details),
+            app_version=str(settings.version),
+            embeddings_backend=str(settings.embeddings_backend),
+            embeddings_model=str(settings.embeddings_model),
+            retrieval_config_json=json.dumps(retrieval_config, ensure_ascii=False),
+            provider_config_json=json.dumps(provider_config, ensure_ascii=False),
+            summary_json=json.dumps(summary, ensure_ascii=False),
+            diff_from_prev_json=json.dumps(diff_from_prev, ensure_ascii=False),
+            details_json=json.dumps(details, ensure_ascii=False),
+            error=None,
+        )
         _record_audit_event(
             conn,
             auth_ctx=_auth,
@@ -2708,16 +2930,66 @@ def eval_api(req: EvalRequest, request: Request, _auth: AuthContext = Depends(re
             target_type="eval_run",
             target_id=eval_run_id,
             metadata={
-                "golden_path": req.golden_path,
+                "golden_path": golden_path,
+                "dataset_sha256": dataset_sha256[:16],
                 "k": int(req.k),
                 "include_details": bool(req.include_details),
-                "examples": int(res.n),
-                "hit_at_k": round(float(res.hit_at_k), 6),
-                "mrr": round(float(res.mrr), 6),
+                "examples": int(summary.get("examples", 0)),
+                "pass_rate": round(float(summary.get("pass_rate", 0.0)), 6),
+                "hit_at_k": round(float(summary.get("hit_at_k", 0.0)), 6),
+                "mrr": round(float(summary.get("mrr", 0.0)), 6),
             },
         )
         conn.commit()
-    return res.to_dict(include_details=req.include_details)
+
+    out: dict[str, Any] = {
+        "run_id": eval_run_id,
+        **summary,
+        "status": "succeeded",
+        "dataset_name": golden_path,
+        "dataset_sha256": dataset_sha256,
+        "k": int(req.k),
+        "include_details": bool(req.include_details),
+        "app_version": str(settings.version),
+        "embeddings_backend": str(settings.embeddings_backend),
+        "embeddings_model": str(settings.embeddings_model),
+        "retrieval_config": retrieval_config,
+        "provider_config": provider_config,
+        "diff_from_prev": diff_from_prev,
+    }
+    if req.include_details:
+        out["details"] = details
+    return out
+
+
+@app.get("/api/eval/runs", response_model=EvalRunsResponse)
+def eval_runs_api(
+    limit: int = 50,
+    _auth: AuthContext = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    if settings.public_demo_mode or not settings.allow_eval:
+        raise HTTPException(status_code=403, detail="Eval endpoint disabled in this deployment")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        runs = list_eval_runs(conn, limit=limit)
+    return {"runs": [r.to_dict(include_case_details=False) for r in runs]}
+
+
+@app.get("/api/eval/runs/{run_id}", response_model=EvalRunDetailResponse)
+def eval_run_detail_api(
+    run_id: str,
+    _auth: AuthContext = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    if settings.public_demo_mode or not settings.allow_eval:
+        raise HTTPException(status_code=403, detail="Eval endpoint disabled in this deployment")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        run = get_eval_run(conn, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Eval run not found")
+    return {"run": run.to_dict(include_case_details=False), "details": run.details}
 
 
 # ---- Frontend (React build served by FastAPI) ----
