@@ -241,7 +241,6 @@ def _pg_vector_scores(conn: Any, query: str, embedder: Embedder, limit: int) -> 
     # Normalize to [0,1] by shifting min to 0 and scaling max to 1.
     vals = list(scores.values())
     mn = min(vals)
-    mx = max(vals)
     shifted = {cid: (s - mn) for cid, s in scores.items()}
     mx2 = max(shifted.values())
     if mx2 > 0:
