@@ -141,3 +141,25 @@ This stack creates:
 - a Cloud Scheduler HTTP job that posts to `/api/connectors/gcs/sync`
 
 Runbook: `docs/RUNBOOKS/CONNECTORS_GCS.md`
+
+---
+
+## Observability dashboard outputs
+
+After `terraform apply`, you can fetch the dashboard resource directly:
+
+```bash
+terraform -chdir=infra/gcp/cloud_run_demo output -raw monitoring_dashboard_name
+```
+
+The dashboard covers:
+- Cloud Run request count, 5xx, and request latency
+- OTEL query-stage latency (retrieval vs answer generation)
+- ingestion failures in private deployments (`allow_unauthenticated=false`)
+- Cloud SQL health widgets when `enable_cloudsql=true`
+
+For private deployments, the ingestion failure log-based metric name is also exported:
+
+```bash
+terraform -chdir=infra/gcp/cloud_run_demo output -raw ingestion_failure_metric_name
+```
