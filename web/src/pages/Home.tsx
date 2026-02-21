@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
 import { api, type Doc, type QueryExplain, type QueryResponse } from '../api'
+import { DEMO_GUIDED_TOUR_STEPS, DEMO_SUGGESTED_QUERIES } from '../config/demoOnboarding'
 import { buildCitationClipboardText, buildDocCitationHref } from '../lib/citations'
 import { useOfflineStatus } from '../lib/offline'
 import {
@@ -98,6 +99,7 @@ type ChatTurn = {
 }
 
 const STORAGE_KEY = 'gkp.chat.v1'
+const TOUR_DISMISSED_KEY = 'gkp.demo-tour.dismissed.v1'
 const MAX_TURNS = 20
 
 function loadTurns(): ChatTurn[] {
@@ -117,6 +119,14 @@ function saveTurns(turns: ChatTurn[]) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(turns))
   } catch {
     // Ignore storage failures (private browsing, quota, etc.)
+  }
+}
+
+function loadTourDismissed(): boolean {
+  try {
+    return localStorage.getItem(TOUR_DISMISSED_KEY) === '1'
+  } catch {
+    return false
   }
 }
 
@@ -292,6 +302,11 @@ export function HomePage() {
 
   const [turns, setTurns] = React.useState<ChatTurn[]>(() => (typeof window === 'undefined' ? [] : loadTurns()))
   const [toastMessage, setToastMessage] = React.useState<string | null>(null)
+  const [tourOpen, setTourOpen] = React.useState(false)
+  const [tourStep, setTourStep] = React.useState(0)
+  const [tourDismissed, setTourDismissed] = React.useState(() =>
+    typeof window === 'undefined' ? false : loadTourDismissed(),
+  )
 
   const showToast = React.useCallback((message: string) => {
     setToastMessage(message)
@@ -305,9 +320,11 @@ export function HomePage() {
   }, [])
 
   const suggestedQuestions = React.useMemo(() => {
+    if (isPublicDemo) return DEMO_SUGGESTED_QUERIES
     const docs = docsQuery.data?.docs ?? []
     return buildCorpusExamples(docs)
-  }, [docsQuery.data])
+  }, [docsQuery.data, isPublicDemo])
+  const currentTour = DEMO_GUIDED_TOUR_STEPS[tourStep] ?? DEMO_GUIDED_TOUR_STEPS[0]
 
   React.useEffect(() => {
     if (meta?.top_k_default && Number.isFinite(meta.top_k_default)) {
@@ -328,13 +345,39 @@ export function HomePage() {
     [],
   )
 
+  React.useEffect(() => {
+    if (!tourOpen) {
+      for (const node of document.querySelectorAll<HTMLElement>('[data-tour-target]')) {
+        node.classList.remove('ring-2', 'ring-sky-500', 'ring-offset-2')
+      }
+      return
+    }
+
+    const target = document.querySelector<HTMLElement>(`[data-tour-target="${currentTour.target}"]`)
+    if (!target) return
+
+    for (const node of document.querySelectorAll<HTMLElement>('[data-tour-target]')) {
+      node.classList.remove('ring-2', 'ring-sky-500', 'ring-offset-2')
+    }
+    target.classList.add('ring-2', 'ring-sky-500', 'ring-offset-2')
+    if (!target.hasAttribute('tabindex')) {
+      target.setAttribute('tabindex', '-1')
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    target.focus({ preventScroll: true })
+
+    return () => {
+      target.classList.remove('ring-2', 'ring-sky-500', 'ring-offset-2')
+    }
+  }, [tourOpen, currentTour.target])
+
   const queryMutation = useMutation({
     mutationFn: (vars: { question: string; top_k: number; debug: boolean }) =>
       api.query(vars.question, vars.top_k, vars.debug),
   })
 
-  async function onAsk() {
-    const q = question.trim()
+  async function onAsk(rawQuestion?: string) {
+    const q = (rawQuestion ?? question).trim()
     if (!q) return
 
     const id = crypto.randomUUID()
@@ -458,9 +501,34 @@ export function HomePage() {
 
   const maxTopK = typeof meta?.max_top_k === 'number' ? meta.max_top_k : 8
   const isBusy = queryMutation.isPending || Boolean(streamingTurnId)
+  const runSuggestedQuery = (rawQuestion: string) => {
+    setQuestion(rawQuestion)
+    void onAsk(rawQuestion)
+  }
+
+  const openTour = () => {
+    setTourStep(0)
+    setTourOpen(true)
+  }
+
+  const closeTour = (markDismissed: boolean) => {
+    setTourOpen(false)
+    setTourStep(0)
+    if (!markDismissed) return
+    setTourDismissed(true)
+    try {
+      localStorage.setItem(TOUR_DISMISSED_KEY, '1')
+    } catch {
+      // Ignore storage failure.
+    }
+  }
 
   const actions = (
     <>
+      <Button variant="outline" onClick={openTour}>
+        Tour
+        {isPublicDemo && !tourDismissed ? <Badge variant="warning" className="ml-1">new</Badge> : null}
+      </Button>
       <Button
         variant="outline"
         onClick={() => {
@@ -489,18 +557,71 @@ export function HomePage() {
 
   return (
     <>
+      <Dialog
+        open={tourOpen}
+        onOpenChange={(open) => {
+          if (open) {
+            setTourOpen(true)
+            return
+          }
+          closeTour(true)
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Public demo tour</DialogTitle>
+            <DialogDescription>
+              Step {tourStep + 1} of {DEMO_GUIDED_TOUR_STEPS.length}: {currentTour.title}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-md border bg-muted/40 p-3 text-sm">{currentTour.description}</div>
+            <div className="grid grid-cols-5 gap-1" aria-hidden>
+              {DEMO_GUIDED_TOUR_STEPS.map((step, idx) => (
+                <div
+                  key={step.id}
+                  className={`h-1.5 rounded-full ${idx <= tourStep ? 'bg-foreground/80' : 'bg-muted'}`}
+                />
+              ))}
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setTourStep((prev) => Math.max(prev - 1, 0))}
+                  disabled={tourStep === 0}
+                >
+                  Previous
+                </Button>
+                {tourStep < DEMO_GUIDED_TOUR_STEPS.length - 1 ? (
+                  <Button onClick={() => setTourStep((prev) => Math.min(prev + 1, DEMO_GUIDED_TOUR_STEPS.length - 1))}>
+                    Next
+                  </Button>
+                ) : (
+                  <Button onClick={() => closeTour(true)}>Finish</Button>
+                )}
+              </div>
+              <Button variant="secondary" onClick={() => closeTour(true)}>
+                Exit tour
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Page
-      title="Ask"
-      description={
-        meta?.public_demo_mode
-          ? 'Public read-only mode: evidence-first responses with enforced citations.'
-          : 'Private deployment mode: ingestion and evaluation controls depend on runtime policy.'
-      }
-      actions={actions}
-    >
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
-          <Card>
+        title="Ask"
+        description={
+          meta?.public_demo_mode
+            ? 'Public read-only mode: evidence-first responses with enforced citations.'
+            : 'Private deployment mode: ingestion and evaluation controls depend on runtime policy.'
+        }
+        actions={actions}
+      >
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="space-y-4 lg:col-span-2">
+            <Card>
             <CardHeader>
               <CardTitle>Question</CardTitle>
               <CardDescription>
@@ -514,7 +635,7 @@ export function HomePage() {
                 </div>
               ) : null}
 
-              <div className="space-y-2">
+              <div className="space-y-2" data-tour-target="query-input">
                 <Label htmlFor="question">Question</Label>
                 <Textarea
                   id="question"
@@ -560,14 +681,20 @@ export function HomePage() {
 
               <div className="flex flex-wrap gap-2">
                 {suggestedQuestions.map((ex) => (
-                  <Button key={ex} variant="outline" size="sm" onClick={() => setQuestion(ex)}>
+                  <Button
+                    key={ex}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => runSuggestedQuery(ex)}
+                    disabled={isBusy || offline}
+                  >
                     {ex}
                   </Button>
                 ))}
               </div>
 
               <div className="flex items-center gap-2">
-                <Button onClick={onAsk} disabled={!question.trim() || isBusy || offline}>
+                <Button onClick={() => void onAsk()} disabled={!question.trim() || isBusy || offline}>
                   {isBusy ? 'Asking…' : 'Ask'}
                 </Button>
                 <Button variant="outline" onClick={() => setQuestion('')} disabled={!question}>
@@ -586,7 +713,7 @@ export function HomePage() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card data-tour-target="citations-list">
             <CardHeader>
               <CardTitle>Conversation</CardTitle>
               <CardDescription>
@@ -876,7 +1003,32 @@ export function HomePage() {
         </div>
 
         <div className="space-y-4">
-          <Card>
+          {isPublicDemo ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Suggested demo queries</CardTitle>
+                <CardDescription>Click any query to populate the input and run it immediately.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {DEMO_SUGGESTED_QUERIES.map((query) => (
+                  <Button
+                    key={query}
+                    variant="outline"
+                    className="h-auto w-full justify-start whitespace-normal text-left"
+                    onClick={() => runSuggestedQuery(query)}
+                    disabled={isBusy || offline}
+                  >
+                    {query}
+                  </Button>
+                ))}
+                <Button variant="secondary" className="w-full" onClick={openTour}>
+                  Start guided tour
+                </Button>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <Card data-tour-target="doc-source-viewer">
             <CardHeader>
               <CardTitle>Index</CardTitle>
               <CardDescription>Quick links and a snapshot of indexed content.</CardDescription>
@@ -938,7 +1090,7 @@ export function HomePage() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card data-tour-target="refusal-behavior">
             <CardHeader>
               <CardTitle>Settings snapshot</CardTitle>
               <CardDescription>Operational flags reflected from the API.</CardDescription>
@@ -985,6 +1137,10 @@ export function HomePage() {
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">LLM</span>
                 <Badge variant="outline">{meta?.llm_provider ?? '—'}</Badge>
+              </div>
+              <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
+                Refusal policy: when evidence is insufficient or safety rules trigger, the system refuses rather than
+                guessing.
               </div>
             </CardContent>
           </Card>

@@ -15,6 +15,8 @@ Demo corpus lives at: `data/demo_corpus/`
 1) Open the UI (Search / Home)
 
 - Call out the **Demo Mode** banner and the read-only posture.
+- Click **Tour** (top action) for the built-in guided walkthrough.
+- Optional: use the **Suggested demo queries** panel for one-click query runs.
 
 2) Ask an answerable question and verify citations
 
