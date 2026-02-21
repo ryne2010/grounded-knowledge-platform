@@ -78,3 +78,6 @@ jobs:
 
       - name: Run CI harness
         run: bash scripts/ci.sh
+
+      - name: Run eval smoke gate
+        run: uv run python scripts/eval_smoke_gate.py --dataset data/eval/smoke.jsonl --prompt-suite data/eval/prompt_injection.jsonl --k 5 --min-pass-rate 0.80

@@ -124,6 +124,7 @@ help:
 	@echo "  dev-doctor         Run full local quality harness"
 	@echo "  dev-ci             Run CI harness locally (same as GitHub Actions)"
 	@echo "  test-postgres      Run Postgres integration tests (Docker + psycopg)"
+	@echo "  eval-smoke         Run CI-style eval smoke gate locally"
 	@echo "  gcs-sync           Trigger GCS connector sync via API (private deployments only)"
 	@echo "  clean              Remove local caches/build artifacts"
 	@echo "  dist               Create a clean source ZIP in dist/"
@@ -237,15 +238,20 @@ test-postgres: ## Run Postgres integration tests (requires Docker + psycopg)
 # App CLI shortcuts (eval / safety / maintenance)
 # -----------------------------
 GOLDEN ?= data/eval/golden.jsonl
+SMOKE_DATASET ?= data/eval/smoke.jsonl
 SUITE  ?= data/eval/prompt_injection.jsonl
 BASE   ?= http://127.0.0.1:8080
 ENDPOINT ?= /api/query
 K ?= 5
+MIN_PASS_RATE ?= 0.80
 
-.PHONY: eval safety-eval retention-sweep retention-sweep-apply purge-expired purge-expired-apply
+.PHONY: eval eval-smoke safety-eval retention-sweep retention-sweep-apply purge-expired purge-expired-apply
 
 eval: ## Run retrieval evaluation on a golden set (JSONL)
 	uv run python -m app.cli eval $(GOLDEN) --k $(K)
+
+eval-smoke: ## Run fast eval smoke gate (retrieval threshold + refusal/safety regressions)
+	uv run python scripts/eval_smoke_gate.py --dataset $(SMOKE_DATASET) --prompt-suite $(SUITE) --k $(K) --min-pass-rate $(MIN_PASS_RATE)
 
 safety-eval: ## Run prompt-injection safety regression (JSONL)
 	uv run python -m app.cli safety-eval $(SUITE) --base $(BASE) --endpoint $(ENDPOINT) --k $(K)

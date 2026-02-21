@@ -1508,3 +1508,81 @@ Implemented Task #18 evaluation productization with persisted runs, run history 
 
 - Commit `TASK_EVAL_PRODUCTIZATION` on this branch and open PR.
 - Move to queue item #19: `TASK_EVAL_CI_SMOKE`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-eval-ci-smoke`
+- Current task: `TASK_EVAL_CI_SMOKE` (`agents/tasks/TASK_EVAL_CI_SMOKE.md`)
+
+## Task summary
+
+Implemented Task #19 CI smoke eval gate to catch retrieval/safety regressions quickly:
+
+- added `data/eval/smoke.jsonl` as a small, fast retrieval smoke suite
+- added `scripts/eval_smoke_gate.py` to run CI-style smoke checks end-to-end in-process:
+  - retrieval smoke quality threshold gate (minimum pass rate)
+  - refusal behavior smoke checks (expected refuse + expected non-refuse)
+  - prompt-injection regression suite checks (hard failure on safety regressions)
+- added explicit GitHub Actions step `Run eval smoke gate` in `.github/workflows/ci.yml`
+- added local Make shortcut `make eval-smoke` and help text in `Makefile`
+
+## Decisions made
+
+- Used an in-process FastAPI `TestClient` smoke harness instead of external HTTP server startup to keep runtime deterministic and well under the 2-minute budget.
+- Kept smoke gate aligned with public demo safety posture by forcing demo-safe runtime settings in the smoke script (`PUBLIC_DEMO_MODE=1`, `CITATIONS_REQUIRED=1`, uploads/eval/connectors disabled).
+- Evaluated prompt-injection suite with a safety-focused assertion model:
+  - injection cases must refuse with `safety_block`
+  - non-injection cases must not be classified as `safety_block` (they may still refuse for evidence reasons)
+- Selected a retrieval threshold of `0.80` for smoke gating to catch obvious regressions while avoiding overfitting to exact rank order.
+
+## Files changed
+
+- `.github/workflows/ci.yml`
+- `Makefile`
+- `data/eval/smoke.jsonl`
+- `scripts/eval_smoke_gate.py`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `git fetch --all --prune && git log --oneline --decorate ...`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... agents/tasks/TASK_EVAL_CI_SMOKE.md`
+   - `sed -n ... docs/SPECS/EVAL_HARNESS_PRODUCTIZATION.md`
+   - `sed -n ... harness.toml`
+2. Branching:
+   - `git checkout main && git pull --ff-only && git checkout -b codex/task-eval-ci-smoke`
+3. Targeted validation during implementation:
+   - `uv run ruff check scripts/eval_smoke_gate.py`
+   - `uv run python scripts/eval_smoke_gate.py --dataset ... --prompt-suite ... --k 5 --min-pass-rate 0.80`
+   - `make eval-smoke`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`69 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make eval-smoke`: PASS
+
+## What’s next
+
+- Commit `TASK_EVAL_CI_SMOKE` on this branch and open PR.
+- Move to queue item #20: `TASK_EVAL_DATASET_AUTHORING`.
