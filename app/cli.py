@@ -6,7 +6,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .eval import run_eval
+from .eval import run_eval, validate_eval_dataset
 from .ingestion import ingest_file, replay_doc
 
 
@@ -106,6 +106,21 @@ def cmd_ingest_file(
 def cmd_eval(path: str, k: int) -> None:
     res = run_eval(path, k=k)
     print(f"examples={res.n} hit@{k}={res.hit_at_k:.3f} mrr={res.mrr:.3f}")
+
+
+def cmd_validate_eval_dataset(path: str) -> None:
+    result = validate_eval_dataset(path)
+    if not result.ok:
+        print(f"Dataset validation failed: {result.path}")
+        for err in result.errors:
+            print(f"- {err}")
+        raise SystemExit(1)
+
+    print(
+        "Dataset validation passed: "
+        f"path={result.path} cases={result.total_cases} "
+        f"answerable={result.answerable_cases} refuse={result.refusal_cases}"
+    )
 
 
 def cmd_retention_sweep(*, apply: bool, now: int | None) -> None:
@@ -320,6 +335,11 @@ def main() -> None:
     p_eval = sub.add_parser("eval", help="Run retrieval evaluation on a JSONL golden set.")
     p_eval.add_argument("golden", type=str)
     p_eval.add_argument("--k", type=int, default=5)
+    p_eval_validate = sub.add_parser(
+        "validate-eval-dataset",
+        help="Validate eval dataset JSONL format (retrieval + refusal suites).",
+    )
+    p_eval_validate.add_argument("path", type=str, help="Path to eval dataset JSONL.")
 
     # --- Safety eval (prompt injection regression) ---
     p_safe = sub.add_parser("safety-eval", help="Run prompt-injection safety regression on a JSONL suite.")
@@ -371,6 +391,8 @@ def main() -> None:
         )
     elif args.cmd == "eval":
         cmd_eval(args.golden, args.k)
+    elif args.cmd == "validate-eval-dataset":
+        cmd_validate_eval_dataset(args.path)
     elif args.cmd == "retention-sweep":
         cmd_retention_sweep(apply=bool(args.apply), now=args.now)
     elif args.cmd == "purge-expired":
