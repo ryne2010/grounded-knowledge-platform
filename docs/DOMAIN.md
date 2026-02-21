@@ -103,17 +103,17 @@ The UI exposes this per-doc and also as a global audit feed.
 
 By default, the API enforces **citations required** (`CITATIONS_REQUIRED=1`).
 
-### Maintenance (retention purge)
+### Maintenance (retention sweep)
 
 For private deployments with persisted storage, you can purge documents whose retention
 policy has expired:
 
 - Dry run:
-  - `make purge-expired`
-  - or `uv run python -m app.cli purge-expired`
+  - `make retention-sweep`
+  - or `uv run python -m app.cli retention-sweep`
 - Apply deletes:
-  - `make purge-expired-apply`
-  - or `uv run python -m app.cli purge-expired --apply`
+  - `make retention-sweep-apply`
+  - or `uv run python -m app.cli retention-sweep --apply`
 
 ---
 

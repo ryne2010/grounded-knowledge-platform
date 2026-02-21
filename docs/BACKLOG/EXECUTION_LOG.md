@@ -1139,3 +1139,94 @@ Completed Task #14 governance metadata UX hardening by closing the remaining acc
 
 - Commit `TASK_GOVERNANCE_METADATA_UI` on this branch and open PR.
 - Move to queue item #15: `TASK_RETENTION_ENFORCEMENT`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-retention-enforcement`
+- Current task: `TASK_RETENTION_ENFORCEMENT` (`agents/tasks/TASK_RETENTION_ENFORCEMENT.md`)
+
+## Task summary
+
+Implemented Task #15 retention enforcement with retrieval filtering and operator sweep tooling:
+
+- retrieval now excludes retention-expired docs/chunks in both SQLite and Postgres retrieval paths
+- added reusable retention helpers (`retention_expires_at`, `retention_is_expired`) for deterministic expiry checks
+- added new CLI command `retention-sweep` (dry-run default, `--apply` for deletes)
+- retention sweep is blocked in `PUBLIC_DEMO_MODE` to preserve safe public posture
+- kept `purge-expired` as a backwards-compatible alias to avoid breaking existing automation/docs
+- updated maintenance docs and Make targets to use `retention-sweep`
+- added tests covering retrieval enforcement and CLI sweep behavior
+
+## Decisions made
+
+- Kept retention clock tied to `updated_at` (content-ingest timestamp) to preserve existing contract/invariant that metadata-only edits do not reset retention age.
+- Enforced retention at retrieval-time (not API-layer mutation) so expired content is non-retrievable even before delete sweeps run.
+- Preserved API safety boundary: maintenance API remains read-only; destructive sweep/delete stays CLI-only.
+- Introduced `retention-sweep` as canonical command and retained `purge-expired` as alias for compatibility.
+
+## Files changed
+
+- `app/maintenance.py`
+- `app/retrieval.py`
+- `app/cli.py`
+- `Makefile`
+- `tests/test_retention_enforcement.py`
+- `docs/CONTRACTS.md`
+- `docs/DOMAIN.md`
+- `docs/RUNBOOKS/MAINTENANCE.md`
+- `docs/TUTORIAL.md`
+- `docs/DEV_SETUP_MACOS.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... docs/PRODUCT/PRODUCT_BRIEF.md`
+   - `sed -n ... docs/ARCHITECTURE/README.md`
+   - `sed -n ... docs/DOMAIN.md`
+   - `sed -n ... docs/DESIGN.md`
+   - `sed -n ... docs/CONTRACTS.md`
+   - `sed -n ... docs/WORKFLOW.md`
+   - `sed -n ... agents/tasks/TASK_RETENTION_ENFORCEMENT.md`
+   - `sed -n ... docs/SPECS/GOVERNANCE_METADATA.md`
+   - `sed -n ... docs/ARCHITECTURE/SECURITY_MODEL.md`
+   - `sed -n ... docs/PRODUCT/FEATURE_MATRIX.md`
+   - `rg -n "retention|purge-expired|maintenance|retrieve" app tests docs -S`
+2. Branching:
+   - `git checkout main`
+   - `git pull --ff-only`
+   - `git checkout -b codex/task-retention-enforcement`
+3. Targeted validation during implementation:
+   - `uv run ruff check app/maintenance.py app/retrieval.py app/cli.py tests/test_retention_enforcement.py`
+   - `uv run pytest -q tests/test_retention_purge.py tests/test_retention_enforcement.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `make test-postgres`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`51 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make test-postgres`: PASS (`1 skipped` when Docker/Postgres unavailable)
+
+## What’s next
+
+- Commit `TASK_RETENTION_ENFORCEMENT` on this branch and open PR.
+- Move to queue item #16: `TASK_AUDIT_EVENTS`.

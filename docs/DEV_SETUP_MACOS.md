@@ -114,7 +114,7 @@ Quality gates / maintenance:
 make test
 make eval
 make safety-eval
-make purge-expired
+make retention-sweep
 ```
 
 Open:

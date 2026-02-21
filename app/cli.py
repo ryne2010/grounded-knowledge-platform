@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 import uuid
 from pathlib import Path
 
@@ -107,24 +108,44 @@ def cmd_eval(path: str, k: int) -> None:
     print(f"examples={res.n} hit@{k}={res.hit_at_k:.3f} mrr={res.mrr:.3f}")
 
 
-def cmd_purge_expired(*, apply: bool, now: int | None) -> None:
-    """Purge docs whose retention policy has expired (dry-run by default)."""
+def cmd_retention_sweep(*, apply: bool, now: int | None) -> None:
+    """List retention-expired docs and optionally delete them."""
     from .config import settings
-    from .maintenance import purge_expired_docs
-    from .storage import connect, init_db
+    from .maintenance import find_expired_docs, purge_expired_docs, retention_expires_at
+    from .storage import connect, init_db, list_docs
 
+    if settings.public_demo_mode:
+        raise SystemExit("Retention sweep is disabled in PUBLIC_DEMO_MODE")
+
+    now_i = int(time.time()) if now is None else int(now)
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
-        ids = purge_expired_docs(conn, now=now, apply=apply)
+        total_docs = len(list_docs(conn))
+        expired_docs = find_expired_docs(conn, now=now_i)
+        deleted_ids: list[str] = purge_expired_docs(conn, now=now_i, apply=True) if apply else []
 
-    if not ids:
+    mode = "apply" if apply else "dry-run"
+    print(f"Retention sweep mode={mode} now={now_i} total_docs={total_docs} expired={len(expired_docs)}")
+    if not expired_docs:
         print("No expired docs.")
         return
 
-    action = "Deleted" if apply else "Would delete"
-    print(f"{action} {len(ids)} doc(s):")
-    for doc_id in ids:
-        print(f"  - {doc_id}")
+    for d in expired_docs:
+        expires_at = retention_expires_at(str(d.retention), updated_at=int(d.updated_at))
+        print(
+            f"  - doc_id={d.doc_id} title={d.title!r} retention={d.retention} "
+            f"updated_at={int(d.updated_at)} expires_at={expires_at}"
+        )
+
+    if apply:
+        print(f"Deleted {len(deleted_ids)} doc(s).")
+    else:
+        print(f"Would delete {len(expired_docs)} doc(s). Re-run with --apply to delete.")
+
+
+def cmd_purge_expired(*, apply: bool, now: int | None) -> None:
+    """Backwards-compatible alias for `retention-sweep`."""
+    cmd_retention_sweep(apply=apply, now=now)
 
 
 def cmd_replay_doc(*, doc_id: str, force: bool) -> None:
@@ -309,8 +330,12 @@ def main() -> None:
     )
     p_safe.add_argument("--k", type=int, default=5, help="Top-k retrieval (default: 5).")
 
-    # --- Maintenance (retention purge) ---
-    p_purge = sub.add_parser("purge-expired", help="Delete docs whose retention policy has expired.")
+    # --- Maintenance (retention sweep) ---
+    p_sweep = sub.add_parser("retention-sweep", help="List retention-expired docs and optionally delete them.")
+    p_sweep.add_argument("--apply", action="store_true", help="Actually delete expired docs (default: dry-run).")
+    p_sweep.add_argument("--now", type=int, default=None, help="Override 'now' unix timestamp (testing).")
+
+    p_purge = sub.add_parser("purge-expired", help="Deprecated alias for retention-sweep.")
     p_purge.add_argument("--apply", action="store_true", help="Actually delete expired docs (default: dry-run).")
     p_purge.add_argument("--now", type=int, default=None, help="Override 'now' unix timestamp (testing).")
 
@@ -346,6 +371,8 @@ def main() -> None:
         )
     elif args.cmd == "eval":
         cmd_eval(args.golden, args.k)
+    elif args.cmd == "retention-sweep":
+        cmd_retention_sweep(apply=bool(args.apply), now=args.now)
     elif args.cmd == "purge-expired":
         cmd_purge_expired(apply=bool(args.apply), now=args.now)
     elif args.cmd == "replay-doc":

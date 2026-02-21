@@ -159,7 +159,7 @@ Tip: the **Eval** UI page can also show per-example hit/miss details and the ret
 
 ---
 
-## Retention purge (private deployments)
+## Retention sweep (private deployments)
 
 If you persist storage (or migrate off SQLite), you can auto-purge documents whose
 retention policy has expired.
@@ -167,7 +167,7 @@ retention policy has expired.
 Dry-run:
 
 ```bash
-make purge-expired
+make retention-sweep
 ```
 
 UI visibility:
@@ -177,7 +177,7 @@ UI visibility:
 Apply deletes:
 
 ```bash
-make purge-expired-apply
+make retention-sweep-apply
 ```
 
 ---
