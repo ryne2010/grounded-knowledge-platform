@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate, useParams } from '@tanstack/react-router'
-import { useMemo, useState } from 'react'
+import { Link, useLocation, useNavigate, useParams } from '@tanstack/react-router'
+import { useEffect, useMemo, useState } from 'react'
 
-import { api, ChunkSummary, Doc, DocUpdateRequest, IngestEvent } from '../api'
+import { api, ChunkSummary, DocUpdateRequest, IngestEvent } from '../api'
+import { buildCitationClipboardText, buildHighlightSegments, parseCitationJump, scrollToCitationTarget } from '../lib/citations'
 import { formatUnixSeconds } from '../lib/time'
 import {
   Badge,
@@ -41,6 +42,10 @@ export function DocDetailPage() {
   const meta = metaQuery.data
   const doc = docQuery.data?.doc
   const events = docQuery.data?.ingest_events ?? []
+  const locationSearch = useLocation({
+    select: (location) => location.searchStr,
+  })
+  const citationJump = useMemo(() => parseCitationJump(locationSearch), [locationSearch])
 
   const chunkViewEnabled = Boolean(meta?.chunk_view_enabled)
 
@@ -65,11 +70,21 @@ export function DocDetailPage() {
 
   const chunks = chunksQuery.data?.chunks ?? []
 
+  const citedChunk = useMemo(
+    () => (citationJump ? chunks.find((chunk) => chunk.chunk_id === citationJump.chunkId) ?? null : null),
+    [chunks, citationJump],
+  )
+
   const filteredChunks = useMemo(() => {
     const needle = chunkFilter.trim().toLowerCase()
     if (!needle) return chunks
     return chunks.filter((c) => c.text_preview.toLowerCase().includes(needle) || String(c.idx).includes(needle))
   }, [chunks, chunkFilter])
+
+  useEffect(() => {
+    if (!citationJump?.chunkId) return
+    setChunkFilter('')
+  }, [citationJump?.chunkId])
 
   const [chunkOpen, setChunkOpen] = useState(false)
   const [selectedChunkId, setSelectedChunkId] = useState<string | null>(null)
@@ -80,6 +95,48 @@ export function DocDetailPage() {
     enabled: chunkViewEnabled && chunkOpen && Boolean(selectedChunkId),
     staleTime: 60_000,
   })
+
+  useEffect(() => {
+    if (!chunkViewEnabled || !citationJump?.chunkId || !chunks.length) return
+
+    const index = chunks.findIndex((chunk) => chunk.chunk_id === citationJump.chunkId)
+    if (index < 0) return
+
+    const tableHost = document.querySelector<HTMLElement>('[data-citation-table="doc-chunks"]')
+    const table = tableHost?.querySelector<HTMLElement>('.overflow-auto') ?? null
+    if (table) {
+      const estimatedRowHeight = 44
+      const targetTop = Math.max(0, index * estimatedRowHeight - table.clientHeight / 2 + estimatedRowHeight)
+      table.scrollTo({ top: targetTop, behavior: 'smooth' })
+    }
+
+    let canceled = false
+    let attempts = 0
+    const maxAttempts = 8
+    const jump = () => {
+      if (canceled) return
+      const found = scrollToCitationTarget(citationJump.chunkId)
+      if (found || attempts >= maxAttempts) return
+      attempts += 1
+      window.setTimeout(jump, 80)
+    }
+    jump()
+
+    return () => {
+      canceled = true
+    }
+  }, [chunkViewEnabled, chunks, citationJump?.chunkId])
+
+  useEffect(() => {
+    if (chunkViewEnabled || !citationJump?.chunkId) return
+    const card = document.querySelector<HTMLElement>('[data-citation-summary="doc"]')
+    if (!card) return
+    if (!card.hasAttribute('tabindex')) {
+      card.setAttribute('tabindex', '-1')
+    }
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    card.focus({ preventScroll: true })
+  }, [chunkViewEnabled, citationJump?.chunkId])
 
   const deleteMutation = useMutation({
     mutationFn: async () => api.deleteDoc(docId),
@@ -119,15 +176,33 @@ export function DocDetailPage() {
         accessorKey: 'text_preview',
         cell: (info: any) => {
           const c = info.row.original as ChunkSummary
+          const isCited = Boolean(citationJump?.chunkId) && c.chunk_id === citationJump?.chunkId
+          const segments = isCited
+            ? buildHighlightSegments(c.text_preview, citationJump?.quote ?? '')
+            : [{ text: c.text_preview, match: false }]
           return (
             <button
-              className="text-left hover:underline"
+              type="button"
+              data-citation-target={c.chunk_id}
+              className={`w-full rounded-md px-1 py-1 text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                isCited ? 'bg-amber-100/70 ring-1 ring-amber-300' : ''
+              }`}
               onClick={() => {
                 setSelectedChunkId(c.chunk_id)
                 setChunkOpen(true)
               }}
             >
-              {c.text_preview}
+              <span className="whitespace-pre-wrap text-sm">
+                {segments.map((segment, idx) =>
+                  segment.match ? (
+                    <mark key={`${c.chunk_id}-seg-${idx}`} className="rounded bg-amber-300/60 px-0.5">
+                      {segment.text}
+                    </mark>
+                  ) : (
+                    <span key={`${c.chunk_id}-seg-${idx}`}>{segment.text}</span>
+                  ),
+                )}
+              </span>
             </button>
           )
         },
@@ -138,7 +213,7 @@ export function DocDetailPage() {
         cell: (info: any) => <span className="font-mono text-xs">{String(info.getValue() ?? '')}</span>,
       },
     ],
-    [],
+    [citationJump?.chunkId, citationJump?.quote],
   )
 
   const eventCols = useMemo(
@@ -383,6 +458,94 @@ export function DocDetailPage() {
               </CardContent>
             </Card>
 
+            {citationJump ? (
+              <Card className="lg:col-span-3" data-citation-summary="doc">
+                <CardHeader>
+                  <CardTitle>Citations in this doc</CardTitle>
+                  <CardDescription>
+                    Jumped here from an answer citation. Snippet visibility is safe-by-default in public demo mode.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {citationJump.title ? <Badge variant="secondary">{citationJump.title}</Badge> : null}
+                    {citationJump.source ? <Badge variant="outline">{citationJump.source}</Badge> : null}
+                    {citationJump.score != null ? (
+                      <Badge variant="outline">score {citationJump.score.toFixed(3)}</Badge>
+                    ) : null}
+                    <Badge variant="outline">
+                      chunk <span className="ml-1 font-mono text-xs">{citationJump.chunkId.slice(0, 12)}…</span>
+                    </Badge>
+                  </div>
+
+                  {citationJump.quote ? (
+                    <pre className="whitespace-pre-wrap rounded-md border bg-muted/40 p-3 text-sm">{citationJump.quote}</pre>
+                  ) : (
+                    <div className="text-sm text-muted-foreground">No quote snippet was provided for this citation.</div>
+                  )}
+
+                  {chunkViewEnabled && citedChunk ? (
+                    <div className="rounded-md border bg-muted/30 p-3 text-sm">
+                      <div className="mb-1 font-medium">Context preview</div>
+                      <div className="whitespace-pre-wrap">
+                        {buildHighlightSegments(citedChunk.text_preview, citationJump.quote).map((segment, idx) =>
+                          segment.match ? (
+                            <mark key={`cited-preview-${idx}`} className="rounded bg-amber-300/60 px-0.5">
+                              {segment.text}
+                            </mark>
+                          ) : (
+                            <span key={`cited-preview-${idx}`}>{segment.text}</span>
+                          ),
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={async () => {
+                        if (!citationJump.quote?.trim()) return
+                        try {
+                          const text = buildCitationClipboardText({
+                            quote: citationJump.quote,
+                            docId: doc.doc_id,
+                            title: citationJump.title || doc.title,
+                            source: citationJump.source || doc.source,
+                            chunkId: citationJump.chunkId,
+                          })
+                          await navigator.clipboard.writeText(text)
+                          setCopyStatus('Citation copied to clipboard')
+                          setTimeout(() => setCopyStatus(null), 2000)
+                        } catch (e: any) {
+                          setCopyStatus(String(e?.message ?? e))
+                        }
+                      }}
+                      disabled={!citationJump.quote?.trim()}
+                    >
+                      Copy citation
+                    </Button>
+
+                    {chunkViewEnabled && citedChunk ? (
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          setSelectedChunkId(citedChunk.chunk_id)
+                          setChunkOpen(true)
+                        }}
+                      >
+                        View full chunk
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        Full chunk text is hidden until <span className="font-mono">ALLOW_CHUNK_VIEW=1</span> is enabled.
+                      </span>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+
             <Card className="lg:col-span-3">
               <CardHeader>
                 <CardTitle>Chunks</CardTitle>
@@ -396,7 +559,14 @@ export function DocDetailPage() {
                     {chunksQuery.isError ? (
                       <div className="rounded-md border bg-destructive/10 p-3 text-sm">{(chunksQuery.error as Error).message}</div>
                     ) : null}
-                    <DataTable<ChunkSummary> data={filteredChunks} columns={chunkCols} height={360} />
+                    <div data-citation-table="doc-chunks">
+                      <DataTable<ChunkSummary>
+                        data={filteredChunks}
+                        columns={chunkCols}
+                        height={360}
+                        className="focus-within:ring-2 focus-within:ring-ring"
+                      />
+                    </div>
                     <div className="text-xs text-muted-foreground">Showing up to 200 chunks. Use tags/retention to manage scale.</div>
                   </>
                 ) : (
