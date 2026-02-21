@@ -9,7 +9,11 @@ from fastapi.testclient import TestClient
 def _reload_app(sqlite_path: str, *, public_demo_mode: bool, allow_uploads: bool) -> object:
     os.environ["SQLITE_PATH"] = sqlite_path
     os.environ["PUBLIC_DEMO_MODE"] = "1" if public_demo_mode else "0"
+    os.environ["AUTH_MODE"] = "none"
     os.environ["ALLOW_UPLOADS"] = "1" if allow_uploads else "0"
+    os.environ.pop("API_KEYS_JSON", None)
+    os.environ.pop("API_KEYS", None)
+    os.environ.pop("API_KEY", None)
 
     # Ensure bootstrap doesn't inject demo docs.
     os.environ["BOOTSTRAP_DEMO_CORPUS"] = "0"

@@ -4,7 +4,36 @@ import importlib
 import json
 import os
 
+import pytest
 from fastapi.testclient import TestClient
+
+
+_ENV_KEYS = [
+    "SQLITE_PATH",
+    "PUBLIC_DEMO_MODE",
+    "AUTH_MODE",
+    "API_KEYS_JSON",
+    "API_KEYS",
+    "API_KEY",
+    "ALLOW_UPLOADS",
+    "ALLOW_DOC_DELETE",
+    "ALLOW_CHUNK_VIEW",
+    "ALLOW_EVAL",
+    "CITATIONS_REQUIRED",
+    "RATE_LIMIT_ENABLED",
+    "BOOTSTRAP_DEMO_CORPUS",
+]
+
+
+@pytest.fixture(autouse=True)
+def _restore_env_after_test():
+    before = {k: os.environ.get(k) for k in _ENV_KEYS}
+    yield
+    for key, value in before.items():
+        if value is None:
+            os.environ.pop(key, None)
+            continue
+        os.environ[key] = value
 
 
 def _reload_app(sqlite_path: str, *, public_demo_mode: bool, citations_required: bool = True) -> object:

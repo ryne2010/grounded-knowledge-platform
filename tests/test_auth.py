@@ -3,7 +3,34 @@ from __future__ import annotations
 import importlib
 import os
 
+import pytest
 from fastapi.testclient import TestClient
+
+
+_ENV_KEYS = [
+    "SQLITE_PATH",
+    "PUBLIC_DEMO_MODE",
+    "AUTH_MODE",
+    "API_KEYS_JSON",
+    "API_KEYS",
+    "API_KEY",
+    "ALLOW_UPLOADS",
+    "ALLOW_DOC_DELETE",
+    "ALLOW_CHUNK_VIEW",
+    "ALLOW_EVAL",
+    "BOOTSTRAP_DEMO_CORPUS",
+]
+
+
+@pytest.fixture(autouse=True)
+def _restore_env_after_test():
+    before = {k: os.environ.get(k) for k in _ENV_KEYS}
+    yield
+    for key, value in before.items():
+        if value is None:
+            os.environ.pop(key, None)
+            continue
+        os.environ[key] = value
 
 
 def _reload_app(
@@ -123,3 +150,40 @@ def test_public_demo_forces_auth_none(tmp_path):
     data = r.json()
     assert data["public_demo_mode"] is True
     assert data["auth_mode"] == "none"
+
+
+def test_missing_key_logs_structured_auth_denied_event(tmp_path, capsys):
+    main = _reload_app(str(tmp_path / "auth_missing_log.sqlite"))
+    client = TestClient(main.app)
+    _ = capsys.readouterr()
+
+    r = client.get("/api/docs")
+    assert r.status_code == 401
+
+    logs = capsys.readouterr().err
+    assert '"event": "auth.denied"' in logs
+    assert '"path": "/api/docs"' in logs
+    assert '"reason": "Missing API key"' in logs
+
+
+def test_forbidden_role_logs_structured_auth_denied_event(tmp_path, capsys):
+    main = _reload_app(str(tmp_path / "auth_forbidden_log.sqlite"))
+    client = TestClient(main.app)
+    headers = {"X-API-Key": "reader-key"}
+    _ = capsys.readouterr()
+
+    ingest_res = client.post(
+        "/api/ingest/text",
+        headers=headers,
+        json={
+            "title": "Reader Blocked",
+            "source": "unit-test",
+            "text": "reader should not ingest",
+        },
+    )
+    assert ingest_res.status_code == 403
+
+    logs = capsys.readouterr().err
+    assert '"event": "auth.denied"' in logs
+    assert '"path": "/api/ingest/text"' in logs
+    assert '"reason": "editor role required"' in logs
