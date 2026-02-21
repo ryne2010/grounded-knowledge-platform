@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { api, ChunkSummary, DocUpdateRequest, IngestEvent } from '../api'
 import { buildCitationClipboardText, buildHighlightSegments, parseCitationJump, scrollToCitationTarget } from '../lib/citations'
+import { buildMetadataUpdatePayload, toActionableApiError } from '../lib/governanceMetadata'
 import { formatUnixSeconds } from '../lib/time'
 import {
   Badge,
@@ -61,6 +62,8 @@ export function DocDetailPage() {
   const [editClassification, setEditClassification] = useState('')
   const [editRetention, setEditRetention] = useState('')
   const [editTags, setEditTags] = useState('')
+  const [editErrorMessage, setEditErrorMessage] = useState<string | null>(null)
+  const [metadataToast, setMetadataToast] = useState<string | null>(null)
   const chunksQuery = useQuery({
     queryKey: ['docChunks', docId],
     queryFn: () => api.docChunks(docId, 200, 0),
@@ -149,22 +152,39 @@ export function DocDetailPage() {
 
   const updateMutation = useMutation({
     mutationFn: async (payload: DocUpdateRequest) => api.updateDoc(docId, payload),
+    onError: (error) => {
+      setEditErrorMessage(toActionableApiError(error))
+    },
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['docs'] })
       await qc.invalidateQueries({ queryKey: ['doc', docId] })
       setEditOpen(false)
+      setEditErrorMessage(null)
+      setMetadataToast('Metadata saved.')
     },
   })
+  const editEnabled = Boolean(meta?.metadata_edit_enabled ?? (meta?.uploads_enabled && !meta?.public_demo_mode))
+  const metadataReadOnlyReason = meta?.public_demo_mode
+    ? 'Public demo mode is read-only.'
+    : !meta?.uploads_enabled
+      ? 'Metadata editing requires ALLOW_UPLOADS=1.'
+      : 'Metadata editing requires editor/admin access.'
 
-  const editEnabled = Boolean(meta?.uploads_enabled) && !Boolean(meta?.public_demo_mode)
+  useEffect(() => {
+    if (!metadataToast) return
+    const timeout = window.setTimeout(() => setMetadataToast(null), 2200)
+    return () => window.clearTimeout(timeout)
+  }, [metadataToast])
 
   const openEdit = () => {
     if (!doc) return
+    updateMutation.reset()
     setEditTitle(doc.title)
     setEditSource(doc.source)
     setEditClassification(doc.classification)
     setEditRetention(doc.retention)
     setEditTags(doc.tags?.join(', ') ?? '')
+    setEditErrorMessage(null)
     setEditOpen(true)
   }
 
@@ -358,6 +378,14 @@ export function DocDetailPage() {
             ) : null}
           </div>
         </div>
+        {metadataToast ? (
+          <div className="mb-3 rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900" role="status" aria-live="polite">
+            {metadataToast}
+          </div>
+        ) : null}
+        {!editEnabled ? (
+          <div className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">{metadataReadOnlyReason}</div>
+        ) : null}
 
         {docQuery.isLoading ? <Spinner /> : null}
         {docQuery.isError ? (
@@ -596,7 +624,16 @@ export function DocDetailPage() {
           </div>
         ) : null}
 
-        <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <Dialog
+          open={editOpen}
+          onOpenChange={(open) => {
+            setEditOpen(open)
+            if (!open) {
+              setEditErrorMessage(null)
+              updateMutation.reset()
+            }
+          }}
+        >
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Edit doc metadata</DialogTitle>
@@ -660,9 +697,9 @@ export function DocDetailPage() {
                 ))}
               </datalist>
 
-              {updateMutation.isError ? (
+              {editErrorMessage ? (
                 <div className="rounded-md border bg-destructive/10 p-3 text-sm" role="alert">
-                  {(updateMutation.error as Error).message}
+                  {editErrorMessage}
                 </div>
               ) : null}
 
@@ -672,16 +709,21 @@ export function DocDetailPage() {
                 </Button>
                 <Button
                   onClick={() => {
-                    const payload: DocUpdateRequest = {
-                      title: editTitle.trim(),
-                      source: editSource.trim(),
-                      classification: editClassification.trim(),
-                      retention: editRetention.trim(),
-                      tags: editTags
-                        .split(',')
-                        .map((t) => t.trim())
-                        .filter(Boolean),
+                    const built = buildMetadataUpdatePayload({
+                      title: editTitle,
+                      source: editSource,
+                      classification: editClassification,
+                      retention: editRetention,
+                      tagsRaw: editTags,
+                      allowedClassifications: classifications,
+                      allowedRetentions: retentions,
+                    })
+                    if (!built.payload) {
+                      setEditErrorMessage(built.error ?? 'Metadata validation failed.')
+                      return
                     }
+                    setEditErrorMessage(null)
+                    const payload: DocUpdateRequest = built.payload
                     updateMutation.mutate(payload)
                   }}
                   disabled={updateMutation.isPending}
@@ -696,6 +738,9 @@ export function DocDetailPage() {
                 </Button>
               </div>
 
+              <div className="text-xs text-muted-foreground">
+                Tags are normalized to lowercase, trimmed, and de-duplicated on save.
+              </div>
               <div className="text-xs text-muted-foreground">
                 Note: metadata edits do not reset the retention clock (retention is based on last content ingest).
               </div>

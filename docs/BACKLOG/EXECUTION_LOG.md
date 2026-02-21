@@ -1054,3 +1054,88 @@ Implemented Task #13 periodic private sync via Cloud Scheduler:
 
 - Commit `TASK_SCHEDULER_PERIODIC_SYNC` on this branch and open PR.
 - Move to queue item #14: `TASK_GOVERNANCE_METADATA_UI`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-governance-metadata-ui`
+- Current task: `TASK_GOVERNANCE_METADATA_UI` (`agents/tasks/TASK_GOVERNANCE_METADATA_UI.md`)
+
+## Task summary
+
+Completed Task #14 governance metadata UX hardening by closing the remaining acceptance gaps:
+
+- added role-aware metadata edit gating in `/api/meta` via `metadata_edit_enabled`
+- updated Doc Detail metadata editor UX to include:
+  - explicit read-only reason when editing is unavailable
+  - canonical client-side validation for classification/retention
+  - deterministic tag normalization (lowercase/trim/slugify/de-dupe)
+  - actionable error messaging (client + server detail extraction)
+  - save success toast feedback
+- added unit tests for new metadata normalization/validation helpers
+- added auth test coverage verifying edit capability is exposed by role in meta response
+
+## Decisions made
+
+- Preserved existing retention-clock invariant (`updated_at` unchanged for metadata-only edits), consistent with storage contract/tests and runbook messaging.
+- Used `metadata_edit_enabled` as the UI gating signal so front-end can honor editor/admin-only edit mode without introducing new auth UI.
+- Kept backend metadata validation as source of truth while adding client-side canonical checks for faster, actionable operator feedback.
+
+## Files changed
+
+- `app/main.py`
+- `tests/test_auth.py`
+- `web/src/api.ts`
+- `web/src/pages/DocDetail.tsx`
+- `web/src/lib/governanceMetadata.ts`
+- `web/src/lib/governanceMetadata.test.ts`
+- `docs/CONTRACTS.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... agents/tasks/TASK_GOVERNANCE_METADATA_UI.md`
+   - `sed -n ... docs/SPECS/GOVERNANCE_METADATA.md`
+2. Branching:
+   - `git checkout main`
+   - `git pull --ff-only`
+   - `git checkout -b codex/task-governance-metadata-ui`
+3. Discovery:
+   - `rg -n "classification|retention|tags|governance|metadata" web app docs tests -S`
+   - `sed -n ... web/src/pages/DocDetail.tsx`
+   - `sed -n ... tests/test_doc_update_api.py`
+   - `sed -n ... tests/test_auth.py`
+   - `sed -n ... app/metadata.py`
+4. Targeted validation:
+   - `uv run pytest -q tests/test_auth.py tests/test_doc_update_api.py`
+   - `cd web && corepack pnpm run test -- --run src/lib/governanceMetadata.test.ts`
+   - `cd web && corepack pnpm run typecheck`
+5. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`48 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## What’s next
+
+- Commit `TASK_GOVERNANCE_METADATA_UI` on this branch and open PR.
+- Move to queue item #15: `TASK_RETENTION_ENFORCEMENT`.
