@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .answering import get_answerer
-from .auth import AuthError, require_role, resolve_auth_context
+from .auth import AuthError, effective_auth_mode, require_role, resolve_auth_context
 from .bootstrap import bootstrap_demo_corpus
 from .config import settings
 from .eval import run_eval
@@ -375,6 +375,43 @@ def _should_rate_limit(path: str) -> bool:
     return p == "/api/query"
 
 
+def _log_auth_denied(*, request_id: str, path: str, status: int, reason: str) -> None:
+    """Emit a dedicated auth-denied event for security/audit filtering."""
+
+    logger.warning(
+        json.dumps(
+            {
+                "severity": "WARNING",
+                "event": "auth.denied",
+                "request_id": request_id,
+                "path": path,
+                "status": int(status),
+                "reason": reason,
+                "auth_mode": effective_auth_mode(),
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+def _auth_denied_reason_from_response(request: Request, status: int, response: Any) -> str:
+    state_reason = getattr(request.state, "auth_denied_reason", None)
+    if isinstance(state_reason, str) and state_reason.strip():
+        return state_reason.strip()
+
+    body = getattr(response, "body", None)
+    if isinstance(body, (bytes, bytearray)) and body:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+            detail = payload.get("detail")
+            if isinstance(detail, str) and detail.strip():
+                return detail.strip()
+        except Exception:
+            pass
+
+    return "Unauthorized" if int(status) == 401 else "Forbidden"
+
+
 @app.middleware("http")
 async def _request_middleware(request: Request, call_next):
     """Attach request ID, enforce demo safety controls, emit structured logs."""
@@ -396,6 +433,12 @@ async def _request_middleware(request: Request, call_next):
         auth_ctx = resolve_auth_context(request)
     except AuthError as ae:
         latency_ms = timer.ms()
+        _log_auth_denied(
+            request_id=rid,
+            path=request.url.path,
+            status=int(ae.status_code),
+            reason=str(ae.detail),
+        )
         record_http_request_metric(
             method=request.method,
             path=request.url.path,
@@ -461,6 +504,13 @@ async def _request_middleware(request: Request, call_next):
         response = await call_next(request)
     except HTTPException as he:
         latency_ms = timer.ms()
+        if int(he.status_code) in {401, 403}:
+            _log_auth_denied(
+                request_id=rid,
+                path=request.url.path,
+                status=int(he.status_code),
+                reason=str(he.detail),
+            )
         record_http_request_metric(
             method=request.method,
             path=request.url.path,
@@ -530,10 +580,18 @@ async def _request_middleware(request: Request, call_next):
         response.headers.setdefault("Pragma", "no-cache")
 
     latency_ms = timer.ms()
+    status_code = int(response.status_code)
+    if status_code in {401, 403}:
+        _log_auth_denied(
+            request_id=rid,
+            path=request.url.path,
+            status=status_code,
+            reason=_auth_denied_reason_from_response(request, status_code, response),
+        )
     record_http_request_metric(
         method=request.method,
         path=request.url.path,
-        status_code=int(response.status_code),
+        status_code=status_code,
         latency_ms=latency_ms,
     )
     log_http_request(
@@ -541,7 +599,7 @@ async def _request_middleware(request: Request, call_next):
         method=request.method,
         url=str(request.url),
         path=request.url.path,
-        status=int(response.status_code),
+        status=status_code,
         latency_ms=latency_ms,
         remote_ip=remote_ip,
         user_agent=user_agent,

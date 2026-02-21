@@ -8,7 +8,7 @@ from typing import Callable, Literal
 
 from fastapi import HTTPException, Request
 
-from .config import settings
+from . import config
 
 Role = Literal["reader", "editor", "admin"]
 AuthMode = Literal["none", "api_key", "oidc"]
@@ -123,7 +123,7 @@ def _api_key_role_map() -> dict[str, Role]:
 
 def effective_auth_mode() -> AuthMode:
     # Public demo mode is always anonymous + read-only regardless of AUTH_MODE.
-    if settings.public_demo_mode:
+    if config.settings.public_demo_mode:
         return "none"
     raw = (os.getenv("AUTH_MODE") or "none").strip().lower()
     if raw in {"none", "api_key", "oidc"}:
@@ -183,10 +183,15 @@ def require_role(required: Role) -> Callable[[Request], AuthContext]:
         try:
             ctx = _ensure_ctx(request)
         except AuthError as e:
+            request.state.auth_denied_reason = e.detail
+            request.state.auth_denied_status = int(e.status_code)
             raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
         if _ROLE_RANK.get(ctx.role, 0) < _ROLE_RANK[required]:
-            raise HTTPException(status_code=403, detail=f"{required} role required")
+            detail = f"{required} role required"
+            request.state.auth_denied_reason = detail
+            request.state.auth_denied_status = 403
+            raise HTTPException(status_code=403, detail=detail)
         return ctx
 
     return _dep

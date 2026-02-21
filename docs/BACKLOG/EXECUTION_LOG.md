@@ -384,3 +384,77 @@ Completed the accessibility baseline audit/fix pass for core flows:
 
 - Commit `TASK_ACCESSIBILITY_AUDIT` on this branch and open PR.
 - Move to queue item #6: `TASK_AUTH`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-auth-queue`
+- Current task: `TASK_AUTH` (`agents/tasks/TASK_AUTH.md`)
+
+## Task summary
+
+Completed Task #6 auth/authz hardening pass by closing remaining operational gaps in the existing implementation:
+
+- added structured `auth.denied` logging events for authorization/authentication denials with stable fields (`event`, `reason`, `path`, `request_id`, `status`, `auth_mode`)
+- ensured auth mode resolution stays correct across config reloads by reading `config.settings` dynamically in auth mode checks
+- added/expanded auth tests to verify structured denial logging for both:
+  - missing API key (`401`)
+  - insufficient role (`403`)
+- stabilized test isolation around environment variables so auth-mode test state does not leak between modules
+
+## Decisions made
+
+- Keep existing auth contract and endpoint role gates intact (already aligned with task acceptance criteria).
+- Add structured denial telemetry as the smallest coherent enhancement to satisfy the spec observability guidance without changing API behavior.
+- Fix test isolation at test-helper level (env restore fixtures + explicit auth defaults) to keep harness deterministic.
+
+## Files changed
+
+- `app/auth.py`
+- `app/main.py`
+- `tests/test_auth.py`
+- `tests/test_demo_mode_invariants.py`
+- `tests/test_doc_update_api.py`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_AUTH.md`
+   - `sed -n ... docs/SPECS/AUTH_PRIVATE_DEPLOYMENTS.md`
+2. Discovery:
+   - `rg -n "AUTH_MODE|API_KEYS_JSON|..."`
+   - `sed -n ... app/auth.py`
+   - `sed -n ... app/main.py`
+   - `sed -n ... tests/test_auth.py`
+3. Targeted validation while implementing:
+   - `uv run pytest -q tests/test_auth.py` (iterative runs)
+   - `uv run pytest -q tests/test_auth.py tests/test_demo_mode_invariants.py tests/test_doc_update_api.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`34 passed, 3 skipped` in Python; `3 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## What’s next
+
+- Commit `TASK_AUTH` on this branch and open PR.
+- Move to queue item #7: `TASK_CONNECTORS_GCS_UI`.
