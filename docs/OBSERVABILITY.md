@@ -26,6 +26,10 @@ When enabled, spans include:
 - `retrieval.retrieve`
 - `generation.answer`
 
+Structured request logs are correlated with tracing context:
+- prefer incoming `X-Cloud-Trace-Context` when present
+- otherwise derive `trace_id`/`span_id` from the active OTEL span context
+
 Metrics (OTEL SDK) include:
 - `gkp.http.server.requests`
 - `gkp.http.server.duration_ms`

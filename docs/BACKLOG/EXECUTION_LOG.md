@@ -1675,3 +1675,77 @@ Implemented Task #20 eval dataset authoring docs + validator tooling:
 
 - Commit `TASK_EVAL_DATASET_AUTHORING` on this branch and open PR.
 - Move to queue item #21: `TASK_OTEL`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-otel-observability`
+- Current task: `TASK_OTEL` (`agents/tasks/TASK_OTEL.md`)
+
+## Task summary
+
+Completed Task #21 OpenTelemetry observability hardening slice focused on trace/log correlation and regression coverage:
+
+- added active OTEL context extraction helper in `app/observability.py` (`current_trace_context`)
+- updated request middleware logging in `app/main.py` to resolve `trace_id`/`span_id` from active OTEL span context when `X-Cloud-Trace-Context` is absent
+- preserved existing request-ID propagation behavior while strengthening trace correlation in structured logs
+- added OTEL regression test to ensure `/api/query` logs include `trace_id` + `span_id` under `OTEL_ENABLED=1` without requiring incoming Cloud Trace headers
+- updated observability docs to describe trace correlation behavior (header-first fallback to active span context)
+
+## Decisions made
+
+- Existing OTEL tracing/metrics instrumentation already satisfied most task requirements; implementation focused on the remaining reliability gap for log correlation when upstream trace headers are missing.
+- Kept privacy posture unchanged (no prompt/document content in span attributes by default).
+- Branch naming note: `codex/task-otel` already existed from earlier work, so this task used `codex/task-otel-observability` to keep a clean, reviewable diff.
+
+## Files changed
+
+- `app/observability.py`
+- `app/main.py`
+- `tests/test_otel.py`
+- `docs/OBSERVABILITY.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_OTEL.md`
+   - `sed -n ... docs/SPECS/OBSERVABILITY_OPS.md`
+   - `sed -n ... docs/OBSERVABILITY.md`
+   - `sed -n ... app/otel.py`
+   - `sed -n ... tests/test_otel.py`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git checkout -b codex/task-otel-observability`
+3. Targeted validation during implementation:
+   - `uv run ruff check app/main.py app/observability.py tests/test_otel.py`
+   - `uv run pytest -q tests/test_otel.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`73 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `uv run pytest -q tests/test_otel.py`: SKIP in local env when OTEL packages are unavailable (expected optional dependency behavior)
+
+## What’s next
+
+- Commit `TASK_OTEL` on this branch and open PR.
+- Move to queue item #22: `TASK_DASHBOARDS_TERRAFORM`.

@@ -55,6 +55,28 @@ def parse_cloud_trace_context(headers: Mapping[str, str]) -> Tuple[Optional[str]
     return trace_id, span_id
 
 
+def current_trace_context() -> Tuple[Optional[str], Optional[str]]:
+    """Return trace/span ids from the active OTEL context, when available."""
+
+    try:
+        from opentelemetry import trace  # type: ignore[import-not-found]
+    except Exception:
+        return None, None
+
+    try:
+        span = trace.get_current_span()
+        if span is None:
+            return None, None
+        ctx = span.get_span_context()
+        if ctx is None or not ctx.is_valid:
+            return None, None
+        trace_id = f"{int(ctx.trace_id):032x}" if int(ctx.trace_id) > 0 else None
+        span_id = f"{int(ctx.span_id):016x}" if int(ctx.span_id) > 0 else None
+        return trace_id, span_id
+    except Exception:
+        return None, None
+
+
 def _cloud_trace_resource(trace_id: Optional[str]) -> Optional[str]:
     """Return a trace resource name for Cloud Logging, if possible."""
 
