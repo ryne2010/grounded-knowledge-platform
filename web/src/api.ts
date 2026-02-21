@@ -65,6 +65,7 @@ export type IngestEvent = {
   validation_status?: 'pass' | 'warn' | 'fail' | null
   validation_errors?: string[]
   schema_drifted?: boolean
+  run_id?: string | null
   notes: string | null
 }
 
@@ -184,6 +185,31 @@ export type GcsSyncResponse = {
   changed: number
   results: GcsSyncResult[]
   errors?: string[]
+}
+
+export type IngestionRunSummary = {
+  run_id: string
+  started_at: number
+  finished_at: number | null
+  status: 'running' | 'succeeded' | 'failed' | 'cancelled' | string
+  trigger_type: 'ui' | 'cli' | 'connector' | string
+  trigger_payload: Record<string, unknown>
+  principal: string | null
+  objects_scanned: number
+  docs_changed: number
+  docs_unchanged: number
+  bytes_processed: number
+  errors: string[]
+  event_count: number
+}
+
+export type IngestionRunsResponse = {
+  runs: IngestionRunSummary[]
+}
+
+export type IngestionRunDetailResponse = {
+  run: IngestionRunSummary
+  events: IngestEventView[]
 }
 
 export type QueryCitation = {
@@ -449,6 +475,12 @@ export const api = {
     if (docId) qs.set('doc_id', docId)
     return getJson<IngestEventsResponse>(`/api/ingest/events?${qs.toString()}`)
   },
+
+  listIngestionRuns: (limit = 100) =>
+    getJson<IngestionRunsResponse>(`/api/ingestion-runs?limit=${encodeURIComponent(String(limit))}`),
+
+  ingestionRunDetail: (runId: string) =>
+    getJson<IngestionRunDetailResponse>(`/api/ingestion-runs/${encodeURIComponent(runId)}`),
 
   searchChunks: (q: string, limit = 20) =>
     getJson<ChunkSearchResponse>(
