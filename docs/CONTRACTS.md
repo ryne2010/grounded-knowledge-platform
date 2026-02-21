@@ -196,6 +196,7 @@ Shape (stable keys):
 - `validation_status?: "pass" | "warn" | "fail"`
 - `validation_errors?: string[]`
 - `schema_drifted?: boolean`
+- `run_id?: string`
 
 Doc metadata update (requires `ALLOW_UPLOADS=1` and not demo mode):
 
@@ -205,6 +206,11 @@ Doc metadata update (requires `ALLOW_UPLOADS=1` and not demo mode):
 Global ingest/audit view:
 
 - `GET /api/ingest/events?limit=100&doc_id=<optional>` → `{ events: IngestEventView[] }`
+
+Ingestion run history:
+
+- `GET /api/ingestion-runs?limit=100` → `{ runs: IngestionRunSummary[] }`
+- `GET /api/ingestion-runs/{run_id}` → `{ run: IngestionRunSummary, events: IngestEventView[] }`
 
 Chunk browsing (requires `ALLOW_CHUNK_VIEW=1` and not demo mode):
 
@@ -242,6 +248,22 @@ Request (multipart form):
 Response:
 
 - `{ doc_id, doc_version, changed, num_chunks, embedding_dim, content_sha256 }`
+
+### Connectors (private only)
+
+- `POST /api/connectors/gcs/sync` (requires `ALLOW_CONNECTORS=1`, admin role, and not demo mode)
+
+Request (JSON):
+
+- `bucket` (required)
+- optional: `prefix`, `max_objects`, `dry_run`, `classification`, `retention`, `tags`, `notes`
+
+Response includes:
+
+- run metadata (`run_id`, `started_at`, `finished_at`)
+- sync summary (`scanned`, `skipped_unsupported`, `ingested`, `changed`)
+- optional `errors`
+- `results[]` per processed object/doc
 
 ### Query
 

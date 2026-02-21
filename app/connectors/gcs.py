@@ -130,6 +130,7 @@ def sync_prefix(
     retention: str | None = None,
     tags: str | list[str] | None = None,
     notes: str | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Sync documents from a GCS bucket/prefix into the corpus.
 
@@ -149,7 +150,7 @@ def sync_prefix(
         raise ValueError("max_objects must be between 1 and 5000")
 
     started_at = int(time.time())
-    run_id = uuid.uuid4().hex
+    run_id = run_id or uuid.uuid4().hex
 
     tmp_dir = Path("/tmp/gkp_gcs_sync")
     scanned = 0
@@ -205,6 +206,7 @@ def sync_prefix(
                     retention=retention,
                     tags=tags,
                     notes=merged_notes,
+                    run_id=run_id,
                 )
                 ingested += 1
                 if res.changed:
@@ -212,6 +214,7 @@ def sync_prefix(
                 results.append(
                     {
                         "gcs_uri": gcs_uri,
+                        "size": obj.size,
                         "doc_id": res.doc_id,
                         "doc_version": res.doc_version,
                         "changed": res.changed,
@@ -238,5 +241,6 @@ def sync_prefix(
         "skipped_unsupported": int(skipped_unsupported),
         "ingested": int(ingested),
         "changed": int(changed),
+        "errors": [],
         "results": results,
     }

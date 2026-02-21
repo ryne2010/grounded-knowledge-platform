@@ -166,6 +166,7 @@ def ingest_text(
     validation_status: str | None = None,
     validation_errors: list[str] | None = None,
     schema_drifted: bool = False,
+    run_id: str | None = None,
 ) -> IngestResult:
     """Ingest a text blob.
 
@@ -272,6 +273,7 @@ def ingest_text(
             validation_status=effective_validation_status,
             validation_errors_json=validation_errors_json,
             schema_drifted=1 if inferred_drifted else 0,
+            run_id=run_id,
             notes=(notes or None),
         )
         insert_ingest_event(conn, evt)
@@ -518,6 +520,7 @@ def ingest_file(
     tags: str | list[str] | None = None,
     notes: str | None = None,
     contract_bytes: bytes | None = None,
+    run_id: str | None = None,
 ) -> IngestResult:
     path = Path(path)
     title = title or path.stem
@@ -539,6 +542,7 @@ def ingest_file(
             retention=retention,
             tags=tags,
             notes=notes,
+            run_id=run_id,
         )
 
     if suffix in {".csv", ".tsv"}:
@@ -569,6 +573,7 @@ def ingest_file(
             contract_sha256=contract_sha256,
             validation_status=validation_status,
             validation_errors=validation_errors,
+            run_id=run_id,
         )
 
     if suffix in {".xlsx", ".xlsm"}:
@@ -599,6 +604,7 @@ def ingest_file(
             contract_sha256=xlsx_contract_sha256,
             validation_status=xlsx_validation_status,
             validation_errors=xlsx_validation_errors,
+            run_id=run_id,
         )
 
     if suffix == ".pdf":
@@ -618,6 +624,7 @@ def ingest_file(
             retention=retention,
             tags=tags,
             notes=merged_notes,
+            run_id=run_id,
         )
 
     raise ValueError(f"Unsupported file type: {path.suffix}. Use .md, .txt, .pdf, .csv, .tsv, .xlsx, .xlsm")

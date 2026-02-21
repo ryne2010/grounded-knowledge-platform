@@ -89,9 +89,18 @@ def test_init_db_migrates_ingest_events_schema(tmp_path: Path):
     with connect(str(db_path)) as c:
         init_db(c)
         cols = {r["name"] for r in c.execute("PRAGMA table_info(ingest_events)").fetchall()}
+        run_tables = {
+            str(r["name"])
+            for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ingestion_runs'").fetchall()
+        }
+        run_cols = {r["name"] for r in c.execute("PRAGMA table_info(ingestion_runs)").fetchall()}
 
     assert "schema_fingerprint" in cols
     assert "contract_sha256" in cols
     assert "validation_status" in cols
     assert "validation_errors_json" in cols
     assert "schema_drifted" in cols
+    assert "run_id" in cols
+    assert "ingestion_runs" in run_tables
+    assert "status" in run_cols
+    assert "errors_json" in run_cols

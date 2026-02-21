@@ -84,6 +84,7 @@ class IngestEvent:
     validation_status: str | None = None
     validation_errors_json: str | None = None
     schema_drifted: int = 0
+    run_id: str | None = None
     notes: str | None = None
 
     @property
@@ -124,6 +125,7 @@ class IngestEvent:
             "validation_status": self.validation_status,
             "validation_errors": self.validation_errors,
             "schema_drifted": self.schema_drifted_bool,
+            "run_id": self.run_id,
             "notes": self.notes,
         }
 
@@ -158,6 +160,7 @@ class IngestEventView:
     validation_errors_json: str | None
     schema_drifted: int
 
+    run_id: str | None = None
     notes: str | None = None
 
     @property
@@ -213,7 +216,60 @@ class IngestEventView:
             "validation_status": self.validation_status,
             "validation_errors": self.validation_errors,
             "schema_drifted": self.schema_drifted_bool,
+            "run_id": self.run_id,
             "notes": self.notes,
+        }
+
+
+@dataclass(frozen=True)
+class IngestionRun:
+    run_id: str
+    started_at: int
+    finished_at: int | None
+    status: str
+    trigger_type: str
+    trigger_payload_json: str
+    principal: str | None
+    objects_scanned: int
+    docs_changed: int
+    docs_unchanged: int
+    bytes_processed: int
+    errors_json: str
+    event_count: int = 0
+
+    @property
+    def trigger_payload(self) -> dict[str, object]:
+        try:
+            raw = json.loads(self.trigger_payload_json or "{}")
+        except Exception:
+            raw = {}
+        return raw if isinstance(raw, dict) else {}
+
+    @property
+    def errors(self) -> list[str]:
+        try:
+            raw = json.loads(self.errors_json or "[]")
+            if isinstance(raw, list):
+                return [str(x) for x in raw if str(x).strip()]
+        except Exception:
+            pass
+        return []
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "run_id": self.run_id,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "status": self.status,
+            "trigger_type": self.trigger_type,
+            "trigger_payload": self.trigger_payload,
+            "principal": self.principal,
+            "objects_scanned": int(self.objects_scanned),
+            "docs_changed": int(self.docs_changed),
+            "docs_unchanged": int(self.docs_unchanged),
+            "bytes_processed": int(self.bytes_processed),
+            "errors": self.errors,
+            "event_count": int(self.event_count),
         }
 
 
@@ -356,8 +412,27 @@ def init_db(conn: Any) -> None:
             validation_status TEXT,
             validation_errors_json TEXT,
             schema_drifted INTEGER NOT NULL DEFAULT 0,
+            run_id TEXT,
             notes TEXT,
             FOREIGN KEY(doc_id) REFERENCES docs(doc_id) ON DELETE CASCADE
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ingestion_runs (
+            run_id TEXT PRIMARY KEY,
+            started_at INTEGER NOT NULL,
+            finished_at INTEGER,
+            status TEXT NOT NULL,
+            trigger_type TEXT NOT NULL,
+            trigger_payload_json TEXT NOT NULL DEFAULT '{}',
+            principal TEXT,
+            objects_scanned INTEGER NOT NULL DEFAULT 0,
+            docs_changed INTEGER NOT NULL DEFAULT 0,
+            docs_unchanged INTEGER NOT NULL DEFAULT 0,
+            bytes_processed INTEGER NOT NULL DEFAULT 0,
+            errors_json TEXT NOT NULL DEFAULT '[]'
         );
         """
     )
@@ -413,6 +488,7 @@ def init_db(conn: Any) -> None:
         _ensure_column(conn, "ingest_events", "validation_status", "TEXT")
         _ensure_column(conn, "ingest_events", "validation_errors_json", "TEXT")
         _ensure_column(conn, "ingest_events", "schema_drifted", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "ingest_events", "run_id", "TEXT")
 
     # --- Indexes ---
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id)")
@@ -421,6 +497,9 @@ def init_db(conn: Any) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_doc_ver ON ingest_events(doc_id, doc_version)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ingested_at ON ingest_events(ingested_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_validation_status ON ingest_events(validation_status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_run_id ON ingest_events(run_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ingestion_runs_started_at ON ingestion_runs(started_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ingestion_runs_status ON ingestion_runs(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_updated_at ON docs(updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_title ON docs(title)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_source ON docs(source)")
@@ -763,9 +842,10 @@ def insert_ingest_event(conn: Any, e: IngestEvent) -> None:
               embedding_backend, embeddings_model, embedding_dim,
               chunk_size_chars, chunk_overlap_chars,
               schema_fingerprint, contract_sha256, validation_status, validation_errors_json, schema_drifted,
+              run_id,
               notes
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 e.event_id,
@@ -786,6 +866,7 @@ def insert_ingest_event(conn: Any, e: IngestEvent) -> None:
                 e.validation_status,
                 e.validation_errors_json,
                 int(e.schema_drifted),
+                e.run_id,
                 e.notes,
             ),
         )
@@ -800,9 +881,10 @@ def insert_ingest_event(conn: Any, e: IngestEvent) -> None:
           embedding_backend, embeddings_model, embedding_dim,
           chunk_size_chars, chunk_overlap_chars,
           schema_fingerprint, contract_sha256, validation_status, validation_errors_json, schema_drifted,
+          run_id,
           notes
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             e.event_id,
@@ -823,6 +905,7 @@ def insert_ingest_event(conn: Any, e: IngestEvent) -> None:
             e.validation_status,
             e.validation_errors_json,
             int(e.schema_drifted),
+            e.run_id,
             e.notes,
         ),
     )
@@ -838,6 +921,7 @@ def list_ingest_events(conn: Any, doc_id: str, *, limit: int = 50) -> list[Inges
                    embedding_backend, embeddings_model, embedding_dim,
                    chunk_size_chars, chunk_overlap_chars,
                    schema_fingerprint, contract_sha256, validation_status, validation_errors_json, schema_drifted,
+                   run_id,
                    notes
             FROM ingest_events
             WHERE doc_id=%s
@@ -856,6 +940,7 @@ def list_ingest_events(conn: Any, doc_id: str, *, limit: int = 50) -> list[Inges
                embedding_backend, embeddings_model, embedding_dim,
                chunk_size_chars, chunk_overlap_chars,
                schema_fingerprint, contract_sha256, validation_status, validation_errors_json, schema_drifted,
+               run_id,
                notes
         FROM ingest_events
         WHERE doc_id=?
@@ -906,6 +991,7 @@ def list_recent_ingest_events(
                   e.validation_status,
                   e.validation_errors_json,
                   e.schema_drifted,
+                  e.run_id,
                   e.notes
                 FROM ingest_events e
                 JOIN docs d ON d.doc_id = e.doc_id
@@ -943,6 +1029,7 @@ def list_recent_ingest_events(
               e.validation_status,
               e.validation_errors_json,
               e.schema_drifted,
+              e.run_id,
               e.notes
             FROM ingest_events e
             JOIN docs d ON d.doc_id = e.doc_id
@@ -980,6 +1067,7 @@ def list_recent_ingest_events(
                   e.validation_status,
                   e.validation_errors_json,
                   e.schema_drifted,
+                  e.run_id,
                   e.notes
                 FROM ingest_events e
                 JOIN docs d ON d.doc_id = e.doc_id
@@ -1016,6 +1104,7 @@ def list_recent_ingest_events(
               e.validation_status,
               e.validation_errors_json,
               e.schema_drifted,
+              e.run_id,
               e.notes
             FROM ingest_events e
             JOIN docs d ON d.doc_id = e.doc_id
@@ -1025,6 +1114,281 @@ def list_recent_ingest_events(
             (limit,),
         )
 
+    return [IngestEventView(**dict(r)) for r in cur.fetchall()]
+
+
+def create_ingestion_run(
+    conn: Any,
+    *,
+    run_id: str,
+    trigger_type: str,
+    trigger_payload_json: str,
+    principal: str | None = None,
+    started_at: int | None = None,
+) -> IngestionRun:
+    now = int(started_at if started_at is not None else time.time())
+    if _is_postgres_conn(conn):
+        conn.execute(
+            """
+            INSERT INTO ingestion_runs (
+              run_id, started_at, finished_at, status, trigger_type, trigger_payload_json,
+              principal, objects_scanned, docs_changed, docs_unchanged, bytes_processed, errors_json
+            )
+            VALUES (%s, %s, NULL, %s, %s, %s, %s, 0, 0, 0, 0, '[]')
+            """,
+            (run_id, now, "running", trigger_type, trigger_payload_json, principal),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO ingestion_runs (
+              run_id, started_at, finished_at, status, trigger_type, trigger_payload_json,
+              principal, objects_scanned, docs_changed, docs_unchanged, bytes_processed, errors_json
+            )
+            VALUES (?, ?, NULL, ?, ?, ?, ?, 0, 0, 0, 0, '[]')
+            """,
+            (run_id, now, "running", trigger_type, trigger_payload_json, principal),
+        )
+    return IngestionRun(
+        run_id=run_id,
+        started_at=now,
+        finished_at=None,
+        status="running",
+        trigger_type=trigger_type,
+        trigger_payload_json=trigger_payload_json,
+        principal=principal,
+        objects_scanned=0,
+        docs_changed=0,
+        docs_unchanged=0,
+        bytes_processed=0,
+        errors_json="[]",
+        event_count=0,
+    )
+
+
+def complete_ingestion_run(
+    conn: Any,
+    *,
+    run_id: str,
+    status: str,
+    objects_scanned: int,
+    docs_changed: int,
+    docs_unchanged: int,
+    bytes_processed: int,
+    errors_json: str = "[]",
+    finished_at: int | None = None,
+) -> None:
+    if status not in {"running", "succeeded", "failed", "cancelled"}:
+        raise ValueError("invalid ingestion run status")
+    fin = int(finished_at if finished_at is not None else time.time())
+    if _is_postgres_conn(conn):
+        conn.execute(
+            """
+            UPDATE ingestion_runs
+            SET
+              finished_at=%s,
+              status=%s,
+              objects_scanned=%s,
+              docs_changed=%s,
+              docs_unchanged=%s,
+              bytes_processed=%s,
+              errors_json=%s
+            WHERE run_id=%s
+            """,
+            (
+                fin,
+                status,
+                int(objects_scanned),
+                int(docs_changed),
+                int(docs_unchanged),
+                int(bytes_processed),
+                errors_json,
+                run_id,
+            ),
+        )
+        return
+
+    conn.execute(
+        """
+        UPDATE ingestion_runs
+        SET
+          finished_at=?,
+          status=?,
+          objects_scanned=?,
+          docs_changed=?,
+          docs_unchanged=?,
+          bytes_processed=?,
+          errors_json=?
+        WHERE run_id=?
+        """,
+        (
+            fin,
+            status,
+            int(objects_scanned),
+            int(docs_changed),
+            int(docs_unchanged),
+            int(bytes_processed),
+            errors_json,
+            run_id,
+        ),
+    )
+
+
+def _ingestion_run_select_sql() -> str:
+    return """
+        SELECT
+          r.run_id,
+          r.started_at,
+          r.finished_at,
+          r.status,
+          r.trigger_type,
+          r.trigger_payload_json,
+          r.principal,
+          r.objects_scanned,
+          r.docs_changed,
+          r.docs_unchanged,
+          r.bytes_processed,
+          r.errors_json,
+          COUNT(e.event_id) AS event_count
+        FROM ingestion_runs r
+        LEFT JOIN ingest_events e ON e.run_id = r.run_id
+    """
+
+
+def list_ingestion_runs(conn: Any, *, limit: int = 100) -> list[IngestionRun]:
+    limit = max(1, min(int(limit), 500))
+    base = _ingestion_run_select_sql()
+    if _is_postgres_conn(conn):
+        cur = conn.execute(
+            base
+            + """
+            GROUP BY
+              r.run_id, r.started_at, r.finished_at, r.status, r.trigger_type, r.trigger_payload_json,
+              r.principal, r.objects_scanned, r.docs_changed, r.docs_unchanged, r.bytes_processed, r.errors_json
+            ORDER BY r.started_at DESC, r.run_id DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+    else:
+        cur = conn.execute(
+            base
+            + """
+            GROUP BY
+              r.run_id, r.started_at, r.finished_at, r.status, r.trigger_type, r.trigger_payload_json,
+              r.principal, r.objects_scanned, r.docs_changed, r.docs_unchanged, r.bytes_processed, r.errors_json
+            ORDER BY r.started_at DESC, r.rowid DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    return [IngestionRun(**dict(r)) for r in cur.fetchall()]
+
+
+def get_ingestion_run(conn: Any, run_id: str) -> IngestionRun | None:
+    base = _ingestion_run_select_sql()
+    if _is_postgres_conn(conn):
+        cur = conn.execute(
+            base
+            + """
+            WHERE r.run_id = %s
+            GROUP BY
+              r.run_id, r.started_at, r.finished_at, r.status, r.trigger_type, r.trigger_payload_json,
+              r.principal, r.objects_scanned, r.docs_changed, r.docs_unchanged, r.bytes_processed, r.errors_json
+            """,
+            (run_id,),
+        )
+    else:
+        cur = conn.execute(
+            base
+            + """
+            WHERE r.run_id = ?
+            GROUP BY
+              r.run_id, r.started_at, r.finished_at, r.status, r.trigger_type, r.trigger_payload_json,
+              r.principal, r.objects_scanned, r.docs_changed, r.docs_unchanged, r.bytes_processed, r.errors_json
+            """,
+            (run_id,),
+        )
+    row = cur.fetchone()
+    return IngestionRun(**dict(row)) if row is not None else None
+
+
+def list_ingest_events_for_run(conn: Any, run_id: str, *, limit: int = 500) -> list[IngestEventView]:
+    limit = max(1, min(int(limit), 2000))
+    if _is_postgres_conn(conn):
+        cur = conn.execute(
+            """
+            SELECT
+              e.event_id,
+              e.doc_id,
+              d.title AS doc_title,
+              d.source AS doc_source,
+              d.classification,
+              d.retention,
+              d.tags_json,
+              e.doc_version,
+              e.ingested_at,
+              e.content_sha256,
+              e.prev_content_sha256,
+              e.changed,
+              e.num_chunks,
+              e.embedding_backend,
+              e.embeddings_model,
+              e.embedding_dim,
+              e.chunk_size_chars,
+              e.chunk_overlap_chars,
+              e.schema_fingerprint,
+              e.contract_sha256,
+              e.validation_status,
+              e.validation_errors_json,
+              e.schema_drifted,
+              e.run_id,
+              e.notes
+            FROM ingest_events e
+            JOIN docs d ON d.doc_id = e.doc_id
+            WHERE e.run_id=%s
+            ORDER BY e.ingested_at DESC, e.doc_version DESC, e.event_id DESC
+            LIMIT %s
+            """,
+            (run_id, limit),
+        )
+    else:
+        cur = conn.execute(
+            """
+            SELECT
+              e.event_id,
+              e.doc_id,
+              d.title AS doc_title,
+              d.source AS doc_source,
+              d.classification,
+              d.retention,
+              d.tags_json,
+              e.doc_version,
+              e.ingested_at,
+              e.content_sha256,
+              e.prev_content_sha256,
+              e.changed,
+              e.num_chunks,
+              e.embedding_backend,
+              e.embeddings_model,
+              e.embedding_dim,
+              e.chunk_size_chars,
+              e.chunk_overlap_chars,
+              e.schema_fingerprint,
+              e.contract_sha256,
+              e.validation_status,
+              e.validation_errors_json,
+              e.schema_drifted,
+              e.run_id,
+              e.notes
+            FROM ingest_events e
+            JOIN docs d ON d.doc_id = e.doc_id
+            WHERE e.run_id=?
+            ORDER BY e.ingested_at DESC, e.rowid DESC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        )
     return [IngestEventView(**dict(r)) for r in cur.fetchall()]
 
 
