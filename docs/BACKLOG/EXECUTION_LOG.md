@@ -1837,3 +1837,79 @@ Implemented Task #22 Terraform-managed observability dashboards with expanded op
 
 - Commit `TASK_DASHBOARDS_TERRAFORM` on this branch and open PR.
 - Move to queue item #23: `TASK_SLOS_BURN_RATE`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-slos-burn-rate`
+- Current task: `TASK_SLOS_BURN_RATE` (`agents/tasks/TASK_SLOS_BURN_RATE.md`)
+
+## Task summary
+
+Implemented Task #23 SLO + burn-rate alert baseline for Cloud Run in Terraform:
+
+- added latency SLO alongside existing availability SLO
+- added separate burn-rate alert policies for availability and latency SLOs
+- aligned burn-rate windows to spec style (`1h` fast, `6h` slow)
+- parameterized SLO/burn-rate tuning inputs in Terraform variables
+- added dedicated operator runbook for SLO alert triage (`docs/RUNBOOKS/SLOS.md`)
+- updated observability and infra docs with new outputs and runbook links
+
+## Decisions made
+
+- Kept existing `slo_full_name` output as a backward-compatible alias for availability while adding explicit latency/alert outputs.
+- Used configurable defaults tuned for demo + small private deployments:
+  - availability goal `99.5%`
+  - latency goal `95%` under `1200ms`
+  - burn-rate thresholds `6` (fast) and `3` (slow)
+- Used dual SLO burn-rate policies (availability and latency) so alerts are actionable by failure mode.
+
+## Files changed
+
+- `infra/gcp/cloud_run_demo/slo.tf`
+- `infra/gcp/cloud_run_demo/variables.tf`
+- `infra/gcp/cloud_run_demo/terraform.tfvars.example`
+- `infra/gcp/cloud_run_demo/README.md`
+- `docs/OBSERVABILITY.md`
+- `docs/RUNBOOKS/SLOS.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... harness.toml`
+   - `sed -n ... agents/tasks/TASK_SLOS_BURN_RATE.md`
+   - `sed -n ... docs/SPECS/OBSERVABILITY_OPS.md`
+2. Terraform/doc implementation:
+   - edits in `slo.tf`, `variables.tf`, docs, and new runbook
+3. Task validation:
+   - `make tf-check`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make tf-check`: PASS
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`73 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## What’s next
+
+- Commit `TASK_SLOS_BURN_RATE` on this branch and open PR.
+- Move to queue item #24: `TASK_COST_GUARDRAILS`.

@@ -62,3 +62,12 @@ image_tag          = "latest"
 # cloudsql_disk_size_gb = 20
 # cloudsql_database     = "gkp"
 # cloudsql_user         = "gkp_app"
+
+# Optional: SLO tuning (availability + latency + burn-rate multipliers)
+# enable_slo                      = true
+# slo_rolling_period_days         = 28
+# slo_availability_goal           = 0.995
+# slo_latency_goal                = 0.95
+# slo_latency_threshold_ms        = 1200
+# slo_burn_rate_fast_threshold    = 6
+# slo_burn_rate_slow_threshold    = 3
