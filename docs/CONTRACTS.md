@@ -150,6 +150,7 @@ Shape (stable keys):
 - `database_backend: string`
 - `version: string`
 - `uploads_enabled: bool`
+- `metadata_edit_enabled: bool`
 - `eval_enabled: bool`
 - `chunk_view_enabled: bool`
 - `doc_delete_enabled: bool`

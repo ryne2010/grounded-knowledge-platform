@@ -4,6 +4,7 @@ export type MetaResponse = {
   auth_mode?: string
   database_backend?: string
   uploads_enabled: boolean
+  metadata_edit_enabled?: boolean
   connectors_enabled?: boolean
   eval_enabled: boolean
   chunk_view_enabled: boolean

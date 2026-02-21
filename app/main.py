@@ -884,9 +884,10 @@ def ready() -> dict[str, object]:
 
 
 @app.get("/api/meta")
-def meta(_auth: Any = Depends(require_role("reader"))) -> dict[str, object]:
+def meta(_auth: AuthContext = Depends(require_role("reader"))) -> dict[str, object]:
     """Small metadata endpoint for the UI and diagnostics."""
     uploads_enabled = bool(settings.allow_uploads and not settings.public_demo_mode)
+    metadata_edit_enabled = bool(uploads_enabled and _auth.role in {"editor", "admin"})
     connectors_enabled = bool(settings.allow_connectors and not settings.public_demo_mode)
     eval_enabled = bool(settings.allow_eval and not settings.public_demo_mode)
     chunk_view_enabled = bool(settings.allow_chunk_view and not settings.public_demo_mode)
@@ -914,6 +915,7 @@ def meta(_auth: Any = Depends(require_role("reader"))) -> dict[str, object]:
         "auth_mode": settings.auth_mode if not settings.public_demo_mode else "none",
         "database_backend": "postgres" if settings.database_url else "sqlite",
         "uploads_enabled": uploads_enabled,
+        "metadata_edit_enabled": metadata_edit_enabled,
         "connectors_enabled": connectors_enabled,
         "eval_enabled": eval_enabled,
         "chunk_view_enabled": chunk_view_enabled,

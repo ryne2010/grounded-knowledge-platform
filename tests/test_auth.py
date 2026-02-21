@@ -152,6 +152,27 @@ def test_public_demo_forces_auth_none(tmp_path):
     assert data["auth_mode"] == "none"
 
 
+def test_meta_reports_metadata_edit_enabled_by_role(tmp_path):
+    main = _reload_app(
+        str(tmp_path / "auth_meta_edit.sqlite"),
+        api_keys_json='{"reader-key":"reader","editor-key":"editor","admin-key":"admin"}',
+        allow_uploads=True,
+    )
+    client = TestClient(main.app)
+
+    reader = client.get("/api/meta", headers={"X-API-Key": "reader-key"})
+    assert reader.status_code == 200, reader.text
+    assert reader.json()["metadata_edit_enabled"] is False
+
+    editor = client.get("/api/meta", headers={"X-API-Key": "editor-key"})
+    assert editor.status_code == 200, editor.text
+    assert editor.json()["metadata_edit_enabled"] is True
+
+    admin = client.get("/api/meta", headers={"X-API-Key": "admin-key"})
+    assert admin.status_code == 200, admin.text
+    assert admin.json()["metadata_edit_enabled"] is True
+
+
 def test_missing_key_logs_structured_auth_denied_event(tmp_path, capsys):
     main = _reload_app(str(tmp_path / "auth_missing_log.sqlite"))
     client = TestClient(main.app)
