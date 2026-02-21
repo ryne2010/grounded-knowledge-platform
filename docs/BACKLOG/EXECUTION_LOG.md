@@ -233,3 +233,84 @@ Implemented Task #3 retrieval transparency via an “Explain this answer” draw
 
 - Commit `TASK_QUERY_EXPLAIN_DRAWER` on this branch and open PR.
 - Move to queue item #4: `TASK_DEMO_GUIDED_TOUR`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-demo-guided-tour`
+- Current task: `TASK_DEMO_GUIDED_TOUR` (`agents/tasks/TASK_DEMO_GUIDED_TOUR.md`)
+
+## Task summary
+
+Implemented Task #4 onboarding improvements for public demo mode:
+
+- added curated **Suggested demo queries** panel (single config source, one-click run)
+- clicking suggested queries now both populates the input and executes the query
+- added user-triggered **guided tour** with 5 required steps:
+  1. demo mode badge
+  2. query input
+  3. citations area
+  4. doc/source viewer
+  5. refusal behavior
+- tour is keyboard accessible via dialog semantics and focus management:
+  - focus trap + ESC close (Radix dialog)
+  - reachable next/previous controls
+  - step target scroll/focus + visual highlight
+- added small docs note in product demo script about using the built-in tour
+
+## Decisions made
+
+- Stored curated queries and guided tour step copy in a single config module (`web/src/config/demoOnboarding.ts`) to make updates low-friction.
+- Kept implementation dependency-light by using existing Radix dialog + existing UI primitives (no new tour library).
+- Applied tour targeting via `data-tour-target` attributes and runtime focus/highlight behavior instead of adding a heavy overlay engine.
+- Preserved demo safety constraints: onboarding copy explicitly explains read-only/demo-corpus limits and disabled privileged controls.
+
+## Files changed
+
+- `web/src/config/demoOnboarding.ts`
+- `web/src/config/demoOnboarding.test.ts`
+- `web/src/pages/Home.tsx`
+- `web/src/router.tsx`
+- `docs/PRODUCT/DEMO_SCRIPT.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git checkout main && git pull --ff-only`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_DEMO_GUIDED_TOUR.md`
+   - `sed -n ... docs/SPECS/UI_UX_PRODUCTION_POLISH.md`
+2. Branching:
+   - `git checkout -b codex/task-demo-guided-tour`
+3. Targeted validation:
+   - `cd web && corepack pnpm run typecheck`
+   - `cd web && corepack pnpm run test`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+   - `make web-typecheck`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`32 passed, 3 skipped` in Python; `3 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+- `make web-typecheck`: PASS
+
+## What’s next
+
+- Commit `TASK_DEMO_GUIDED_TOUR` on this branch and open PR.
+- Move to queue item #5: `TASK_ACCESSIBILITY_AUDIT`.

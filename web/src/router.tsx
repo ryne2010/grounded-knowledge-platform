@@ -53,7 +53,15 @@ function RootLayout() {
         <Badge variant="destructive">API error</Badge>
       ) : meta ? (
         <>
-          {isPublicDemo ? <Badge variant="warning">public read-only</Badge> : <Badge variant="success">private</Badge>}
+          {isPublicDemo ? (
+            <Badge variant="warning" data-tour-target="demo-badge">
+              public read-only
+            </Badge>
+          ) : (
+            <Badge variant="success" data-tour-target="demo-badge">
+              private
+            </Badge>
+          )}
           <Badge variant={meta.citations_required ? 'secondary' : 'outline'}>
             citations {meta.citations_required ? 'required' : 'optional'}
           </Badge>
