@@ -55,7 +55,7 @@ def test_postgres_repository_ingest_query_delete():
 
     host_port = _free_port()
     container = f"gkp-pg-{uuid.uuid4().hex[:8]}"
-    image = os.getenv("GKP_POSTGRES_IMAGE", "postgres:16-alpine")
+    image = os.getenv("GKP_POSTGRES_IMAGE", "pgvector/pgvector:0.8.0-pg16-bookworm")
 
     run_cmd = [
         "docker",

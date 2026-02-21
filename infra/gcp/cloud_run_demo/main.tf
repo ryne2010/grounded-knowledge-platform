@@ -112,17 +112,17 @@ module "network" {
   source = "../modules/network"
 
   project_id   = var.project_id
-  network_name = "gkp-${var.env}-vpc"
+  network_name = "${var.service_name}-vpc"
 
   subnets = {
-    "gkp-${var.env}-subnet" = {
+    "${var.service_name}-subnet" = {
       region = var.region
       cidr   = "10.10.0.0/24"
     }
   }
 
   create_serverless_connector         = true
-  serverless_connector_name           = "gkp-${var.env}-connector"
+  serverless_connector_name           = "${var.service_name}-connector"
   serverless_connector_region         = var.region
   serverless_connector_cidr           = "10.8.0.0/28"
   serverless_connector_min_throughput = 200
@@ -150,8 +150,8 @@ module "cloud_run" {
   cloud_sql_instances   = var.enable_cloudsql ? [google_sql_database_instance.cloudsql[0].connection_name] : []
   labels                = local.labels
 
-  # For personal demos, keep cleanup easy.
-  deletion_protection = false
+  # For real client deployments, consider setting var.deletion_protection=true.
+  deletion_protection = var.deletion_protection
 
   vpc_connector_id = var.enable_vpc_connector ? module.network[0].serverless_connector_id : null
   vpc_egress       = var.vpc_egress

@@ -94,6 +94,13 @@ variable "max_instances" {
   default     = 1
 }
 
+variable "deletion_protection" {
+  type        = bool
+  description = "Enable deletion protection for Cloud Run and Cloud SQL resources (recommended for real client deployments)."
+  default     = false
+}
+
+
 variable "enable_vpc_connector" {
   type        = bool
   description = "Create and attach a Serverless VPC Access connector (NOT free)."
@@ -108,8 +115,8 @@ variable "vpc_egress" {
 
 variable "enable_cloudsql" {
   type        = bool
-  description = "Create a Cloud SQL Postgres instance and mount it to Cloud Run."
-  default     = false
+  description = "Create a Cloud SQL Postgres instance and mount it to Cloud Run (production baseline)."
+  default     = true
 }
 
 variable "secret_env" {

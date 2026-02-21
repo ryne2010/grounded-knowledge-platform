@@ -8,12 +8,12 @@ export function MetaPage() {
   return (
     <Page
       title="Meta"
-      description="Runtime flags and configuration (useful for demos, audits, and runbooks)."
+      description="Runtime flags and configuration (useful for operations, audits, and runbooks)."
     >
       <Card>
         <CardHeader>
           <CardTitle>Configuration</CardTitle>
-          <CardDescription>This endpoint is intentionally safe to expose in public demo mode.</CardDescription>
+          <CardDescription>This endpoint is intentionally safe to expose in public read-only environments.</CardDescription>
         </CardHeader>
         <CardContent>
           {q.isLoading ? <div className="text-sm text-muted-foreground">Loading…</div> : null}

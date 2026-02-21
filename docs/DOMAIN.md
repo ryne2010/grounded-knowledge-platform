@@ -16,7 +16,7 @@ Core values:
 
 A `doc` is the unit of ingestion and lifecycle management.
 
-Metadata (stored in SQLite `docs` table):
+Metadata (stored in the `docs` table):
 
 - `doc_id`: stable identifier
 - `title`: human-friendly title
@@ -133,6 +133,7 @@ When `PUBLIC_DEMO_MODE=1`:
 A private/internal deployment can enable:
 
 - uploads: `ALLOW_UPLOADS=1`
+- connectors (e.g. GCS sync): `ALLOW_CONNECTORS=1`
 - eval: `ALLOW_EVAL=1`
 - chunk view: `ALLOW_CHUNK_VIEW=1`
 - doc delete: `ALLOW_DOC_DELETE=1`

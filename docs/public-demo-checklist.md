@@ -10,6 +10,7 @@ This checklist is optimized for running a **public-facing demo** of the Grounded
 
 - [ ] Set `PUBLIC_DEMO_MODE=1` (forces extractive-only, disables uploads/eval)
 - [ ] Keep `ALLOW_UPLOADS` unset/false (demo mode overrides this anyway)
+- [ ] Keep `ALLOW_CONNECTORS` unset/false (connectors must never be exposed on a public URL)
 - [ ] Keep `LLM_PROVIDER=extractive` (demo mode overrides this anyway)
 - [ ] Ensure citations-required behavior is enabled (`CITATIONS_REQUIRED=1`, forced in demo mode)
 - [ ] Use local embeddings (`EMBEDDINGS_BACKEND=hash` is recommended for a public demo)
@@ -27,7 +28,7 @@ This checklist is optimized for running a **public-facing demo** of the Grounded
 ## Network + access
 
 - [ ] Prefer Cloud Run public URL + **read-only endpoints** only
-- [ ] If you want an extra safety layer, put Cloudflare (free) or a simple reverse proxy/WAF in front
+- [ ] This demo assumes **no edge WAF**. Rely on app rate limiting + Cloud Run max instances + budgets.
 - [ ] **Do not** enable a Serverless VPC Access connector unless you need private networking (it is not free)
 
 ## Rate limiting and abuse prevention

@@ -1,5 +1,8 @@
 # Task: Add authn/authz for private deployments
 
+Spec: `docs/SPECS/AUTH_PRIVATE_DEPLOYMENTS.md`
+Suggested sub-agent: `agents/subagents/backend_fastapi_platform.md`
+
 Owner: @codex
 
 ## Goal
@@ -46,6 +49,14 @@ Stretch goal:
 - Add middleware to attach `principal` to request state
 - Keep OpenAPI docs accessible in demo mode, but require auth in private auth modes
 
+## Acceptance criteria
+
+- When `AUTH_MODE=api_key`:
+  - missing/invalid key returns 401
+  - `reader` can query + view docs, but cannot ingest/run connectors/eval
+  - `admin` can access gated endpoints (when those features are enabled)
+- When `PUBLIC_DEMO_MODE=1`, the service remains anonymous + read-only regardless of auth settings.
+
 ## Tests
 
 - unit tests for:
@@ -58,3 +69,9 @@ Stretch goal:
 
 - update `docs/CONTRACTS.md` with new env vars
 - update `docs/DEPLOY_GCP.md` with Cloud Run env examples
+
+## Validation
+
+- `python scripts/harness.py lint`
+- `python scripts/harness.py typecheck`
+- `python scripts/harness.py test`

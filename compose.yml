@@ -1,0 +1,19 @@
+services:
+  db:
+    image: pgvector/pgvector:0.8.0-pg16-bookworm
+    environment:
+      POSTGRES_USER: gkp
+      POSTGRES_PASSWORD: gkp
+      POSTGRES_DB: gkp
+    ports:
+      - "5432:5432"
+    volumes:
+      - gkp_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gkp -d gkp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  gkp_pg_data:

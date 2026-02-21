@@ -31,7 +31,7 @@ This runbook is tuned for **Grounded Knowledge Platform** on **Cloud Run**.
 - Cause: traffic increase or abuse of `/api/query`.
 - Mitigation:
   - If public: keep `PUBLIC_DEMO_MODE=1` and increase `RATE_LIMIT_MAX_REQUESTS` cautiously.
-  - Consider enabling Cloud Armor / IAP for additional protection.
+  - As a last resort, temporarily restrict invokers (require authentication) while you investigate.
 
 ### Ingest failures
 
@@ -50,9 +50,9 @@ This runbook is tuned for **Grounded Knowledge Platform** on **Cloud Run**.
 
 ### Data loss / missing docs (Cloud Run)
 
-- Cause: SQLite is stored on ephemeral filesystem.
+- Cause: deployment is using SQLite on the Cloud Run filesystem (ephemeral).
 - Mitigation:
-  - For production durability, migrate to a persistent DB (Cloud SQL) or external storage.
+  - For production durability, use Cloud SQL (Postgres) (baseline in this repo) or external storage.
 
 ---
 

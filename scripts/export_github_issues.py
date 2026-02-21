@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+"""Export TASK_*.md backlog items as GitHub-issue-friendly artifacts.
+
+Why:
+- Some teams prefer working the backlog in GitHub Issues/Projects.
+- The canonical source of truth remains `agents/tasks/*.md`.
+- This script generates:
+  - dist/github_issues/issues.jsonl (machine-friendly)
+  - dist/github_issues/bodies/*.md (issue body files)
+  - dist/github_issues/gh_issue_create.sh (optional helper using `gh`)
+
+Usage:
+  python scripts/export_github_issues.py
+
+Notes:
+- The generated `gh_issue_create.sh` requires GitHub CLI (`gh`) and an authenticated session.
+- Milestones are expressed as labels (e.g., `milestone:M1`).
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shlex
+from dataclasses import dataclass
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+TASKS_DIR = ROOT / "agents" / "tasks"
+MILESTONES_PATH = ROOT / "docs" / "BACKLOG" / "MILESTONES.md"
+OUT_DIR = ROOT / "dist" / "github_issues"
+BODIES_DIR = OUT_DIR / "bodies"
+
+
+_TASK_REF_RE = re.compile(r"`(agents/tasks/[^`]+\.md)`")
+
+
+@dataclass(frozen=True)
+class TaskMeta:
+    filename: str
+    title: str
+    owner: str
+    spec: str
+    subagent: str
+    milestone: str
+
+
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _extract_title(md: str) -> str:
+    for line in md.splitlines():
+        line = line.strip()
+        if line.startswith("# "):
+            return line.removeprefix("# ").strip()
+    return "(missing title)"
+
+
+def _extract_owner(md: str) -> str:
+    for line in md.splitlines():
+        if line.lower().startswith("owner:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _extract_spec(md: str) -> str:
+    for line in md.splitlines():
+        if line.lower().startswith("spec:"):
+            m = re.search(r"`([^`]+)`", line)
+            if m:
+                return m.group(1).strip()
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _extract_subagent(md: str) -> str:
+    for line in md.splitlines():
+        if "suggested sub-agent" in line.lower():
+            m = re.search(r"`([^`]+)`", line)
+            if m:
+                return m.group(1).strip()
+            if ":" in line:
+                return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _parse_milestone_map(md: str) -> dict[str, str]:
+    """Return {task_filename: milestone_key} based on MILESTONES.md ordering."""
+
+    mapping: dict[str, str] = {}
+    current_key = ""
+    in_primary = False
+
+    def _set_milestone(heading: str) -> None:
+        nonlocal current_key, in_primary
+        current_key = heading.split()[0].strip()
+        in_primary = current_key.startswith("MO")
+
+    for raw in md.splitlines():
+        line = raw.rstrip("\n")
+
+        if line.startswith("## "):
+            _set_milestone(line.removeprefix("## ").strip())
+            continue
+        if line.startswith("### "):
+            heading = line.removeprefix("### ").strip()
+            if heading.startswith("MO"):
+                _set_milestone(heading)
+            continue
+
+        if line.strip().lower().startswith("**primary tasks**"):
+            in_primary = True
+            continue
+        if line.strip().lower().startswith("**exit criteria**"):
+            in_primary = False
+            continue
+        if not in_primary:
+            continue
+
+        m = _TASK_REF_RE.search(line)
+        if not m:
+            continue
+        filename = m.group(1).split("/")[-1]
+        if filename not in mapping:
+            mapping[filename] = current_key
+
+    return mapping
+
+
+def _labels_for(task: TaskMeta) -> list[str]:
+    labels: list[str] = []
+
+    if task.milestone:
+        labels.append(f"milestone:{task.milestone}")
+
+    # Derive a coarse "area" label from subagent.
+    sa = task.subagent.lower()
+    if "frontend" in sa or "ux" in sa:
+        labels.append("area:web")
+    elif "postgres" in sa or "cloudsql" in sa or "pgvector" in sa:
+        labels.append("area:data")
+    elif "infra" in sa or "terraform" in sa:
+        labels.append("area:infra")
+    elif "eval" in sa:
+        labels.append("area:eval")
+    elif "security" in sa or "governance" in sa:
+        labels.append("area:security")
+    else:
+        labels.append("area:platform")
+
+    # Owner label (optional; helps routing).
+    if task.owner:
+        labels.append(f"owner:{task.owner}")
+
+    labels.append("type:task")
+    return labels
+
+
+def main() -> int:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    BODIES_DIR.mkdir(parents=True, exist_ok=True)
+
+    milestone_map = _parse_milestone_map(_read_text(MILESTONES_PATH))
+
+    tasks = sorted([p for p in TASKS_DIR.glob("TASK_*.md") if p.is_file() and p.name != "TASK_TEMPLATE.md"])
+
+    issues: list[dict[str, object]] = []
+    gh_lines: list[str] = []
+    gh_lines.append("#!/usr/bin/env bash")
+    gh_lines.append("set -euo pipefail")
+    gh_lines.append("")
+    gh_lines.append("# Generated by scripts/export_github_issues.py")
+    gh_lines.append("# Requires: gh auth login")
+    gh_lines.append("")
+
+    for p in tasks:
+        md = _read_text(p)
+        milestone = milestone_map.get(p.name, "")
+        meta = TaskMeta(
+            filename=p.name,
+            title=_extract_title(md),
+            owner=_extract_owner(md),
+            spec=_extract_spec(md),
+            subagent=_extract_subagent(md),
+            milestone=milestone,
+        )
+
+        prefix = f"[{milestone}] " if milestone else ""
+        title = prefix + meta.title
+
+        labels = _labels_for(meta)
+
+        # Body: keep it short; point back to the task/spec in repo.
+        rel_task = f"agents/tasks/{meta.filename}"
+        body_lines: list[str] = []
+        body_lines.append("## Source of truth")
+        body_lines.append("")
+        body_lines.append(f"- Task file: `{rel_task}`")
+        if meta.spec:
+            body_lines.append(f"- Spec: `{meta.spec}`")
+        if meta.subagent:
+            body_lines.append(f"- Suggested sub-agent: `{meta.subagent}`")
+        body_lines.append("")
+        body_lines.append("## Notes")
+        body_lines.append("")
+        body_lines.append("This issue is generated from the repo task backlog. The task markdown file is the canonical acceptance criteria.")
+        body_lines.append("")
+        body_lines.append("---")
+        body_lines.append("")
+        body_lines.append("## Task details")
+        body_lines.append("")
+        body_lines.append(md.strip())
+        body = "\n".join(body_lines).rstrip() + "\n"
+
+        body_file = BODIES_DIR / meta.filename
+        body_file.write_text(body, encoding="utf-8")
+
+        issues.append(
+            {
+                "title": title,
+                "labels": labels,
+                "milestone": milestone,
+                "source_task": rel_task,
+                "body_file": str(body_file.relative_to(ROOT)),
+            }
+        )
+
+        # gh CLI helper
+        label_flags = " ".join(["--label " + shlex.quote(l) for l in labels])
+        gh_lines.append(
+            "gh issue create "
+            + "--title "
+            + shlex.quote(title)
+            + " "
+            + label_flags
+            + " --body-file "
+            + shlex.quote(str(body_file))
+        )
+
+    # Write artifacts
+    (OUT_DIR / "issues.jsonl").write_text("\n".join(json.dumps(i) for i in issues) + "\n", encoding="utf-8")
+    (OUT_DIR / "gh_issue_create.sh").write_text("\n".join(gh_lines) + "\n", encoding="utf-8")
+    (OUT_DIR / "gh_issue_create.sh").chmod(0o755)
+
+    readme = """# GitHub issues export
+
+Generated by `python scripts/export_github_issues.py`.
+
+Artifacts:
+
+- `issues.jsonl` — machine-readable list of issues (title/labels/body file)
+- `bodies/` — per-task issue bodies (markdown)
+- `gh_issue_create.sh` — optional helper script using GitHub CLI (`gh`)
+
+Usage:
+
+1) Ensure you have GitHub CLI installed and authenticated:
+
+```bash
+gh auth login
+```
+
+2) Run the generated script from the repo root:
+
+```bash
+bash dist/github_issues/gh_issue_create.sh
+```
+
+Notes:
+
+- Labels must exist in the repo, or GitHub will create them on demand.
+- If you prefer GitHub Projects, you can add issues to a project after creation.
+- The canonical source remains `agents/tasks/*.md`.
+"""
+    (OUT_DIR / "README.md").write_text(readme, encoding="utf-8")
+
+    print(f"Wrote {OUT_DIR} ({len(issues)} issues)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

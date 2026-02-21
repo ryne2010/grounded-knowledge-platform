@@ -1,14 +1,17 @@
 {
-  "created_at_utc": "2026-02-20T00:59:08Z",
+  "created_at_utc": "2026-02-21T17:41:00Z",
   "excludes": {
     "dir_names": [
+      ".cache",
       ".git",
+      ".history",
       ".idea",
       ".mypy_cache",
       ".pytest_cache",
       ".ruff_cache",
       ".terraform",
       ".tox",
+      ".uv",
       ".venv",
       ".vscode",
       "__pycache__",
@@ -16,7 +19,8 @@
       "node_modules"
     ],
     "file_names": [
-      ".DS_Store"
+      ".DS_Store",
+      "DIST_INFO.json"
     ],
     "globs": [
       "*.pyc",
@@ -36,7 +40,7 @@
       "web/node_modules/"
     ]
   },
-  "file_count": 211,
+  "file_count": 335,
   "git_rev": null,
   "name": "grounded-knowledge-platform",
   "python": "3.11.2",

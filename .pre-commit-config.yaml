@@ -4,30 +4,22 @@ repos:
     rev: v4.6.0
     hooks:
       - id: check-yaml
+      - id: check-json
       - id: check-merge-conflict
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-added-large-files
 
-  # Python linting (matches the CI "ruff check ." behavior, but only on staged files by default).
-  - repo: local
+  # Python formatting + linting.
+  # Keep commit-time checks fast; full typecheck/test/build run in CI via scripts/ci.sh.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.1
     hooks:
       - id: ruff
-        name: ruff (lint)
-        entry: ruff check
-        language: python
-        types_or: [python]
-        additional_dependencies:
-          - ruff==0.14.14
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      - id: ruff-format
 
-      - id: mypy
-        name: mypy (typecheck)
-        # Use the repo venv so mypy can resolve third-party imports without re-installing the whole world in pre-commit.
-        entry: .venv/bin/mypy app
-        language: system
-        pass_filenames: false
-
-  # Terraform formatting only (keeps commit-time checks fast; validation still happens in CI).
+  # Terraform formatting only (only runs when infra/gcp/*.tf files change).
   - repo: local
     hooks:
       - id: terraform-fmt
@@ -35,3 +27,4 @@ repos:
         entry: terraform fmt -check -recursive infra/gcp
         language: system
         pass_filenames: false
+        files: ^infra/gcp/.*\.tf$

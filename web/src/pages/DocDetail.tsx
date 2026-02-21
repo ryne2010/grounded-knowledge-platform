@@ -409,7 +409,7 @@ export function DocDetailPage() {
             <DialogHeader>
               <DialogTitle>Edit doc metadata</DialogTitle>
               <DialogDescription>
-                Updates title/source/classification/retention/tags. This is disabled in public demo mode.
+                Updates title/source/classification/retention/tags. This is disabled in public read-only mode.
               </DialogDescription>
             </DialogHeader>
 

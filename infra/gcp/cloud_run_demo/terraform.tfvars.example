@@ -14,6 +14,9 @@ artifact_repo_name = "gkp"
 image_name         = "gkp"
 image_tag          = "latest"
 
+# Optional: protect Cloud Run + Cloud SQL from accidental destroy
+# deletion_protection = true
+
 # Keep services private and allow selected principals to invoke via browser/API auth.
 # allow_unauthenticated = false
 # private_invoker_members = [
@@ -36,8 +39,8 @@ image_tag          = "latest"
 # clients_observers_group_email              = "gkp-observers@googlegroups.com"
 # enable_clients_observers_monitoring_viewer = true
 
-# Optional: Cloud SQL (Postgres) persistence
-# enable_cloudsql       = true
+# Cloud SQL (Postgres) persistence (baseline)
+# enable_cloudsql       = false  # disable (cost/experimentation)
 # cloudsql_tier         = "db-custom-1-3840"
 # cloudsql_disk_size_gb = 20
 # cloudsql_database     = "gkp"

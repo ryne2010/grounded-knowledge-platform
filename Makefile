@@ -60,6 +60,20 @@ ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER ?= false
 
 # Observability as code
 ENABLE_OBSERVABILITY ?= true
+DELETION_PROTECTION ?= false
+
+# -----------------------------
+# Local/API convenience (optional)
+# -----------------------------
+# Used for curl-driven operator actions against a running API.
+GKP_API_URL ?= http://127.0.0.1:8080
+GKP_API_KEY ?=
+
+# GCS connector convenience vars (private deployments only).
+GCS_BUCKET ?=
+GCS_PREFIX ?=
+GCS_MAX_OBJECTS ?= 200
+GCS_DRY_RUN ?= true
 
 
 # Derived image URI (no exports required)
@@ -73,7 +87,7 @@ define require
 	@command -v $(1) >/dev/null 2>&1 || (echo "Missing dependency: $(1)"; exit 1)
 endef
 
-.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify logs destroy lock clean dist
+.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify logs destroy lock clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit
 
 help:
 	@echo "Targets:"
@@ -95,15 +109,30 @@ help:
 	@echo "  lock              Generate lockfiles locally (uv.lock + pnpm-lock.yaml)"
 	@echo ""
 	@echo "Local dev / quality:"
+	@echo "  db-up              Start local Postgres (Docker Compose)"
+	@echo "  db-down            Stop local Postgres"
+	@echo "  db-reset           Reset local Postgres volume (DANGEROUS)"
+	@echo "  db-logs            Tail local Postgres logs"
+	@echo "  db-psql            Open psql inside the local Postgres container"
 	@echo "  py-install         Install Python deps (dev) via uv"
 	@echo "  web-install        Install web deps via Corepack pnpm"
+	@echo "  web-typecheck      Typecheck web (tsc)"
+	@echo "  web-lint           Lint web (currently typecheck-only)"
 	@echo "  run-api            Run API locally (http://127.0.0.1:8080)"
 	@echo "  run-ui             Run UI locally (http://127.0.0.1:5173)"
 	@echo "  dev                Run API + UI concurrently"
 	@echo "  dev-doctor         Run full local quality harness"
 	@echo "  dev-ci             Run CI harness locally (same as GitHub Actions)"
+	@echo "  test-postgres      Run Postgres integration tests (Docker + psycopg)"
+	@echo "  gcs-sync           Trigger GCS connector sync via API (private deployments only)"
 	@echo "  clean              Remove local caches/build artifacts"
 	@echo "  dist               Create a clean source ZIP in dist/"
+	@echo "  task-index         Regenerate docs/BACKLOG/TASK_INDEX.md"
+	@echo "  queue              Regenerate docs/BACKLOG/QUEUE.md"
+	@echo "  codex-prompt        Generate a codex prompt pack (TASK=agents/tasks/TASK_*.md)"
+	@echo "  backlog-export     Export tasks as GitHub-issue artifacts in dist/github_issues/"
+	@echo "  backlog-refresh    Regenerate task-index + queue"
+	@echo "  backlog-audit      Audit planning artifacts + task metadata (codex-ready check)"
 	@echo ""
 	@echo "Resolved config (override with VAR=...):"
 	@echo "  PROJECT_ID=$(PROJECT_ID)"
@@ -115,6 +144,7 @@ help:
 	@echo "  CLIENTS_OBSERVERS_GROUP_EMAIL=$(CLIENTS_OBSERVERS_GROUP_EMAIL)"
 	@echo "  ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)"
 	@echo "  ENABLE_OBSERVABILITY=$(ENABLE_OBSERVABILITY)"
+	@echo "  DELETION_PROTECTION=$(DELETION_PROTECTION)"
 	@echo "  IMAGE=$(IMAGE)"
 	@echo "  TF_STATE_BUCKET=$(TF_STATE_BUCKET)"
 	@echo "  TF_STATE_PREFIX=$(TF_STATE_PREFIX)"
@@ -123,10 +153,46 @@ help:
 # Local development (no GCP required)
 # -----------------------------
 
-.PHONY: py-install web-install run-api run-ui dev web-build lint typecheck test dev-doctor dev-ci
+.PHONY: py-install web-install db-up db-down db-reset db-logs db-psql run-api run-ui dev web-build web-lint web-typecheck lint typecheck test test-postgres dev-doctor dev-ci
+
+
+# Connectors (private deployments)
+gcs-sync: ## Trigger GCS prefix sync via API (add/update only; disabled in PUBLIC_DEMO_MODE)
+	@if [ -z "$(GCS_BUCKET)" ]; then \
+		echo "ERROR: set GCS_BUCKET=..."; \
+		exit 1; \
+	fi
+	@HDR=""; \
+	if [ -n "$(GKP_API_KEY)" ]; then HDR="-H x-api-key:$(GKP_API_KEY)"; fi; \
+	echo "POST $(GKP_API_URL)/api/connectors/gcs/sync (bucket=$(GCS_BUCKET) prefix=$(GCS_PREFIX) dry_run=$(GCS_DRY_RUN))"; \
+	curl -sS -X POST "$(GKP_API_URL)/api/connectors/gcs/sync" \
+	  -H "Content-Type: application/json" \
+	  $$HDR \
+	  -d '{"bucket":"$(GCS_BUCKET)","prefix":"$(GCS_PREFIX)","max_objects":$(GCS_MAX_OBJECTS),"dry_run":$(GCS_DRY_RUN)}'
+
+
+# Local Postgres (Docker Compose)
+# These targets provide a local Postgres that matches the Cloud SQL baseline.
+#
+# Requires Docker Desktop.
+
+db-up: ## Start local Postgres (Docker Compose)
+	docker compose up -d db
+
+db-down: ## Stop local Postgres
+	docker compose down
+
+db-reset: ## Reset local Postgres volume (DANGEROUS)
+	docker compose down -v
+
+db-logs: ## Tail local Postgres logs
+	docker compose logs -f db
+
+db-psql: ## Open psql inside the local Postgres container
+	docker compose exec db psql -U gkp -d gkp
 
 py-install: ## Install Python deps (dev) via uv
-	uv sync --dev
+	uv sync --dev --extra cloudsql --extra observability
 
 web-install: ## Install web deps via Corepack pnpm
 	cd web && corepack pnpm install --frozen-lockfile
@@ -148,6 +214,12 @@ dev: ## Run API + UI concurrently (two terminals is still recommended for logs)
 web-build: ## Build web bundle into web/dist
 	cd web && corepack pnpm build
 
+web-typecheck: ## Typecheck web (tsc)
+	cd web && corepack pnpm run typecheck
+
+web-lint: ## Lint web (currently typecheck-only)
+	cd web && corepack pnpm run lint
+
 lint: ## Lint (ruff)
 	uv run python scripts/harness.py lint
 
@@ -156,6 +228,9 @@ typecheck: ## Typecheck (mypy + tsc)
 
 test: ## Run unit tests (pytest)
 	uv run python scripts/harness.py test
+
+test-postgres: ## Run Postgres integration tests (requires Docker + psycopg)
+	uv run python -m pytest -q tests/test_cloudsql_postgres.py
 
 
 # -----------------------------
@@ -415,6 +490,7 @@ infra: tf-init
 		-var "clients_observers_group_email=$(CLIENTS_OBSERVERS_GROUP_EMAIL)" \
 		-var "enable_clients_observers_monitoring_viewer=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)" \
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
+		-var "deletion_protection=$(DELETION_PROTECTION)" \
 		-var "service_name=$(SERVICE_NAME)" \
 		-var "artifact_repo_name=$(AR_REPO)" \
 		-var "image=$(IMAGE)" \
@@ -442,6 +518,7 @@ plan: tf-init
 		-var "clients_observers_group_email=$(CLIENTS_OBSERVERS_GROUP_EMAIL)" \
 		-var "enable_clients_observers_monitoring_viewer=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)" \
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
+		-var "deletion_protection=$(DELETION_PROTECTION)" \
 		-var "service_name=$(SERVICE_NAME)" \
 		-var "artifact_repo_name=$(AR_REPO)" \
 		-var "image=$(IMAGE)"
@@ -456,6 +533,7 @@ apply: tf-init
 		-var "clients_observers_group_email=$(CLIENTS_OBSERVERS_GROUP_EMAIL)" \
 		-var "enable_clients_observers_monitoring_viewer=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)" \
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
+		-var "deletion_protection=$(DELETION_PROTECTION)" \
 		-var "service_name=$(SERVICE_NAME)" \
 		-var "artifact_repo_name=$(AR_REPO)" \
 		-var "image=$(IMAGE)"
@@ -494,6 +572,7 @@ destroy: tf-init
 		-var "clients_observers_group_email=$(CLIENTS_OBSERVERS_GROUP_EMAIL)" \
 		-var "enable_clients_observers_monitoring_viewer=$(ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER)" \
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
+		-var "deletion_protection=$(DELETION_PROTECTION)" \
 		-var "service_name=$(SERVICE_NAME)" \
 		-var "artifact_repo_name=$(AR_REPO)" \
 		-var "image=$(IMAGE)"
@@ -520,7 +599,7 @@ lock:
 
 POLICY_DIR := infra/gcp/policy
 
-.PHONY: tf-fmt tf-validate tf-lint tf-sec tf-policy tf-check
+.PHONY: tf-fmt tf-validate tf-lint tf-sec tf-checkov tf-policy tf-check
 
 tf-fmt: ## Terraform fmt check (no changes)
 	@terraform -chdir=$(TF_DIR) fmt -check -recursive
@@ -548,6 +627,18 @@ tf-sec: ## tfsec (falls back to docker)
 	  docker run --rm -v "$$(pwd):/src" aquasec/tfsec:latest /src/$(TF_DIR); \
 	fi
 
+
+tf-checkov: ## checkov (falls back to docker)
+	@if command -v checkov >/dev/null 2>&1; then \
+	  echo "Running checkov (local)"; \
+	  checkov -d $(TF_DIR) --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18"; \
+	else \
+	  echo "checkov not found; running via Docker"; \
+	  docker run --rm -v "$$(pwd):/src" bridgecrew/checkov:latest \
+	    -d "/src/$(TF_DIR)" \
+	    --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18"; \
+	fi
+
 tf-policy: ## OPA/Conftest policy gate for Terraform (falls back to docker)
 	@if command -v conftest >/dev/null 2>&1; then \
 	  echo "Running conftest (local)"; \
@@ -557,16 +648,35 @@ tf-policy: ## OPA/Conftest policy gate for Terraform (falls back to docker)
 	  docker run --rm -v "$$(pwd):/project" -w /project openpolicyagent/conftest:latest test --parser hcl2 --policy $(POLICY_DIR) $(TF_DIR); \
 	fi
 
-tf-check: tf-fmt tf-validate tf-lint tf-sec tf-policy ## Run all Terraform hygiene checks
+tf-check: tf-fmt tf-validate tf-lint tf-sec tf-checkov tf-policy ## Run all Terraform hygiene checks
 
 # -----------------------------
 # Packaging / housekeeping
 # -----------------------------
 
-.PHONY: clean dist
+.PHONY: clean dist task-index queue codex-prompt backlog-export backlog-refresh backlog-audit
 
 clean: ## Remove local caches/build artifacts (safe)
 	bash scripts/clean.sh
 
 dist: ## Create a clean source ZIP in dist/
 	python scripts/package_repo.py
+
+task-index: ## Regenerate docs/BACKLOG/TASK_INDEX.md
+	python scripts/generate_task_index.py
+
+queue: ## Regenerate docs/BACKLOG/QUEUE.md
+	python scripts/generate_execution_queue.py
+
+codex-prompt: ## Generate a codex prompt pack for a task (TASK=agents/tasks/TASK_*.md)
+	@test -n "$(TASK)" || (echo "Set TASK=agents/tasks/TASK_*.md"; exit 1)
+	python scripts/prepare_codex_prompt.py $(TASK)
+
+backlog-export: ## Export TASK_*.md as GitHub-issue artifacts in dist/github_issues/
+	python scripts/export_github_issues.py
+
+backlog-refresh: task-index queue ## Regenerate backlog indices (task-index + queue)
+	@echo "Backlog refreshed: docs/BACKLOG/TASK_INDEX.md + docs/BACKLOG/QUEUE.md"
+
+backlog-audit: ## Audit planning artifacts + task metadata (codex-ready check)
+	python scripts/backlog_audit.py

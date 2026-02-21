@@ -8,7 +8,7 @@ resource "google_sql_database_instance" "cloudsql" {
   count            = var.enable_cloudsql ? 1 : 0
   project          = var.project_id
   region           = var.region
-  name             = "gkp-${var.env}-pg"
+  name             = "${var.service_name}-pg"
   database_version = "POSTGRES_16"
 
   settings {
@@ -23,7 +23,7 @@ resource "google_sql_database_instance" "cloudsql" {
     }
   }
 
-  deletion_protection = false
+  deletion_protection = var.deletion_protection
 }
 
 resource "google_sql_database" "app" {

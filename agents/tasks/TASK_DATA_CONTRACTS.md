@@ -1,4 +1,8 @@
-# TASK: Data contracts + schema drift for tabular ingests
+# Task: Data contracts + schema drift for tabular ingests
+
+Spec: `docs/DATA_CONTRACTS.md`
+Owner: @codex
+Suggested sub-agent: `agents/subagents/security_governance.md`
 
 ## Goal
 
@@ -109,3 +113,10 @@ Optionally add doc-level “latest schema” fields for faster UI.
 5. Extend API response models + UI rendering.
 6. Add tests for contract validation + drift.
 7. Add docs: `docs/DATA_CONTRACTS.md`.
+
+## Validation
+
+- `python scripts/harness.py lint`
+- `python scripts/harness.py typecheck`
+- `python scripts/harness.py test`
+- `make test-postgres`

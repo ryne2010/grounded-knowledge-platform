@@ -24,7 +24,9 @@ If you ingest sensitive documents:
 
 ## Defense in depth (recommended)
 
-- Put an additional rate limiter / WAF in front of the service (Cloudflare, Cloud Armor, etc.)
-- Set Cloud Run `--max-instances` to cap burst cost and reduce abuse impact
-- Configure budgets and billing alerts in your cloud account
-- Review logging settings so you don't store sensitive request bodies inadvertently
+- Use **PUBLIC_DEMO_MODE=1** for any Internet-facing deployment (read-only + extractive-only).
+- Keep Cloud Run `--max-instances` low (cost and abuse control).
+- Keep `RATE_LIMIT_ENABLED=1` (application-level rate limiting).
+- Configure budgets and billing alerts in your cloud account.
+- Review logging settings so you don't log sensitive content.
+- Prefer **one GCP project per client** to keep IAM and cost boundaries clean.

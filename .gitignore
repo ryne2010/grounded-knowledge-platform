@@ -38,5 +38,11 @@ crash.*.log
 # local history
 .history/
 
-# env
-.env*
+# env (never commit real secrets)
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# Packaging metadata
+DIST_INFO.json

@@ -608,6 +608,18 @@ class IngestTextRequest(BaseModel):
     notes: str | None = Field(None, description="Optional ingest note")
 
 
+class GCSSyncRequest(BaseModel):
+    bucket: str = Field(..., description="GCS bucket name (no gs:// prefix)")
+    prefix: str = Field("", description="Optional prefix under the bucket (folder-like)")
+    max_objects: int = Field(200, ge=1, le=5000, description="Max number of objects to scan")
+    dry_run: bool = Field(False, description="If true, list what would be ingested but make no DB changes")
+    classification: str | None = Field(None, description="public|internal|confidential|restricted")
+    retention: str | None = Field(None, description="none|30d|90d|1y|indefinite")
+    tags: list[str] | None = Field(None, description="Optional tags to apply to all ingested docs")
+    notes: str | None = Field(None, description="Optional ingest notes (applied to all docs)")
+
+
+
 class DocUpdateRequest(BaseModel):
     title: str | None = Field(None, description="Optional new title")
     source: str | None = Field(None, description="Optional new source label/URL/path")
@@ -701,6 +713,7 @@ def ready() -> dict[str, object]:
 def meta(_auth: Any = Depends(require_role("reader"))) -> dict[str, object]:
     """Small metadata endpoint for the UI and diagnostics."""
     uploads_enabled = bool(settings.allow_uploads and not settings.public_demo_mode)
+    connectors_enabled = bool(settings.allow_connectors and not settings.public_demo_mode)
     eval_enabled = bool(settings.allow_eval and not settings.public_demo_mode)
     chunk_view_enabled = bool(settings.allow_chunk_view and not settings.public_demo_mode)
     doc_delete_enabled = bool(settings.allow_doc_delete and not settings.public_demo_mode)
@@ -727,6 +740,7 @@ def meta(_auth: Any = Depends(require_role("reader"))) -> dict[str, object]:
         "auth_mode": settings.auth_mode if not settings.public_demo_mode else "none",
         "database_backend": "postgres" if settings.database_url else "sqlite",
         "uploads_enabled": uploads_enabled,
+        "connectors_enabled": connectors_enabled,
         "eval_enabled": eval_enabled,
         "chunk_view_enabled": chunk_view_enabled,
         "doc_delete_enabled": doc_delete_enabled,
@@ -1228,6 +1242,40 @@ def ingest_text_api(req: IngestTextRequest, _auth: Any = Depends(require_role("e
         "embedding_dim": res.embedding_dim,
         "content_sha256": res.content_sha256,
     }
+
+# ---- Connectors ----
+@app.post("/api/connectors/gcs/sync")
+def gcs_sync_api(req: GCSSyncRequest, _auth: Any = Depends(require_role("admin"))) -> dict[str, Any]:
+    """Trigger a one-off sync from a GCS prefix (private deployments only).
+
+    This is intentionally disabled in PUBLIC_DEMO_MODE and when ALLOW_CONNECTORS=0.
+    """
+
+    if settings.public_demo_mode or not settings.allow_connectors:
+        raise HTTPException(status_code=403, detail="Connectors are disabled in this deployment")
+
+    from .connectors.gcs import sync_prefix
+
+    try:
+        res = sync_prefix(
+            bucket=req.bucket,
+            prefix=req.prefix or "",
+            max_objects=req.max_objects,
+            dry_run=req.dry_run,
+            classification=req.classification,
+            retention=req.retention,
+            tags=req.tags,
+            notes=req.notes,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    invalidate_cache()
+    return res
+
+
 
 
 @app.post("/api/ingest/file")

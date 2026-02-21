@@ -12,6 +12,17 @@ from threading import Lock
 
 import numpy as np
 
+
+def _vec_to_pgvector_literal(vec: np.ndarray) -> str:
+    """Convert a 1D numpy vector to pgvector text format: "[1,2,3]"."""
+    v = vec.astype(np.float32).reshape(-1)
+    n = float(np.linalg.norm(v))
+    if n > 0:
+        v = v / n
+    vals = v.tolist()
+    return "[" + ",".join(str(float(x)) for x in vals) + "]"
+
+
 from .config import settings
 from .contracts.tabular_contract import TabularSnapshot, build_snapshot, load_contract, validate_snapshot
 from .embeddings import Embedder, HashEmbedder, NoEmbedder, SentenceTransformerEmbedder
@@ -182,10 +193,16 @@ def ingest_text(
         chunk_objs.append(Chunk(chunk_id=chunk_id, doc_id=doc_id, idx=i, text=c))
 
     embs = embedder.embed([c.text for c in chunk_objs])  # (n, dim)
-    rows = [
-        (chunk.chunk_id, int(embs.shape[1]), vec.astype(np.float32).tobytes())
-        for chunk, vec in zip(chunk_objs, embs, strict=True)
-    ]
+    if settings.database_url:
+        rows = [
+            (chunk.chunk_id, int(embs.shape[1]), _vec_to_pgvector_literal(vec))
+            for chunk, vec in zip(chunk_objs, embs, strict=True)
+        ]
+    else:
+        rows = [
+            (chunk.chunk_id, int(embs.shape[1]), vec.astype(np.float32).tobytes())
+            for chunk, vec in zip(chunk_objs, embs, strict=True)
+        ]
 
     with connect(settings.sqlite_path) as conn:
         init_db(conn)

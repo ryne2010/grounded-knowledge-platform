@@ -2,7 +2,7 @@ import * as React from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
-import { api, type QueryResponse, type RetrievalDebug } from '../api'
+import { api, type Doc, type QueryResponse, type RetrievalDebug } from '../api'
 import { useOfflineStatus } from '../lib/offline'
 import {
   Badge,
@@ -27,12 +27,65 @@ import {
   Textarea,
 } from '../portfolio-ui'
 
-const EXAMPLES = [
-  'What is this project and what are its safety guarantees?',
-  'How does hybrid retrieval (BM25 + embeddings) work in this app?',
-  'What are the deploy steps for Cloud Run demo mode?',
-  'What safeguards exist against prompt injection?',
+const FALLBACK_EXAMPLES = [
+  "Summarize this platform's safety and evidence guarantees.",
+  'How does hybrid retrieval (BM25 + embeddings) work in this system?',
+  'What architecture choices improve reliability on Cloud Run?',
+  'What controls mitigate prompt injection in enterprise deployments?',
 ]
+
+function _docLabel(doc: Doc): string {
+  const title = doc.title?.trim()
+  if (title) return title
+  const source = doc.source?.trim()
+  if (source) return source
+  return doc.doc_id
+}
+
+function buildCorpusExamples(docs: Doc[]): string[] {
+  if (!docs.length) return FALLBACK_EXAMPLES
+
+  const ranked = [...docs]
+    .sort((a, b) => (b.updated_at - a.updated_at) || (b.content_bytes - a.content_bytes))
+    .slice(0, 4)
+
+  const examples: string[] = []
+  const seen = new Set<string>()
+
+  const push = (q: string) => {
+    const normalized = q.trim()
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    examples.push(normalized)
+  }
+
+  for (const doc of ranked) {
+    const label = _docLabel(doc)
+    push(`Summarize the key engineering guidance in "${label}".`)
+  }
+
+  if (ranked.length >= 2) {
+    const a = _docLabel(ranked[0])
+    const b = _docLabel(ranked[1])
+    push(`Compare the recommendations in "${a}" and "${b}".`)
+  }
+
+  const tagCounts = new Map<string, number>()
+  for (const doc of docs) {
+    for (const raw of doc.tags ?? []) {
+      const tag = String(raw || '').trim().toLowerCase()
+      if (!tag) continue
+      tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1)
+    }
+  }
+  const topTag = [...tagCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+  if (topTag) {
+    push(`What does this corpus say about ${topTag.replace(/[-_]+/g, ' ')}?`)
+  }
+
+  if (!examples.length) return FALLBACK_EXAMPLES
+  return examples.slice(0, 6)
+}
 
 type ChatTurn = {
   id: string
@@ -227,6 +280,11 @@ export function HomePage() {
 
   const [turns, setTurns] = React.useState<ChatTurn[]>(() => (typeof window === 'undefined' ? [] : loadTurns()))
 
+  const suggestedQuestions = React.useMemo(() => {
+    const docs = docsQuery.data?.docs ?? []
+    return buildCorpusExamples(docs)
+  }, [docsQuery.data])
+
   React.useEffect(() => {
     if (meta?.top_k_default && Number.isFinite(meta.top_k_default)) {
       setTopK(meta.top_k_default)
@@ -385,8 +443,8 @@ export function HomePage() {
       title="Ask"
       description={
         meta?.public_demo_mode
-          ? 'Public demo mode: read-only, citations-first.'
-          : 'Private mode: uploads/evals may be enabled via environment flags.'
+          ? 'Public read-only mode: evidence-first responses with enforced citations.'
+          : 'Private deployment mode: ingestion and evaluation controls depend on runtime policy.'
       }
       actions={actions}
     >
@@ -436,7 +494,7 @@ export function HomePage() {
                   />
                   <Label htmlFor="debug">Debug retrieval</Label>
                   {meta?.public_demo_mode ? (
-                    <span className="text-xs text-muted-foreground">(disabled in demo)</span>
+                    <span className="text-xs text-muted-foreground">(locked in public read-only mode)</span>
                   ) : null}
                 </div>
                 <div className="flex items-center gap-2">
@@ -451,7 +509,7 @@ export function HomePage() {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {EXAMPLES.map((ex) => (
+                {suggestedQuestions.map((ex) => (
                   <Button key={ex} variant="outline" size="sm" onClick={() => setQuestion(ex)}>
                     {ex}
                   </Button>
@@ -651,7 +709,7 @@ export function HomePage() {
           <Card>
             <CardHeader>
               <CardTitle>Index</CardTitle>
-              <CardDescription>Quick links + a tiny peek at what’s indexed.</CardDescription>
+              <CardDescription>Quick links and a snapshot of indexed content.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap gap-2">
@@ -722,7 +780,7 @@ export function HomePage() {
                   <Badge variant="destructive">api error</Badge>
                 ) : meta ? (
                   meta.public_demo_mode ? (
-                    <Badge variant="warning">demo</Badge>
+                    <Badge variant="warning">public read-only</Badge>
                   ) : (
                     <Badge variant="success">private</Badge>
                   )

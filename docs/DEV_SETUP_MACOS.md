@@ -41,14 +41,23 @@ brew install terraform
 ## Local setup
 
 ```bash
-uv sync --dev
-cd web && corepack pnpm install
+make py-install
+make web-install
 ```
 
 Create a `.env`:
 
+Safe default (public demo mode):
+
 ```bash
 cp .env.example .env
+```
+
+Recommended local dev (Postgres + Ollama):
+
+```bash
+cp .env.local.example .env
+make db-up
 ```
 
 For **full local development** (uploads, eval, chunk view), set these in `.env`:
@@ -56,8 +65,9 @@ For **full local development** (uploads, eval, chunk view), set these in `.env`:
 ```bash
 PUBLIC_DEMO_MODE=0
 ALLOW_UPLOADS=1
+ALLOW_CONNECTORS=1
 ALLOW_EVAL=1
-ALLOW_CHUNK_VIEW=1
+ALLOW_CHUNK_VIEW=0
 
 # Grounding: refuse answers without citations (recommended)
 CITATIONS_REQUIRED=1
@@ -73,6 +83,12 @@ OCR_ENABLED=1
 ```
 
 ## Run locally
+
+If you're using the Postgres baseline (`DATABASE_URL`), start Postgres first:
+
+```bash
+make db-up
+```
 
 API (FastAPI):
 

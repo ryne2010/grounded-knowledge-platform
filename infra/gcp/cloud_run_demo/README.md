@@ -12,7 +12,7 @@ What this demonstrates (staff-level):
 - **Cost guardrails** (max instances cap)
 - macOS-friendly **Cloud Build** based image builds
 - Optional (disabled by default): **Serverless VPC Access connector**
-- Optional (disabled by default): **Cloud SQL Postgres** persistence
+- **Cloud SQL Postgres** persistence (enabled by default)
 - Optional: **Workspace IAM starter pack** (Google Groups → roles)
 - **Observability as code** (small dashboard + alert policies)
 
@@ -76,14 +76,14 @@ If you want to demonstrate private networking (Cloud Run → private IP resource
 
 ---
 
-## Optional: Cloud SQL Postgres
+## Cloud SQL Postgres (baseline)
 
-Enable persistent Postgres storage:
+Cloud SQL is enabled by default for production-like persistence.
+
+To disable (cost/experimentation):
 
 ```hcl
-enable_cloudsql   = true
-cloudsql_database = "gkp"
-cloudsql_user     = "gkp_app"
+enable_cloudsql = false
 ```
 
 This stack will:

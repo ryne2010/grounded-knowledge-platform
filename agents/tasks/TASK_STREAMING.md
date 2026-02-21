@@ -1,5 +1,8 @@
 # Task: Streaming answers (SSE) with incremental citations
 
+Spec: `docs/ARCHITECTURE/RETRIEVAL_PIPELINE.md`
+Suggested sub-agent: `agents/subagents/backend_fastapi_platform.md`
+
 Owner: @codex
 
 ## Goal
@@ -48,3 +51,15 @@ Improve UX for long answers by streaming tokens and showing citations as soon as
 
 - update `docs/CONTRACTS.md` with event schema
 - add a short tutorial section in `docs/TUTORIAL.md`
+
+## Acceptance criteria
+
+- The streaming endpoint produces well-formed SSE frames and completes with `done`.
+- Citations-required behavior is preserved in streaming mode.
+- The UI can cancel a streaming request without leaving the page in a broken state.
+
+## Validation
+
+- `python scripts/harness.py lint`
+- `python scripts/harness.py typecheck`
+- `python scripts/harness.py test`

@@ -5,16 +5,27 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from threading import Lock
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
 from .config import settings
 from .embeddings import Embedder, HashEmbedder, NoEmbedder, SentenceTransformerEmbedder, cosine_sim
 from .index_maintenance import ensure_index_compatible
-from .storage import Chunk, connect, get_embeddings_by_ids, init_db, list_chunks
+from .storage import Chunk, connect, get_chunks_by_ids, get_embeddings_by_ids, init_db, list_chunks
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _vec_to_pgvector_literal(vec: np.ndarray) -> str:
+    """Convert a 1D numpy vector to pgvector text format: "[1,2,3]"."""
+    v = vec.astype(np.float32).reshape(-1)
+    n = float(np.linalg.norm(v))
+    if n > 0:
+        v = v / n
+    vals = v.tolist()
+    return "[" + ",".join(str(float(x)) for x in vals) + "]"
+
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +169,132 @@ def _lexical_scores_fts(conn: sqlite3.Connection, query: str, limit: int) -> Opt
     return {cid: float(s) for (cid, _), s in zip(rows, inv, strict=True)}
 
 
+
+
+def _pg_lexical_scores(conn: Any, query: str, limit: int) -> dict[str, float]:
+    """Postgres lexical retrieval using built-in full-text search.
+
+    Returns dict chunk_id -> normalized score in [0, 1].
+    """
+
+    toks = _tokenize(query)
+    if not toks:
+        return {}
+    q = " ".join(toks)
+    limit = max(1, min(int(limit), 2000))
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH q AS (SELECT plainto_tsquery('english', %s) AS query)
+            SELECT c.chunk_id, ts_rank_cd(to_tsvector('english', c.text), q.query) AS score
+            FROM chunks c, q
+            WHERE to_tsvector('english', c.text) @@ q.query
+            ORDER BY score DESC
+            LIMIT %s
+            """,
+            (q, limit),
+        )
+        rows = cur.fetchall()
+
+    scores = {str(r["chunk_id"]): float(r["score"]) for r in rows if r.get("chunk_id") is not None}
+    if not scores:
+        return {}
+
+    mx = max(scores.values())
+    if mx > 0:
+        scores = {cid: (s / mx) for cid, s in scores.items()}
+    return scores
+
+
+def _pg_vector_scores(conn: Any, query: str, embedder: Embedder, limit: int) -> dict[str, float]:
+    """Postgres vector retrieval using pgvector cosine distance.
+
+    Returns dict chunk_id -> normalized score in [0, 1].
+    """
+
+    toks = _tokenize(query)
+    if not toks:
+        return {}
+
+    limit = max(1, min(int(limit), 2000))
+    q_vec = embedder.embed([query]).reshape(-1).astype(np.float32)
+    q_lit = _vec_to_pgvector_literal(q_vec)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH q AS (SELECT %s::vector AS v)
+            SELECT e.chunk_id, (1 - (e.vec <=> q.v)) AS score
+            FROM embeddings e, q
+            ORDER BY e.vec <=> q.v
+            LIMIT %s
+            """,
+            (q_lit, limit),
+        )
+        rows = cur.fetchall()
+
+    scores = {str(r["chunk_id"]): float(r["score"]) for r in rows if r.get("chunk_id") is not None}
+    if not scores:
+        return {}
+
+    # Normalize to [0,1] by shifting min to 0 and scaling max to 1.
+    vals = list(scores.values())
+    mn = min(vals)
+    mx = max(vals)
+    shifted = {cid: (s - mn) for cid, s in scores.items()}
+    mx2 = max(shifted.values())
+    if mx2 > 0:
+        shifted = {cid: (s / mx2) for cid, s in shifted.items()}
+    return shifted
+
+
+def _retrieve_postgres(
+    conn: Any,
+    question: str,
+    *,
+    top_k: int,
+    lexical_limit: int,
+    vector_limit: int,
+    embedder: Embedder,
+    use_vector: bool,
+) -> list[RetrievedChunk]:
+    lex = _pg_lexical_scores(conn, question, lexical_limit)
+    vec = _pg_vector_scores(conn, question, embedder, vector_limit) if use_vector else {}
+
+    cand_ids = set(lex.keys()) | set(vec.keys())
+    if not cand_ids:
+        return []
+
+    # Fetch chunk records for candidates.
+    chunk_ids = list(cand_ids)
+    chunks = get_chunks_by_ids(conn, chunk_ids)
+    by_id = {c.chunk_id: c for c in chunks}
+
+    scored: list[RetrievedChunk] = []
+    for cid in cand_ids:
+        c = by_id.get(cid)
+        if c is None:
+            continue
+        lex_s = float(lex.get(cid, 0.0))
+        vec_s = float(vec.get(cid, 0.0))
+        denom = 2.0 if use_vector else 1.0
+        score = (lex_s + vec_s) / denom
+        scored.append(
+            RetrievedChunk(
+                chunk_id=c.chunk_id,
+                doc_id=c.doc_id,
+                idx=c.idx,
+                text=c.text,
+                score=score,
+                lexical_score=lex_s,
+                vector_score=vec_s,
+            )
+        )
+
+    scored.sort(key=lambda r: r.score, reverse=True)
+    return scored[: max(1, min(int(top_k), 50))]
+
 def _lexical_scores_bm25(tokenized_chunks: list[list[str]], query: str) -> dict[int, float]:
     """Fallback lexical scorer: BM25 via rank_bm25 over all chunks.
 
@@ -218,6 +355,18 @@ def retrieve(
 
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
+
+        # Postgres path: use DB-native lexical + pgvector search (avoid loading entire corpus into memory).
+        if settings.database_url:
+            return _retrieve_postgres(
+                conn,
+                question,
+                top_k=top_k,
+                lexical_limit=lexical_limit,
+                vector_limit=vector_limit,
+                embedder=embedder,
+                use_vector=use_vector,
+            )
 
         # If settings changed (backend/model/dim), rebuild stored embeddings so retrieval stays valid.
         rebuilt = False

@@ -31,11 +31,11 @@ function RootLayout() {
   const headerRight = (
     <div className="hidden items-center gap-2 md:flex">
       {metaQuery.isError ? (
-        <Badge variant="destructive">api error</Badge>
+        <Badge variant="destructive">API error</Badge>
       ) : meta ? (
         <>
-          {meta.public_demo_mode ? <Badge variant="warning">demo</Badge> : <Badge variant="success">private</Badge>}
-          {meta.citations_required && <Badge variant="secondary">citations</Badge>}
+          {meta.public_demo_mode ? <Badge variant="warning">public read-only</Badge> : <Badge variant="success">private</Badge>}
+          {meta.citations_required && <Badge variant="secondary">citations enforced</Badge>}
           <Badge variant="outline">llm:{meta.llm_provider}</Badge>
         </>
       ) : (

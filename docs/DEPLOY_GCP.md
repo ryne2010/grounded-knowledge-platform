@@ -123,14 +123,14 @@ Notes:
 
 ---
 
-## 3c) (Optional) Cloud SQL Postgres persistence
+## 3c) Cloud SQL Postgres persistence (baseline)
 
-Set Terraform vars:
+Cloud SQL is enabled by default in `infra/gcp/cloud_run_demo` (production baseline).
+
+To disable (cost/experimentation), set:
 
 ```hcl
-enable_cloudsql   = true
-cloudsql_database = "gkp"
-cloudsql_user     = "gkp_app"
+enable_cloudsql = false
 ```
 
 On apply, Terraform provisions Cloud SQL resources and injects `DATABASE_URL` into Cloud Run.

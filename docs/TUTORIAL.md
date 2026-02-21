@@ -209,7 +209,7 @@ See `infra/gcp/README.md` and the `Makefile` targets:
 Operational endpoints:
 
 - `/health` is a lightweight liveness check.
-- `/ready` runs a minimal SQLite open/query check and returns 503 if initialization fails.
+- `/ready` runs a minimal DB open/query check (Postgres when `DATABASE_URL` is set, otherwise SQLite) and returns 503 if initialization fails.
 
 ---
 
@@ -232,11 +232,11 @@ Common upgrades:
 
 ### Make storage production-grade
 
-SQLite on Cloud Run is ephemeral.
+If you run SQLite on Cloud Run, remember the filesystem is ephemeral.
 
-To make the platform durable:
+To make the platform durable (baseline in this repo):
 
-- move docs/chunks/embeddings to Cloud SQL (Postgres)
+- use Cloud SQL (Postgres) by setting `DATABASE_URL` (Terraform does this by default)
 - use a managed vector DB if needed
 - store raw documents in Cloud Storage
 - add authn/authz (IAP, OIDC, or your own)

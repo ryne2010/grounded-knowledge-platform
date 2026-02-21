@@ -1,11 +1,7 @@
-DO $$
-BEGIN
-  CREATE EXTENSION IF NOT EXISTS vector;
-EXCEPTION
-  WHEN OTHERS THEN
-    RAISE NOTICE 'pgvector extension unavailable (%); continuing without vector type', SQLERRM;
-END
-$$;
+-- 001_init.sql
+-- Base schema for Cloud SQL / Postgres deployments.
+-- NOTE: This migration assumes pgvector is available (production baseline).
+CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS docs (
   doc_id TEXT PRIMARY KEY,
@@ -29,10 +25,11 @@ CREATE TABLE IF NOT EXISTS chunks (
   text TEXT NOT NULL
 );
 
+-- Embeddings stored as pgvector type (required).
 CREATE TABLE IF NOT EXISTS embeddings (
   chunk_id TEXT PRIMARY KEY REFERENCES chunks(chunk_id) ON DELETE CASCADE,
   dim INTEGER NOT NULL,
-  vec BYTEA NOT NULL
+  vec vector NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS ingest_events (
@@ -61,7 +58,3 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_docs_updated_at ON docs(updated_at);
-CREATE INDEX IF NOT EXISTS idx_events_ingested_at ON ingest_events(ingested_at);
-CREATE INDEX IF NOT EXISTS idx_chunks_doc_idx ON chunks(doc_id, idx);

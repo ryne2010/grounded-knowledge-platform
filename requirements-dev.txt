@@ -1,0 +1,22 @@
+# Dev tooling for harness tasks (uv-friendly)
+#
+# Primary source of truth for dependencies is:
+#   - pyproject.toml
+#   - uv.lock
+#
+# This file exists for compatibility with environments that prefer:
+#   uv pip install -r requirements-dev.txt
+# or:
+#   pip install -r requirements-dev.txt
+#
+# NOTE: App/runtime deps are managed via pyproject.toml; this file is for
+# developer tooling only.
+
+pre-commit>=3.0
+ruff>=0.6.0
+mypy>=1.8.0
+pytest>=8.0.0
+
+# Python <3.11 fallback for tomllib
+# (harmless on 3.11+, because the marker prevents install)
+tomli>=2.0; python_version < "3.11"

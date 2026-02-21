@@ -44,11 +44,11 @@ export function EvalPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               Retrieval eval
-              {meta?.public_demo_mode ? <Badge variant="warning">demo</Badge> : null}
+              {meta?.public_demo_mode ? <Badge variant="warning">public read-only</Badge> : null}
               {!enabled ? <Badge variant="secondary">disabled</Badge> : <Badge variant="outline">enabled</Badge>}
             </CardTitle>
             <CardDescription>
-              This endpoint is disabled in <span className="font-mono">PUBLIC_DEMO_MODE</span>. For private deployments,
+              This endpoint is disabled in <span className="font-mono">PUBLIC_DEMO_MODE</span>. For private environments,
               enable <span className="font-mono">ALLOW_EVAL=1</span>.
             </CardDescription>
           </CardHeader>

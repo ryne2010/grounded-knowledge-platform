@@ -2,7 +2,9 @@
 
 ## Scope
 
-This runbook covers enabling and operating Cloud SQL Postgres for durable storage in Cloud Run deployments.
+This runbook covers operating Cloud SQL Postgres for durable storage in Cloud Run deployments.
+
+In this repo, **Cloud SQL (Postgres) is the production baseline**. The app can fall back to SQLite for local/demo use, but public Cloud Run deployments are expected to use Cloud SQL.
 
 Runtime behavior:
 - when `DATABASE_URL` is set to a Postgres DSN, API/ingest/retrieval paths use Postgres at runtime
@@ -14,14 +16,14 @@ Runtime behavior:
 - Cloud Run service deployed from this repo
 - Private deployment (`PUBLIC_DEMO_MODE=0`) recommended for mutable data
 
-## Enable Cloud SQL
+## Cloud SQL in Terraform
 
-Set Terraform vars:
+Cloud SQL is **enabled by default** in `infra/gcp/cloud_run_demo` via `enable_cloudsql = true` (default).
+
+If you want to disable Cloud SQL (cost/experimentation), set:
 
 ```hcl
-enable_cloudsql   = true
-cloudsql_database = "gkp"
-cloudsql_user     = "gkp_app"
+enable_cloudsql = false
 ```
 
 Apply:
@@ -30,7 +32,7 @@ Apply:
 make apply ENV=dev
 ```
 
-Expected outcome:
+When Cloud SQL is enabled, expected outcome:
 - Cloud SQL instance + DB + user created
 - Cloud Run mounts Cloud SQL socket at `/cloudsql`
 - `DATABASE_URL` injected into Cloud Run env
@@ -41,10 +43,14 @@ Expected outcome:
 Repository migration SQL:
 - `app/migrations/postgres/001_init.sql`
 
+Hardening roadmap/spec:
+- `docs/SPECS/CLOUDSQL_HARDENING.md`
+
 For local verification with Postgres:
 
 ```bash
-uv run pytest tests/test_cloudsql_postgres.py -q
+make db-up
+make test-postgres
 ```
 
 The test:
@@ -78,7 +84,7 @@ After deploy:
   - lower Cloud Run max instances or add connection pooling layer
   - scale Cloud SQL tier
 
-## Rollback
+## Disable / rollback
 
 1. Set `enable_cloudsql = false`
 2. Apply Terraform

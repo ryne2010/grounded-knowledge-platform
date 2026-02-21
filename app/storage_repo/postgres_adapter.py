@@ -2,10 +2,24 @@ from __future__ import annotations
 
 import time
 import uuid
+
+import numpy as np
 from importlib import import_module
 from pathlib import Path
 
 from .base import RepoCitation, RepoCounts
+
+from ..migrations_runner import apply_postgres_migrations
+
+def _bytes_to_pgvector_literal(vec: bytes) -> str:
+    arr = np.frombuffer(vec, dtype=np.float32)
+    n = float(np.linalg.norm(arr))
+    if n > 0:
+        arr = arr / n
+    vals = arr.tolist()
+    return "[" + ",".join(str(float(x)) for x in vals) + "]"
+
+
 
 
 class PostgresRepository:
@@ -22,13 +36,9 @@ class PostgresRepository:
         return psycopg.connect(self.database_url, row_factory=dict_row)
 
     def init_schema(self) -> None:
-        sql_path = Path(__file__).resolve().parents[1] / "migrations" / "postgres" / "001_init.sql"
-        sql = sql_path.read_text(encoding="utf-8")
         with self._connect() as conn:
-            with conn.cursor() as cur:
-                # Execute as one script so procedural blocks (e.g. DO $$ ... $$) remain intact.
-                cur.execute(sql)
-            conn.commit()
+            apply_postgres_migrations(conn)
+
 
     def ingest_document(
         self,
@@ -84,8 +94,8 @@ class PostgresRepository:
                         (chunk_id, doc_id, idx, text),
                     )
                     cur.execute(
-                        "INSERT INTO embeddings (chunk_id, dim, vec) VALUES (%s, %s, %s)",
-                        (chunk_id, embedding_dim, embeddings[idx]),
+                        "INSERT INTO embeddings (chunk_id, dim, vec) VALUES (%s, %s, %s::vector)",
+                        (chunk_id, embedding_dim, _bytes_to_pgvector_literal(embeddings[idx])),
                     )
 
                 cur.execute(

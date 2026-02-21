@@ -81,6 +81,7 @@ class Settings:
     public_demo_mode: bool
     auth_mode: str  # none | api_key | oidc
     allow_uploads: bool
+    allow_connectors: bool
     allow_eval: bool
 
     # Developer / internal-only features (never enable on a public URL)
@@ -169,6 +170,8 @@ def load_settings() -> Settings:
 
     # These are intentionally opt-in (even in private mode).
     allow_uploads = _env_bool("ALLOW_UPLOADS", False)
+    # Connector ingestion (e.g. GCS sync). Defaults to ALLOW_UPLOADS if unspecified.
+    allow_connectors = _env_bool("ALLOW_CONNECTORS", allow_uploads)
     allow_eval = _env_bool("ALLOW_EVAL", False)
 
     # These should never be enabled on a public URL.
@@ -246,6 +249,7 @@ def load_settings() -> Settings:
         public_demo_mode=public_demo_mode,
         auth_mode=auth_mode,
         allow_uploads=allow_uploads,
+        allow_connectors=allow_connectors,
         allow_eval=allow_eval,
         allow_chunk_view=allow_chunk_view,
         allow_doc_delete=allow_doc_delete,
@@ -299,6 +303,7 @@ def load_settings() -> Settings:
             public_demo_mode=True,
             auth_mode="none",
             allow_uploads=False,
+            allow_connectors=False,
             allow_eval=False,
             allow_chunk_view=False,
             allow_doc_delete=False,

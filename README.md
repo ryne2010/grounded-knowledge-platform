@@ -3,11 +3,26 @@
 A small, safety-minded, citation-first **RAG** (retrieval augmented generation) reference app.
 
 - **FastAPI** backend + **React (Vite)** frontend
-- **SQLite** for doc/chunk storage + embeddings
-- optional **Cloud SQL (Postgres)** adapter path for durable persistence
+- **Postgres** storage (Cloud SQL baseline for production); **SQLite** fallback for local/demo
+- **Cloud SQL (Postgres)** wiring for Cloud Run deployments
 - **Hybrid retrieval** (lexical + vector)
 - **Grounding enforced**: answers must be supported by retrieved sources (or the system refuses)
 - **Public demo mode**: read-only + extractive answering + rate limiting
+
+## Documentation map
+
+- Agent entrypoint: `AGENTS.md`
+- Product: `docs/PRODUCT/PRODUCT_BRIEF.md`, `docs/PRODUCT/FEATURE_MATRIX.md`
+- UX journeys + demo script: `docs/PRODUCT/PERSONAS_AND_JOURNEYS.md`, `docs/PRODUCT/DEMO_SCRIPT.md`
+- Portfolio alignment (what this proves): `docs/PRODUCT/PORTFOLIO_ALIGNMENT.md`
+- Architecture (C4 + models): `docs/ARCHITECTURE/README.md`
+- Durable architecture rules: `docs/DOMAIN.md`, `docs/DESIGN.md`, `docs/CONTRACTS.md`
+- Backlog: `docs/BACKLOG/EPICS.md`, `docs/BACKLOG/MILESTONES.md`
+- Workflow: `docs/WORKFLOW.md`
+- Deployment model: `docs/DEPLOYMENT_MODEL.md`
+- Roadmap: `docs/ROADMAP.md`
+- Specs: `docs/SPECS/`
+- Runbooks: `docs/RUNBOOKS/`
 
 This repo is intentionally designed to run well:
 
@@ -33,15 +48,26 @@ Prereqs:
 cp .env.example .env
 ```
 
+For local development with **Postgres + Ollama** (recommended for parity with production), use:
+
+```bash
+cp .env.local.example .env
+make db-up
+```
+
 By default `.env.example` enables `PUBLIC_DEMO_MODE=1` (read-only). For local/private development, disable it and enable uploads:
 
 ```bash
 # .env
 PUBLIC_DEMO_MODE=0
 ALLOW_UPLOADS=1
+ALLOW_CONNECTORS=1
 ALLOW_EVAL=1
-ALLOW_CHUNK_VIEW=1
-ALLOW_DOC_DELETE=1
+
+# Dangerous / internal-only (never enable on a public URL)
+ALLOW_CHUNK_VIEW=0
+ALLOW_DOC_DELETE=0
+
 CITATIONS_REQUIRED=1
 BOOTSTRAP_DEMO_CORPUS=1
 ```
@@ -156,6 +182,8 @@ uv run python -m app.cli ingest-folder data/demo_corpus --classification interna
 
 This repo ships a production Dockerfile that builds the UI and serves it from the FastAPI container.
 
+Production baseline: **Cloud Run + Cloud SQL (Postgres)** with a public, read-only demo posture by default.
+
 High level:
 
 - build container
@@ -167,6 +195,7 @@ See:
 - `infra/gcp/README.md`
 - `Makefile` targets: `make build`, `make deploy`
 - Cloud SQL runbook: `docs/RUNBOOKS/CLOUDSQL.md`
+- GCS connector runbook (private deployments): `docs/RUNBOOKS/CONNECTORS_GCS.md`
 
 ---
 

@@ -5,12 +5,17 @@
 1.  Read `harness.toml` to learn **how to validate changes** in this
     repo.
 2.  Read the durable source of truth:
+    -   `docs/PRODUCT/PRODUCT_BRIEF.md` (product intent + constraints)
+    -   `docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md` (non-negotiables)
+    -   `docs/ARCHITECTURE/README.md` (C4 diagrams + models)
     -   `docs/DOMAIN.md` (what we're building and why)
     -   `docs/DESIGN.md` (architecture and dependency rules)
     -   `docs/CONTRACTS.md` (interfaces, invariants, compatibility)
 3.  Follow `docs/WORKFLOW.md` for the standard execution loop.
 4.  Use `agents/tasks/` to choose a task template (feature, bugfix,
     refactor, docs).
+    - Optional: use `agents/subagents/` prompts to focus an agent on a specific workstream
+      (frontend UX, Postgres hardening, GCS connector, etc.).
 5.  Validate before you finalize:
     -   `python scripts/harness.py lint`
     -   `python scripts/harness.py test`

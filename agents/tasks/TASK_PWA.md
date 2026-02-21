@@ -63,6 +63,12 @@ Align the Web UI with the “offline-first PWA” capabilities described in the 
   - Public demo mode must remain safe and read-only.
   - Do not cache sensitive endpoints.
 
+## Acceptance criteria
+
+- The UI is installable as a PWA (manifest + icons).
+- When offline, the app shell loads and the UI shows a clear offline banner.
+- API-backed actions fail gracefully without breaking navigation.
+
 ## Validation
 
 - `make web-build`

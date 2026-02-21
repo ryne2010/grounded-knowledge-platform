@@ -2,6 +2,10 @@
 
 Use this format for final responses and PR descriptions.
 
+## Task(s) addressed
+
+-   TODO (link task file(s), e.g. `agents/tasks/TASK_UI_UX_POLISH.md`)
+
 ## What changed?
 
 -   TODO
@@ -17,6 +21,10 @@ Use this format for final responses and PR descriptions.
     -   `python scripts/harness.py test`
     -   `python scripts/harness.py typecheck` (if applicable)
 -   Tests added/updated: TODO
+
+## Docs/contracts updated
+
+-   TODO (specs, ADRs, runbooks, API contracts)
 
 ## Risks / rollout notes
 

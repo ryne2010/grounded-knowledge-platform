@@ -1,5 +1,8 @@
 # Task: Add OpenTelemetry tracing + metrics
 
+Spec: `docs/SPECS/OBSERVABILITY_OPS.md`
+Suggested sub-agent: `agents/subagents/backend_fastapi_platform.md`
+
 Owner: @codex
 
 ## Goal
@@ -62,3 +65,15 @@ OR
   - env vars
   - Cloud Run setup
   - what is (and is not) recorded
+
+## Acceptance criteria
+
+- When `OTEL_ENABLED=0`, overhead is minimal and no exporters are initialized.
+- When `OTEL_ENABLED=1`, `/api/query` produces a trace with at least one retrieval span.
+- Logs can be correlated via `request_id` (and `trace_id` when enabled).
+
+## Validation
+
+- `python scripts/harness.py lint`
+- `python scripts/harness.py typecheck`
+- `python scripts/harness.py test`

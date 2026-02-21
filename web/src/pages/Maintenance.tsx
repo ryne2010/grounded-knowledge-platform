@@ -61,7 +61,7 @@ export function MaintenancePage() {
     [],
   )
 
-  const demo = metaQuery.data?.public_demo_mode ?? false
+  const publicReadOnlyMode = metaQuery.data?.public_demo_mode ?? false
 
   return (
     <Page title="Maintenance" description="Read-only operational helpers (no destructive actions)">
@@ -71,7 +71,7 @@ export function MaintenancePage() {
             <CardTitle className="flex items-center gap-2">
               Expired docs
               {expiredQuery.isLoading ? <Spinner /> : <Badge variant="secondary">{expired.length}</Badge>}
-              {demo && <Badge variant="warning">demo</Badge>}
+              {publicReadOnlyMode && <Badge variant="warning">public read-only</Badge>}
             </CardTitle>
             <CardDescription>
               This endpoint is read-only. To actually delete expired docs, use the CLI:

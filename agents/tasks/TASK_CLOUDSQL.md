@@ -1,65 +1,60 @@
-# Task: Migrate SQLite index to Cloud SQL (Postgres + pgvector)
+# Task: Harden Cloud SQL (Postgres) baseline (pgvector required)
+
+Spec: `docs/SPECS/CLOUDSQL_HARDENING.md`
 
 Owner: @codex
+Suggested sub-agent: `agents/subagents/postgres_hardening.md`
 
 ## Goal
 
-Make storage **durable** and production-grade for Cloud Run by migrating from ephemeral SQLite to:
+Cloud SQL (Postgres) is the **production persistence baseline** for this repo (Cloud Run demo + client deployments).
 
-- Cloud SQL Postgres
-- `pgvector` for embeddings (optional, but recommended)
+As of this iteration, **pgvector is required** for Postgres deployments (and local Postgres should mirror that).
 
-## Requirements
+This task is about hardening the Postgres path so it feels production-grade:
 
-### Data model
+- predictable migrations
+- indexes + query plans that scale beyond the demo corpus
+- DB-native hybrid retrieval (FTS + pgvector)
+- repeatable local integration testing
 
-- Port existing tables:
-  - docs
-  - chunks
-  - embeddings
-  - ingest_events
-  - meta
+## Current state
 
-### Access layer
+- `DATABASE_URL` switches the backend to Postgres
+- Postgres schema is created from SQL migrations
+- Local docker image should include pgvector (parity with Cloud SQL)
 
-- introduce a storage interface (repo pattern) so callers do not depend on SQLite SQL
-- provide concrete implementations:
-  - SQLite (existing)
-  - Postgres (new)
+## Deliverables (what “done” means)
 
-### Migrations
+1. **Migrations**
+   - `schema_migrations` table tracks applied SQL files
+   - migrations applied in order on startup and in CI
+2. **Retrieval**
+   - lexical retrieval uses Postgres FTS + GIN index
+   - vector retrieval uses pgvector cosine distance + production-grade index
+3. **Testing**
+   - docker-based integration tests use a pgvector-enabled Postgres image by default
+4. **Docs**
+   - runbook for local Postgres + Cloud SQL setup
+   - env var reference includes pgvector expectations
 
-- Alembic or SQL migration scripts
-- ability to bootstrap demo corpus into Postgres
+## Follow-ons (later)
 
-### Deployment
+- connection pooling (pgbouncer) for high concurrency
+- query plan profiling and tuning knobs (HNSW/IVFFlat parameters)
 
-- Terraform updates:
-  - create Cloud SQL instance + database + user
-  - connect Cloud Run to Cloud SQL via connector
-  - configure `DATABASE_URL`
+## Acceptance criteria
 
-### Performance
+- Postgres migrations are deterministic and tracked via `schema_migrations`.
+- Hybrid retrieval works end-to-end on Postgres:
+  - FTS candidate generation is indexed (GIN)
+  - pgvector similarity search uses a production-grade index (HNSW)
+- Local Postgres integration tests run against a pgvector-enabled image.
 
-- indexes for:
-  - docs.updated_at
-  - ingest_events.ingested_at
-  - FTS equivalent (either pg_trgm, tsvector, or keep lexical search in app)
+## Validation
 
-## Non-goals (for first iteration)
+- `python scripts/harness.py lint`
+- `python scripts/harness.py typecheck`
+- `python scripts/harness.py test`
+- `make test-postgres`
 
-- multi-tenant isolation
-- document blob storage in GCS (can be follow-up)
-
-## Tests
-
-- add integration tests with a local Postgres container
-- verify:
-  - ingest creates doc + chunks + embeddings + ingest event
-  - query returns citations
-  - delete cascades
-
-## Docs
-
-- update README with persistence story
-- add `docs/RUNBOOKS/CLOUDSQL.md`

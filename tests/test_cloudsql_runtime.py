@@ -80,7 +80,7 @@ def test_runtime_uses_postgres_when_database_url_is_set(tmp_path):
 
     host_port = _free_port()
     container = f"gkp-runtime-pg-{uuid.uuid4().hex[:8]}"
-    image = os.getenv("GKP_POSTGRES_IMAGE", "postgres:16-alpine")
+    image = os.getenv("GKP_POSTGRES_IMAGE", "pgvector/pgvector:0.8.0-pg16-bookworm")
     run_cmd = [
         "docker",
         "run",

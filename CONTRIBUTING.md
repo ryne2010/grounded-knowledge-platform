@@ -19,8 +19,19 @@ intended behavior.
 
 ## Tooling setup
 
-- Python (preferred): `uv pip install -r requirements-dev.txt`
-- Node/TS (preferred): `pnpm install`
+Preferred (reproducible):
+
+- Python: `uv sync --dev` (installs app + dev deps from `uv.lock`)
+- Web: `cd web && corepack pnpm install --frozen-lockfile`
+
+Convenience wrappers:
+
+- `make py-install`
+- `make web-install`
+
+Compatibility (tooling-only):
+
+- `uv pip install -r requirements-dev.txt`
 
 If your repo uses Go or Rust, the harness will also run `go` / `cargo` commands when `go.mod` / `Cargo.toml` are present.
 

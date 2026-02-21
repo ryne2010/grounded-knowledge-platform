@@ -37,5 +37,7 @@ source = "git::https://github.com/YOUR_ORG/terraform-gcp-platform-baseline.git//
 
 ## Cost note
 
-The default demo configuration is scale-to-zero and caps max instances. Enabling a
-Serverless VPC Access connector is optional and is **not free**.
+The default demo configuration is scale-to-zero and caps max instances.
+
+Note: this repo treats **Cloud SQL (Postgres)** as the production persistence baseline, which is not free.
+Enabling a Serverless VPC Access connector is optional and is **not free**.

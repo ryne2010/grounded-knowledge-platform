@@ -11,7 +11,7 @@ This project is a small but production-minded **RAG** reference implementation.
 Key modules:
 
 - `app/main.py`: HTTP API + static SPA hosting
-- `app/storage.py`: SQLite schema + persistence helpers
+- `app/storage.py`: storage schema + persistence helpers (SQLite + Postgres)
 - `app/ingestion.py`: text extraction + chunking + embedding + lineage
 - `app/retrieval.py`: hybrid retrieval (lexical + vector)
 - `app/answering.py`: answer provider selection (extractive/OpenAI/Gemini/etc)
@@ -20,7 +20,7 @@ Key modules:
 
 Data plane:
 
-- SQLite stores docs/chunks/embeddings/ingest events (plus lightweight `meta` key/value state like the "index signature")
+- Postgres (Cloud SQL) stores docs/chunks/embeddings/ingest events in production; SQLite is a local/demo fallback (plus lightweight `meta` key/value state like the "index signature")
 - Retrieval loads corpus into an in-process cache (per worker)
 
 ### Frontend (React + Vite)
@@ -87,11 +87,11 @@ Defense:
 
 - container builds the web bundle and serves it via FastAPI
 - Cloud Run provides ingress + autoscaling
-- SQLite is stored on the container filesystem
+- Cloud SQL (Postgres) is the production persistence baseline
 
 Important note:
 
-- Cloud Run filesystem is **ephemeral**. For long-lived production knowledge bases, swap SQLite for a persistent store (Cloud SQL, AlloyDB, etc.) and/or move blobs to Cloud Storage.
+- Cloud Run filesystem is **ephemeral**. If you run SQLite on Cloud Run, remember the filesystem is ephemeral; for production persistence, use Cloud SQL (Postgres) and/or move blobs to Cloud Storage.
 
 ---
 

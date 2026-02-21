@@ -39,11 +39,17 @@ EXCLUDE_DIR_NAMES = {
     ".terraform",
     ".idea",
     ".vscode",
+    ".cache",
+    ".history",
+    ".uv",
 }
 
 # Exclude by filename (not full path).
 EXCLUDE_FILE_NAMES = {
     ".DS_Store",
+    # This file is injected into the ZIP at package time.
+    # If it exists in the working tree (from a prior snapshot), exclude it to avoid duplicate entries.
+    "DIST_INFO.json",
 }
 
 # Exclude by glob (matches filename OR posix relpath).

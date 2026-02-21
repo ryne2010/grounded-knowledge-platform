@@ -37,3 +37,7 @@ When handing work between agents, include:
 -   Validation status (commands run + results)
 
 This prevents context loss and reduces rework.
+
+## Optional: sub-agent prompts
+
+`subagents/` contains optional prompts for more specialized workstreams (frontend UX, Postgres hardening, connectors).

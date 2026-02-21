@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from .config import settings
+from .migrations_runner import apply_postgres_migrations
 
 
 @dataclass(frozen=True)
@@ -285,11 +286,8 @@ def init_db(conn: Any) -> None:
         key = settings.database_url or "__postgres__"
         if key in _PG_SCHEMA_INITIALIZED:
             return
-        sql_path = Path(__file__).resolve().parent / "migrations" / "postgres" / "001_init.sql"
-        sql = sql_path.read_text(encoding="utf-8")
-        with conn.cursor() as cur:
-            cur.execute(sql)
-        conn.commit()
+        # Apply SQL migrations (tracked in schema_migrations).
+        apply_postgres_migrations(conn)
         _PG_SCHEMA_INITIALIZED.add(key)
         return
 
@@ -739,7 +737,7 @@ def insert_embeddings(conn: Any, rows: Iterable[tuple[str, int, bytes]]) -> None
             cur.executemany(
                 """
                 INSERT INTO embeddings (chunk_id, dim, vec)
-                VALUES (%s, %s, %s)
+                VALUES (%s, %s, %s::vector)
                 ON CONFLICT (chunk_id) DO UPDATE SET
                   dim=excluded.dim,
                   vec=excluded.vec

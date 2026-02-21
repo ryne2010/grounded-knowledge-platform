@@ -214,7 +214,7 @@ export function IngestPage() {
               {!uploadsEnabled ? (
                 <div className="rounded-md border bg-muted p-3 text-sm">
                   Uploads are disabled for this deployment.
-                  {meta?.public_demo_mode ? ' (Public demo mode is read-only.)' : ''}
+                  {meta?.public_demo_mode ? ' (Public read-only mode is enforced.)' : ''}
                 </div>
               ) : null}
 
@@ -384,7 +384,7 @@ export function IngestPage() {
               {!uploadsEnabled ? (
                 <div className="rounded-md border bg-muted p-3 text-sm">
                   Text ingestion is disabled for this deployment.
-                  {meta?.public_demo_mode ? ' (Public demo mode is read-only.)' : ''}
+                  {meta?.public_demo_mode ? ' (Public read-only mode is enforced.)' : ''}
                 </div>
               ) : null}
 
