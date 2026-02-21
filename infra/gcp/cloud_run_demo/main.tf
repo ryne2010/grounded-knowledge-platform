@@ -34,7 +34,6 @@ locals {
     RATE_LIMIT_MAX_REQUESTS = "30"
   }
 
-  cloudsql_connection_name = var.enable_cloudsql ? google_sql_database_instance.cloudsql[0].connection_name : null
   cloudsql_database_url = var.enable_cloudsql ? format(
     "postgresql://%s:%s@/%s?host=/cloudsql/%s",
     var.cloudsql_user,
