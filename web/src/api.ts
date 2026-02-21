@@ -4,6 +4,7 @@ export type MetaResponse = {
   auth_mode?: string
   database_backend?: string
   uploads_enabled: boolean
+  connectors_enabled?: boolean
   eval_enabled: boolean
   chunk_view_enabled: boolean
   doc_delete_enabled: boolean
@@ -142,6 +143,47 @@ export type IngestResponse = {
   num_chunks: number
   embedding_dim: number
   content_sha256: string
+}
+
+export type GcsSyncRequest = {
+  bucket: string
+  prefix?: string
+  max_objects?: number
+  dry_run?: boolean
+  classification?: string
+  retention?: string
+  tags?: string[]
+  notes?: string
+}
+
+export type GcsSyncResult = {
+  gcs_uri: string
+  action?: string
+  size?: number
+  updated?: string | null
+  generation?: string | null
+  doc_id?: string
+  doc_version?: number
+  changed?: boolean
+  num_chunks?: number
+  content_sha256?: string
+  error?: string
+}
+
+export type GcsSyncResponse = {
+  run_id: string
+  started_at: number
+  finished_at: number
+  bucket: string
+  prefix: string
+  dry_run: boolean
+  max_objects: number
+  scanned: number
+  skipped_unsupported: number
+  ingested: number
+  changed: number
+  results: GcsSyncResult[]
+  errors?: string[]
 }
 
 export type QueryCitation = {
@@ -447,6 +489,8 @@ export const api = {
   },
 
   ingestText: (req: IngestTextRequest) => postJson<IngestTextRequest, IngestResponse>('/api/ingest/text', req),
+
+  gcsSync: (req: GcsSyncRequest) => postJson<GcsSyncRequest, GcsSyncResponse>('/api/connectors/gcs/sync', req),
 
   ingestFile: async (opts: {
     file: File

@@ -2,7 +2,8 @@ import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
-import { api, type IngestEventView } from '../api'
+import { api, type GcsSyncResponse, type IngestEventView } from '../api'
+import { getConnectorAvailability, summarizeGcsSyncRun } from '../lib/gcsConnector'
 import { formatUnixSeconds } from '../lib/time'
 import {
   Badge,
@@ -28,6 +29,9 @@ export function IngestPage() {
   const metaQuery = useQuery({ queryKey: ['meta'], queryFn: api.meta, staleTime: 30_000 })
   const meta = metaQuery.data
   const uploadsEnabled = Boolean(meta?.uploads_enabled)
+  const connectorAvailability = getConnectorAvailability(meta)
+  const connectorsEnabled = connectorAvailability.enabled
+  const authMode = String(meta?.auth_mode ?? 'none')
 
   function parseTags(raw: string): string[] | undefined {
     const tags = raw
@@ -75,6 +79,35 @@ export function IngestPage() {
       await qc.invalidateQueries({ queryKey: ['recent-ingest-events'] })
     },
   })
+
+  // ---- GCS connector sync ----
+  const [gcsBucket, setGcsBucket] = React.useState('')
+  const [gcsPrefix, setGcsPrefix] = React.useState('')
+  const [gcsMaxObjects, setGcsMaxObjects] = React.useState(200)
+  const [gcsDryRun, setGcsDryRun] = React.useState(true)
+  const [gcsClassification, setGcsClassification] = React.useState('internal')
+  const [gcsRetention, setGcsRetention] = React.useState('none')
+  const [gcsTags, setGcsTags] = React.useState('')
+  const [gcsNotes, setGcsNotes] = React.useState('')
+  const [latestSyncRun, setLatestSyncRun] = React.useState<GcsSyncResponse | null>(null)
+  const [syncCopyStatus, setSyncCopyStatus] = React.useState<'idle' | 'copied' | 'failed'>('idle')
+
+  const gcsSyncMutation = useMutation({
+    mutationFn: api.gcsSync,
+    onSuccess: async (run) => {
+      setLatestSyncRun(run)
+      setSyncCopyStatus('idle')
+      await qc.invalidateQueries({ queryKey: ['docs'] })
+      await qc.invalidateQueries({ queryKey: ['stats'] })
+      await qc.invalidateQueries({ queryKey: ['ingest-events'] })
+      await qc.invalidateQueries({ queryKey: ['recent-ingest-events'] })
+    },
+  })
+
+  const gcsSummary = React.useMemo(
+    () => (latestSyncRun ? summarizeGcsSyncRun(latestSyncRun) : null),
+    [latestSyncRun],
+  )
 
   // ---- Ingest events feed ----
   const [q, setQ] = React.useState('')
@@ -191,6 +224,33 @@ export function IngestPage() {
     ],
     [],
   )
+
+  async function copyLatestRunJson() {
+    if (!latestSyncRun || typeof navigator === 'undefined' || !navigator.clipboard) {
+      setSyncCopyStatus('failed')
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(latestSyncRun, null, 2))
+      setSyncCopyStatus('copied')
+      window.setTimeout(() => setSyncCopyStatus('idle'), 1500)
+    } catch {
+      setSyncCopyStatus('failed')
+    }
+  }
+
+  function exportLatestRunJson() {
+    if (!latestSyncRun || typeof window === 'undefined') return
+    const payload = JSON.stringify(latestSyncRun, null, 2)
+    const blob = new Blob([payload], { type: 'application/json' })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `gcs-sync-${latestSyncRun.run_id}.json`
+    a.click()
+    window.URL.revokeObjectURL(url)
+  }
 
   const classifications = meta?.doc_classifications ?? ['public', 'internal', 'confidential', 'restricted']
   const retentions = meta?.doc_retentions ?? ['none', '30d', '90d', '1y', 'indefinite']
@@ -525,6 +585,260 @@ export function IngestPage() {
             </CardContent>
           </Card>
         </div>
+
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>GCS connector sync (admin)</CardTitle>
+            <CardDescription>
+              Run a one-off sync from Cloud Storage. Sync is add/update only and never deletes existing docs.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="rounded-md border bg-muted p-3 text-sm">{connectorAvailability.message}</div>
+
+            {authMode !== 'none' ? (
+              <div className="rounded-md border bg-muted p-3 text-xs text-muted-foreground">
+                This action requires an admin principal when auth is enabled.
+              </div>
+            ) : null}
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="gcsBucket">Bucket</Label>
+                <Input
+                  id="gcsBucket"
+                  value={gcsBucket}
+                  onChange={(e) => setGcsBucket(e.target.value)}
+                  placeholder="my-bucket"
+                  disabled={!connectorsEnabled}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="gcsPrefix">Prefix (optional)</Label>
+                <Input
+                  id="gcsPrefix"
+                  value={gcsPrefix}
+                  onChange={(e) => setGcsPrefix(e.target.value)}
+                  placeholder="knowledge/"
+                  disabled={!connectorsEnabled}
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="gcsMaxObjects">Max objects (1-5000)</Label>
+                <Input
+                  id="gcsMaxObjects"
+                  type="number"
+                  min={1}
+                  max={5000}
+                  value={String(gcsMaxObjects)}
+                  onChange={(e) => {
+                    const parsed = Number.parseInt(e.target.value, 10)
+                    if (!Number.isFinite(parsed)) {
+                      setGcsMaxObjects(200)
+                      return
+                    }
+                    setGcsMaxObjects(Math.max(1, Math.min(5000, parsed)))
+                  }}
+                  disabled={!connectorsEnabled}
+                />
+              </div>
+              <div className="flex items-end gap-2 pb-2">
+                <Checkbox
+                  id="gcsDryRun"
+                  checked={gcsDryRun}
+                  onChange={(e) => setGcsDryRun(e.currentTarget.checked)}
+                  disabled={!connectorsEnabled}
+                />
+                <Label htmlFor="gcsDryRun">Dry run (no writes)</Label>
+              </div>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="gcsClassification">Classification (optional)</Label>
+                <Input
+                  id="gcsClassification"
+                  value={gcsClassification}
+                  onChange={(e) => setGcsClassification(e.target.value)}
+                  list="classifications"
+                  disabled={!connectorsEnabled}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="gcsRetention">Retention (optional)</Label>
+                <Input
+                  id="gcsRetention"
+                  value={gcsRetention}
+                  onChange={(e) => setGcsRetention(e.target.value)}
+                  list="retentions"
+                  disabled={!connectorsEnabled}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="gcsTags">Tags (optional)</Label>
+              <Input
+                id="gcsTags"
+                value={gcsTags}
+                onChange={(e) => setGcsTags(e.target.value)}
+                placeholder="comma,separated,tags"
+                disabled={!connectorsEnabled}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="gcsNotes">Notes (optional)</Label>
+              <Input
+                id="gcsNotes"
+                value={gcsNotes}
+                onChange={(e) => setGcsNotes(e.target.value)}
+                placeholder="Operator note for this run"
+                disabled={!connectorsEnabled}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={() =>
+                  gcsSyncMutation.mutate({
+                    bucket: gcsBucket.trim(),
+                    prefix: gcsPrefix.trim() || undefined,
+                    max_objects: Math.max(1, Math.min(5000, gcsMaxObjects)),
+                    dry_run: gcsDryRun,
+                    classification: gcsClassification.trim() || undefined,
+                    retention: gcsRetention.trim() || undefined,
+                    tags: parseTags(gcsTags),
+                    notes: gcsNotes.trim() || undefined,
+                  })
+                }
+                disabled={!connectorsEnabled || !gcsBucket.trim() || gcsSyncMutation.isPending}
+              >
+                {gcsSyncMutation.isPending ? 'Running sync…' : gcsDryRun ? 'Run dry sync' : 'Run sync'}
+              </Button>
+
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setGcsPrefix('')
+                  setGcsMaxObjects(200)
+                  setGcsDryRun(true)
+                  setGcsClassification('internal')
+                  setGcsRetention('none')
+                  setGcsTags('')
+                  setGcsNotes('')
+                  setLatestSyncRun(null)
+                  setSyncCopyStatus('idle')
+                }}
+                disabled={!connectorsEnabled || gcsSyncMutation.isPending}
+              >
+                Reset
+              </Button>
+            </div>
+
+            {gcsSyncMutation.isError ? (
+              <div className="rounded-md border bg-destructive/10 p-3 text-sm">
+                {(gcsSyncMutation.error as Error).message}
+              </div>
+            ) : null}
+
+            {latestSyncRun ? (
+              <div className="space-y-3 rounded-md border bg-muted p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm">
+                    <div className="font-medium">Last run: {latestSyncRun.run_id}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {latestSyncRun.bucket}
+                      {latestSyncRun.prefix ? ` / ${latestSyncRun.prefix}` : ''}
+                      {' · '}
+                      started {formatUnixSeconds(latestSyncRun.started_at)}
+                      {' · '}
+                      finished {formatUnixSeconds(latestSyncRun.finished_at)}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" onClick={copyLatestRunJson}>
+                      Copy JSON
+                    </Button>
+                    <Button variant="outline" onClick={exportLatestRunJson}>
+                      Export JSON
+                    </Button>
+                  </div>
+                </div>
+
+                {syncCopyStatus === 'copied' ? (
+                  <div className="text-xs text-muted-foreground">Copied run JSON to clipboard.</div>
+                ) : null}
+                {syncCopyStatus === 'failed' ? (
+                  <div className="text-xs text-destructive">Copy failed. Use Export JSON instead.</div>
+                ) : null}
+
+                {gcsSummary ? (
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <Badge variant="outline">scanned: {gcsSummary.scanned}</Badge>
+                    <Badge variant="outline">ingested: {gcsSummary.ingested}</Badge>
+                    <Badge variant="outline">changed: {gcsSummary.changed}</Badge>
+                    <Badge variant="outline">unchanged: {gcsSummary.unchanged}</Badge>
+                    <Badge variant="outline">would_ingest: {gcsSummary.wouldIngest}</Badge>
+                    <Badge variant="outline">skipped_unsupported: {gcsSummary.skippedUnsupported}</Badge>
+                    <Badge variant="outline">dry_run: {String(latestSyncRun.dry_run)}</Badge>
+                  </div>
+                ) : null}
+
+                {gcsSummary && gcsSummary.errors.length > 0 ? (
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium">Errors</div>
+                    <ul className="list-disc space-y-1 pl-5 text-xs">
+                      {gcsSummary.errors.map((err) => (
+                        <li key={err}>{err}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">Results ({latestSyncRun.results.length})</div>
+                  <div className="max-h-64 overflow-auto rounded border">
+                    <table className="min-w-full text-xs">
+                      <thead className="bg-muted/60">
+                        <tr className="text-left">
+                          <th className="px-3 py-2">Object</th>
+                          <th className="px-3 py-2">Status</th>
+                          <th className="px-3 py-2">Doc</th>
+                          <th className="px-3 py-2">Chunks</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {latestSyncRun.results.map((row) => {
+                          const status = row.action === 'would_ingest' ? 'would_ingest' : row.changed ? 'changed' : 'unchanged'
+                          return (
+                            <tr key={`${row.gcs_uri}:${row.doc_id ?? row.action ?? row.content_sha256 ?? ''}`} className="border-t">
+                              <td className="px-3 py-2 font-mono">{row.gcs_uri}</td>
+                              <td className="px-3 py-2">{status}</td>
+                              <td className="px-3 py-2">
+                                {row.doc_id ? (
+                                  <Link to="/docs/$docId" params={{ docId: row.doc_id }} className="underline">
+                                    {row.doc_id}
+                                  </Link>
+                                ) : (
+                                  '—'
+                                )}
+                              </td>
+                              <td className="px-3 py-2">{row.num_chunks ?? '—'}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
 
         <datalist id="classifications">
           {classifications.map((c) => (
