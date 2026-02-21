@@ -54,6 +54,18 @@ variable "max_instances" {
   default     = 2
 }
 
+variable "max_request_concurrency" {
+  type        = number
+  description = "Maximum concurrent requests served by a single Cloud Run instance."
+  default     = 40
+}
+
+variable "request_timeout_seconds" {
+  type        = number
+  description = "Request timeout in seconds for Cloud Run requests."
+  default     = 30
+}
+
 variable "ingress" {
   type        = string
   description = "Ingress setting (e.g., INGRESS_TRAFFIC_ALL, INGRESS_TRAFFIC_INTERNAL_ONLY)."

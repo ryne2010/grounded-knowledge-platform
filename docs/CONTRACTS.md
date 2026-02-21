@@ -80,6 +80,7 @@ These should be **off for public URLs**.
 ### Upload hardening
 
 - `MAX_UPLOAD_BYTES` (default: `10_000_000`)
+- `MAX_QUERY_PAYLOAD_BYTES` (default: `32_768`)
 
 ### Embeddings
 
@@ -161,6 +162,7 @@ Shape (stable keys):
 - `rate_limit_max_requests: number`
 - `api_docs_url: string`
 - `max_upload_bytes: number`
+- `max_query_payload_bytes: number`
 - `llm_provider: string`
 - `embeddings_backend: string`
 - `ocr_enabled: bool`
