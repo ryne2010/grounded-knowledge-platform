@@ -39,7 +39,7 @@ from .observability import (
     request_id_from_headers,
 )
 from .ratelimit import SlidingWindowRateLimiter
-from .retrieval import invalidate_cache, retrieve
+from .retrieval import RetrievedChunk, invalidate_cache, retrieve
 from .safety import detect_prompt_injection
 from .storage import (
     connect,
@@ -1381,6 +1381,142 @@ def _stream_text_chunks(text: str) -> list[str]:
     return [raw]
 
 
+def _load_doc_map(doc_ids: set[str] | None = None) -> dict[str, Any]:
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        docs = list_docs(conn)
+    if not doc_ids:
+        return {d.doc_id: d for d in docs}
+    return {d.doc_id: d for d in docs if d.doc_id in doc_ids}
+
+
+def _retrieval_debug_payload(retrieved: list[RetrievedChunk], *, include_text: bool) -> list[dict[str, Any]]:
+    payload: list[dict[str, Any]] = []
+    for r in retrieved:
+        item: dict[str, Any] = {
+            "chunk_id": r.chunk_id,
+            "doc_id": r.doc_id,
+            "idx": r.idx,
+            "score": r.score,
+            "lexical_score": r.lexical_score,
+            "vector_score": r.vector_score,
+            "text_preview": r.text[:240],
+        }
+        if include_text:
+            item["text"] = r.text
+        payload.append(item)
+    return payload
+
+
+def _signal_summary(r: RetrievedChunk) -> str:
+    lex = float(r.lexical_score)
+    vec = float(r.vector_score)
+    if lex >= 0.35 and vec >= 0.35:
+        return "keyword + semantic relevance"
+    if vec > lex:
+        return "semantic relevance"
+    if lex > vec:
+        return "keyword relevance"
+    return "hybrid relevance"
+
+
+def _refusal_details(refusal_reason: str | None) -> dict[str, Any]:
+    reason = str(refusal_reason or "")
+    if not reason:
+        return {
+            "refused": False,
+            "code": None,
+            "category": None,
+            "message": "Answer grounded in cited evidence from the indexed corpus.",
+        }
+    if reason.startswith("prompt_injection:"):
+        return {
+            "refused": True,
+            "code": reason,
+            "category": "safety",
+            "message": "The request matched prompt-injection safeguards, so the system refused.",
+        }
+    if reason == "insufficient_evidence":
+        return {
+            "refused": True,
+            "code": reason,
+            "category": "evidence",
+            "message": "Retrieved evidence was insufficient or unrelated to safely answer.",
+        }
+    if reason == "answerer_refused":
+        return {
+            "refused": True,
+            "code": reason,
+            "category": "model",
+            "message": "The answering model declined to produce an answer.",
+        }
+    if reason == "internal_error":
+        return {
+            "refused": True,
+            "code": reason,
+            "category": "system",
+            "message": "The system hit an internal error while answering.",
+        }
+    return {
+        "refused": True,
+        "code": reason,
+        "category": "unknown",
+        "message": "The system refused this request.",
+    }
+
+
+def _build_explain_payload(
+    *,
+    question: str,
+    top_k: int,
+    retrieved: list[RetrievedChunk],
+    citations_out: list[dict[str, Any]],
+    refusal_reason: str | None,
+    doc_map: dict[str, Any] | None,
+    debug: bool,
+) -> dict[str, Any]:
+    selected_chunk_ids = {str(c.get("chunk_id", "")) for c in citations_out if c.get("chunk_id")}
+    evidence: list[dict[str, Any]] = []
+    capped = retrieved[: min(8, len(retrieved))]
+    private_detail_enabled = bool(debug) and not bool(settings.public_demo_mode)
+
+    for r in capped:
+        d = doc_map.get(r.doc_id) if isinstance(doc_map, dict) else None
+        selected = r.chunk_id in selected_chunk_ids
+        item: dict[str, Any] = {
+            "doc_id": r.doc_id,
+            "doc_title": d.title if d else None,
+            "doc_source": d.source if d else None,
+            "snippet": r.text[:240],
+            "selected": selected,
+            "why_selected": "used in the final cited answer" if selected else f"high {_signal_summary(r)}",
+        }
+        if private_detail_enabled:
+            item.update(
+                {
+                    "chunk_id": r.chunk_id,
+                    "idx": r.idx,
+                    "score": r.score,
+                    "lexical_score": r.lexical_score,
+                    "vector_score": r.vector_score,
+                }
+            )
+        evidence.append(item)
+
+    return {
+        "question": question,
+        "evidence_used": evidence,
+        "how_retrieval_works": {
+            "summary": "Hybrid retrieval combines lexical keyword matching and semantic similarity, then reranks chunks.",
+            "top_k": int(top_k),
+            "retrieved_chunks": len(retrieved),
+            "public_demo_mode": bool(settings.public_demo_mode),
+            "debug_details_included": private_detail_enabled,
+        },
+        "refusal": _refusal_details(refusal_reason),
+    }
+
+
 @app.post("/api/query")
 def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -> dict[str, Any]:
     """Core query endpoint.
@@ -1402,6 +1538,7 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
     top_k = max(1, min(int(req.top_k or settings.top_k_default), settings.max_top_k))
     debug = bool(req.debug) and not settings.public_demo_mode
     include_retrieval_text = bool(settings.allow_chunk_view) and not settings.public_demo_mode
+    refusal_reason: str | None = None
 
     # --- Prompt-injection/circumvention detection ---
     safety_start = time.perf_counter()
@@ -1412,13 +1549,23 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
         inj = detect_prompt_injection(question)
     record_safety_scan_metric(latency_ms=(time.perf_counter() - safety_start) * 1000.0)
     if inj.is_injection:
+        refusal_reason = f"prompt_injection:{','.join(inj.reasons)}"
         return {
             "question": question,
             "answer": "I can’t help with that request. I can only answer questions using the provided sources.",
             "refused": True,
-            "refusal_reason": f"prompt_injection:{','.join(inj.reasons)}",
+            "refusal_reason": refusal_reason,
             "provider": "policy",
             "citations": [],
+            "explain": _build_explain_payload(
+                question=question,
+                top_k=top_k,
+                retrieved=[],
+                citations_out=[],
+                refusal_reason=refusal_reason,
+                doc_map={},
+                debug=debug,
+            ),
         }
 
     # --- Retrieve ---
@@ -1436,43 +1583,50 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
     context = [(r.chunk_id, r.doc_id, r.idx, r.text) for r in retrieved]
 
     if not context:
+        refusal_reason = "insufficient_evidence"
         out_no_context: dict[str, Any] = {
             "question": question,
             "answer": "I don’t have enough evidence in the indexed sources to answer that.",
             "refused": True,
-            "refusal_reason": "insufficient_evidence",
+            "refusal_reason": refusal_reason,
             "provider": "policy",
             "citations": [],
         }
         if debug:
-            out_no_context["retrieval"] = []
+            out_no_context["retrieval"] = _retrieval_debug_payload(retrieved, include_text=include_retrieval_text)
+        out_no_context["explain"] = _build_explain_payload(
+            question=question,
+            top_k=top_k,
+            retrieved=retrieved,
+            citations_out=[],
+            refusal_reason=refusal_reason,
+            doc_map={},
+            debug=debug,
+        )
         return out_no_context
 
     if _is_unrelated_question(question, retrieved):
+        refusal_reason = "insufficient_evidence"
+        doc_map = _load_doc_map({r.doc_id for r in retrieved})
         out_unrelated: dict[str, Any] = {
             "question": question,
             "answer": "I don’t have enough evidence in the indexed sources to answer that.",
             "refused": True,
-            "refusal_reason": "insufficient_evidence",
+            "refusal_reason": refusal_reason,
             "provider": "policy",
             "citations": [],
         }
         if debug:
-            retrieval_out: list[dict[str, Any]] = []
-            for r in retrieved:
-                item: dict[str, Any] = {
-                    "chunk_id": r.chunk_id,
-                    "doc_id": r.doc_id,
-                    "idx": r.idx,
-                    "score": r.score,
-                    "lexical_score": r.lexical_score,
-                    "vector_score": r.vector_score,
-                    "text_preview": r.text[:240],
-                }
-                if include_retrieval_text:
-                    item["text"] = r.text
-                retrieval_out.append(item)
-            out_unrelated["retrieval"] = retrieval_out
+            out_unrelated["retrieval"] = _retrieval_debug_payload(retrieved, include_text=include_retrieval_text)
+        out_unrelated["explain"] = _build_explain_payload(
+            question=question,
+            top_k=top_k,
+            retrieved=retrieved,
+            citations_out=[],
+            refusal_reason=refusal_reason,
+            doc_map=doc_map,
+            debug=debug,
+        )
         return out_unrelated
 
     # --- Answer ---
@@ -1494,9 +1648,7 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
 
     # Enrich citations with doc metadata.
     citations_out: list[dict[str, Any]] = []
-    with connect(settings.sqlite_path) as conn:
-        init_db(conn)
-        doc_map = {d.doc_id: d for d in list_docs(conn)}
+    doc_map = _load_doc_map({r.doc_id for r in retrieved})
 
     for c in ans.citations or []:
         d = doc_map.get(c.doc_id)
@@ -1516,30 +1668,26 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
     # - In PUBLIC_DEMO_MODE this is always on.
     # - In private mode it is controlled by CITATIONS_REQUIRED (default: true).
     if bool(settings.citations_required) and (not bool(getattr(ans, "refused", False))) and not citations_out:
+        refusal_reason = "insufficient_evidence"
         out_no_citations: dict[str, Any] = {
             "question": question,
             "answer": "I don’t have enough evidence in the indexed sources to answer that.",
             "refused": True,
-            "refusal_reason": "insufficient_evidence",
+            "refusal_reason": refusal_reason,
             "provider": ans.provider,
             "citations": [],
         }
         if debug:
-            retrieval_out2: list[dict[str, Any]] = []
-            for r in retrieved:
-                item = {
-                    "chunk_id": r.chunk_id,
-                    "doc_id": r.doc_id,
-                    "idx": r.idx,
-                    "score": r.score,
-                    "lexical_score": r.lexical_score,
-                    "vector_score": r.vector_score,
-                    "text_preview": r.text[:240],
-                }
-                if include_retrieval_text:
-                    item["text"] = r.text
-                retrieval_out2.append(item)
-            out_no_citations["retrieval"] = retrieval_out2
+            out_no_citations["retrieval"] = _retrieval_debug_payload(retrieved, include_text=include_retrieval_text)
+        out_no_citations["explain"] = _build_explain_payload(
+            question=question,
+            top_k=top_k,
+            retrieved=retrieved,
+            citations_out=[],
+            refusal_reason=refusal_reason,
+            doc_map=doc_map,
+            debug=debug,
+        )
         return out_no_citations
 
     refusal_reason = "answerer_refused" if bool(getattr(ans, "refused", False)) else None
@@ -1551,24 +1699,19 @@ def query_api(req: QueryRequest, _auth: Any = Depends(require_role("reader"))) -
         "refusal_reason": refusal_reason,
         "provider": ans.provider,
         "citations": citations_out,
+        "explain": _build_explain_payload(
+            question=question,
+            top_k=top_k,
+            retrieved=retrieved,
+            citations_out=citations_out,
+            refusal_reason=refusal_reason,
+            doc_map=doc_map,
+            debug=debug,
+        ),
     }
 
     if debug:
-        retrieval_out3: list[dict[str, Any]] = []
-        for r in retrieved:
-            item = {
-                "chunk_id": r.chunk_id,
-                "doc_id": r.doc_id,
-                "idx": r.idx,
-                "score": r.score,
-                "lexical_score": r.lexical_score,
-                "vector_score": r.vector_score,
-                "text_preview": r.text[:240],
-            }
-            if include_retrieval_text:
-                item["text"] = r.text
-            retrieval_out3.append(item)
-        out["retrieval"] = retrieval_out3
+        out["retrieval"] = _retrieval_debug_payload(retrieved, include_text=include_retrieval_text)
 
     return out
 
@@ -1583,6 +1726,7 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
         raise HTTPException(status_code=400, detail=f"Question too long (max {settings.max_question_chars} chars)")
 
     top_k = max(1, min(int(req.top_k or settings.top_k_default), settings.max_top_k))
+    debug = bool(req.debug) and not settings.public_demo_mode
     include_retrieval_text = bool(settings.allow_chunk_view) and not settings.public_demo_mode
 
     async def _events():
@@ -1596,6 +1740,7 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
             record_safety_scan_metric(latency_ms=(time.perf_counter() - safety_start) * 1000.0)
             if inj.is_injection:
                 refusal_text = "I can’t help with that request. I can only answer questions using the provided sources."
+                refusal_reason = f"prompt_injection:{','.join(inj.reasons)}"
                 yield _sse_event("token", {"text": refusal_text})
                 yield _sse_event("citations", [])
                 yield _sse_event(
@@ -1604,8 +1749,17 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                         "question": question,
                         "answer": refusal_text,
                         "refused": True,
-                        "refusal_reason": f"prompt_injection:{','.join(inj.reasons)}",
+                        "refusal_reason": refusal_reason,
                         "provider": "policy",
+                        "explain": _build_explain_payload(
+                            question=question,
+                            top_k=top_k,
+                            retrieved=[],
+                            citations_out=[],
+                            refusal_reason=refusal_reason,
+                            doc_map={},
+                            debug=debug,
+                        ),
                     },
                 )
                 return
@@ -1621,24 +1775,13 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                 top_k=top_k,
                 backend=settings.embeddings_backend,
             )
-            retrieval_out: list[dict[str, Any]] = []
-            for r in retrieved:
-                item: dict[str, Any] = {
-                    "chunk_id": r.chunk_id,
-                    "doc_id": r.doc_id,
-                    "idx": r.idx,
-                    "score": r.score,
-                    "lexical_score": r.lexical_score,
-                    "vector_score": r.vector_score,
-                    "text_preview": r.text[:240],
-                }
-                if include_retrieval_text:
-                    item["text"] = r.text
-                retrieval_out.append(item)
+            retrieval_out = _retrieval_debug_payload(retrieved, include_text=include_retrieval_text)
             yield _sse_event("retrieval", retrieval_out)
+            doc_map = _load_doc_map({r.doc_id for r in retrieved}) if retrieved else {}
 
             if not retrieved or _is_unrelated_question(question, retrieved):
                 refusal_text = "I don’t have enough evidence in the indexed sources to answer that."
+                refusal_reason = "insufficient_evidence"
                 yield _sse_event("token", {"text": refusal_text})
                 yield _sse_event("citations", [])
                 yield _sse_event(
@@ -1647,17 +1790,23 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                         "question": question,
                         "answer": refusal_text,
                         "refused": True,
-                        "refusal_reason": "insufficient_evidence",
+                        "refusal_reason": refusal_reason,
                         "provider": "policy",
+                        "explain": _build_explain_payload(
+                            question=question,
+                            top_k=top_k,
+                            retrieved=retrieved,
+                            citations_out=[],
+                            refusal_reason=refusal_reason,
+                            doc_map=doc_map,
+                            debug=debug,
+                        ),
                     },
                 )
                 return
 
             context = [(r.chunk_id, r.doc_id, r.idx, r.text) for r in retrieved]
             answerer = get_answerer()
-            with connect(settings.sqlite_path) as conn:
-                init_db(conn)
-                doc_map = {d.doc_id: d for d in list_docs(conn)}
 
             provider_name = str(getattr(answerer, "name", settings.effective_llm_provider))
             stream_fn = getattr(answerer, "stream_answer", None)
@@ -1723,6 +1872,15 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                         "refused": refused,
                         "refusal_reason": refusal_reason,
                         "provider": provider_name,
+                        "explain": _build_explain_payload(
+                            question=question,
+                            top_k=top_k,
+                            retrieved=retrieved,
+                            citations_out=stream_citations,
+                            refusal_reason=refusal_reason,
+                            doc_map=doc_map,
+                            debug=debug,
+                        ),
                     },
                 )
                 return
@@ -1781,18 +1939,37 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                     "refused": refused,
                     "refusal_reason": refusal_reason,
                     "provider": provider,
+                    "explain": _build_explain_payload(
+                        question=question,
+                        top_k=top_k,
+                        retrieved=retrieved,
+                        citations_out=citations_out,
+                        refusal_reason=refusal_reason,
+                        doc_map=doc_map,
+                        debug=debug,
+                    ),
                 },
             )
         except Exception as e:
             yield _sse_event("error", {"message": f"{type(e).__name__}: {e}"})
+            refusal_reason = "internal_error"
             yield _sse_event(
                 "done",
                 {
                     "question": question,
                     "answer": "I don’t have enough evidence in the indexed sources to answer that.",
                     "refused": True,
-                    "refusal_reason": "internal_error",
+                    "refusal_reason": refusal_reason,
                     "provider": "policy",
+                    "explain": _build_explain_payload(
+                        question=question,
+                        top_k=top_k,
+                        retrieved=[],
+                        citations_out=[],
+                        refusal_reason=refusal_reason,
+                        doc_map={},
+                        debug=debug,
+                    ),
                 },
             )
 

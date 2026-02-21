@@ -2,7 +2,7 @@ import * as React from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
-import { api, type Doc, type QueryResponse, type RetrievalDebug } from '../api'
+import { api, type Doc, type QueryExplain, type QueryResponse } from '../api'
 import { buildCitationClipboardText, buildDocCitationHref } from '../lib/citations'
 import { useOfflineStatus } from '../lib/offline'
 import {
@@ -14,7 +14,6 @@ import {
   CardHeader,
   CardTitle,
   Checkbox,
-  DataTable,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -193,83 +192,94 @@ function downloadText(filename: string, text: string) {
   URL.revokeObjectURL(url)
 }
 
+function fallbackRefusal(reason: string | null, refused: boolean): QueryExplain['refusal'] {
+  if (!refused) {
+    return {
+      refused: false,
+      code: null,
+      category: null,
+      message: 'Answer grounded in cited evidence from the indexed corpus.',
+    }
+  }
+  if (reason?.startsWith('prompt_injection:')) {
+    return {
+      refused: true,
+      code: reason,
+      category: 'safety',
+      message: 'The request matched prompt-injection safeguards, so the system refused.',
+    }
+  }
+  if (reason === 'insufficient_evidence') {
+    return {
+      refused: true,
+      code: reason,
+      category: 'evidence',
+      message: 'Retrieved evidence was insufficient or unrelated to safely answer.',
+    }
+  }
+  if (reason === 'answerer_refused') {
+    return {
+      refused: true,
+      code: reason,
+      category: 'model',
+      message: 'The answering model declined to produce an answer.',
+    }
+  }
+  return {
+    refused: true,
+    code: reason,
+    category: 'unknown',
+    message: 'The system refused this request.',
+  }
+}
+
+function buildFallbackExplain(response: QueryResponse, topK: number, publicDemoMode: boolean): QueryExplain {
+  const citationEvidence = (response.citations ?? []).map((c) => ({
+    doc_id: c.doc_id,
+    doc_title: c.doc_title,
+    doc_source: c.doc_source,
+    snippet: c.quote ?? '',
+    selected: true,
+    why_selected: 'used in the final cited answer',
+    chunk_id: c.chunk_id,
+    idx: c.idx,
+  }))
+
+  const retrievalEvidence = (response.retrieval ?? []).slice(0, 8).map((r) => ({
+    doc_id: r.doc_id,
+    doc_title: null,
+    doc_source: null,
+    snippet: r.text_preview,
+    selected: false,
+    why_selected: 'high hybrid retrieval relevance',
+    chunk_id: r.chunk_id,
+    idx: r.idx,
+    score: r.score,
+    lexical_score: r.lexical_score,
+    vector_score: r.vector_score,
+  }))
+
+  const evidence_used = citationEvidence.length ? citationEvidence : retrievalEvidence
+
+  return {
+    question: response.question,
+    evidence_used,
+    how_retrieval_works: {
+      summary: 'Hybrid retrieval combines lexical keyword matching and semantic similarity, then reranks chunks.',
+      top_k: topK,
+      retrieved_chunks: response.retrieval?.length ?? evidence_used.length,
+      public_demo_mode: publicDemoMode,
+      debug_details_included: false,
+    },
+    refusal: fallbackRefusal(response.refusal_reason, response.refused),
+  }
+}
+
 export function HomePage() {
   const metaQuery = useQuery({ queryKey: ['meta'], queryFn: api.meta, staleTime: 30_000 })
   const docsQuery = useQuery({ queryKey: ['docs'], queryFn: api.listDocs, staleTime: 30_000 })
   const meta = metaQuery.data
-
-  const docsById = React.useMemo(() => {
-    const m = new Map<string, { title: string; source: string }>()
-    for (const d of docsQuery.data?.docs ?? []) {
-      m.set(d.doc_id, { title: d.title ?? d.doc_id, source: d.source ?? '' })
-    }
-    return m
-  }, [docsQuery.data])
-
-  const retrievalColumns = React.useMemo(
-    () => [
-      {
-        header: 'Doc',
-        accessorKey: 'doc_id',
-        cell: (info: any) => {
-          const r = info.row.original as RetrievalDebug
-          const d = docsById.get(r.doc_id)
-          const title = d?.title ?? r.doc_id
-          const source = d?.source ?? ''
-          return (
-            <div className="space-y-1">
-              <div className="font-medium">
-                <Link to="/docs/$docId" params={{ docId: r.doc_id }} className="hover:underline">
-                  {title}
-                </Link>
-              </div>
-              {source ? <div className="text-xs text-muted-foreground">{source}</div> : null}
-            </div>
-          )
-        },
-        meta: { minWidth: 220, maxWidth: 320 },
-      },
-      {
-        header: 'Chunk',
-        accessorKey: 'idx',
-        cell: (info: any) => {
-          const r = info.row.original as RetrievalDebug
-          return (
-            <div className="space-y-1">
-              <div className="font-mono text-xs">#{r.idx}</div>
-              <div className="font-mono text-[11px] text-muted-foreground">{r.chunk_id.slice(0, 10)}…</div>
-            </div>
-          )
-        },
-        meta: { width: 110 },
-      },
-      {
-        header: 'Score',
-        accessorKey: 'score',
-        cell: (info: any) => <span className="font-mono text-xs">{Number(info.getValue() ?? 0).toFixed(3)}</span>,
-        meta: { width: 90 },
-      },
-      {
-        header: 'Lex',
-        accessorKey: 'lexical_score',
-        cell: (info: any) => <span className="font-mono text-xs">{Number(info.getValue() ?? 0).toFixed(3)}</span>,
-        meta: { width: 80 },
-      },
-      {
-        header: 'Vec',
-        accessorKey: 'vector_score',
-        cell: (info: any) => <span className="font-mono text-xs">{Number(info.getValue() ?? 0).toFixed(3)}</span>,
-        meta: { width: 80 },
-      },
-      {
-        header: 'Preview',
-        accessorKey: 'text_preview',
-        cell: (info: any) => <div className="whitespace-pre-wrap text-xs">{String(info.getValue() ?? '')}</div>,
-        meta: { minWidth: 420 },
-      },
-    ],
-    [docsById],
-  )
+  const isPublicDemo = Boolean(meta?.public_demo_mode)
 
   const [question, setQuestion] = React.useState('')
   const [topK, setTopK] = React.useState(5)
@@ -402,6 +412,18 @@ export function HomePage() {
                     ? {
                         ...t,
                         response: { ...t.response, citations },
+                      }
+                    : t,
+                ),
+              )
+            },
+            onExplain: (explain) => {
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.id === id && t.response
+                    ? {
+                        ...t,
+                        response: { ...t.response, explain },
                       }
                     : t,
                 ),
@@ -587,8 +609,14 @@ export function HomePage() {
                       const refusalReason = t.response?.refusal_reason
                       const provider = t.response?.provider
                       const answer = t.response?.answer
+                      const explain = t.response
+                        ? (t.response.explain ?? buildFallbackExplain(t.response, t.top_k, isPublicDemo))
+                        : null
+                      const explainEvidence = explain?.evidence_used ?? []
+                      const canShowPrivateExplainDetails = Boolean(
+                        explain && !isPublicDemo && explain.how_retrieval_works.debug_details_included,
+                      )
 
-                      const citedChunkIds = new Set(citations.map((c) => c.chunk_id))
                       const retrievalScoreByChunk = new Map(retrieval.map((r) => [r.chunk_id, r.score] as const))
 
                       return (
@@ -716,36 +744,122 @@ export function HomePage() {
 
                                 <Dialog>
                                   <DialogTrigger asChild>
-                                    <Button size="sm" variant="outline" disabled={!retrieval.length}>
-                                      Retrieval ({retrieval.length})
+                                    <Button size="sm" variant="outline" disabled={!explain}>
+                                      Explain this answer
                                     </Button>
                                   </DialogTrigger>
-                                  <DialogContent className="max-h-[80vh] overflow-hidden">
-                                    <DialogHeader>
-                                      <DialogTitle>Retrieval debug</DialogTitle>
-                                      <DialogDescription>
-                                        Hybrid retrieval results (BM25 + embeddings). Highlighted rows are cited.
-                                      </DialogDescription>
-                                    </DialogHeader>
+                                  <DialogContent className="left-auto right-0 top-0 h-[100dvh] w-[min(860px,100vw)] translate-x-0 translate-y-0 rounded-none border-l p-0">
+                                    {explain ? (
+                                      <div className="flex h-full flex-col">
+                                        <DialogHeader className="border-b p-4">
+                                          <DialogTitle>Explain this answer</DialogTitle>
+                                          <DialogDescription>
+                                            Retrieval transparency view: evidence used, method summary, and refusal rationale.
+                                          </DialogDescription>
+                                        </DialogHeader>
 
-                                    {retrieval.length ? (
-                                      <div className="space-y-2">
-                                        <DataTable<RetrievalDebug>
-                                          data={retrieval}
-                                          columns={retrievalColumns}
-                                          height={420}
-                                          getRowClassName={(r) =>
-                                            citedChunkIds.has((r as RetrievalDebug).chunk_id)
-                                              ? 'bg-emerald-500/10'
-                                              : ''
-                                          }
-                                        />
-                                        <div className="text-xs text-muted-foreground">
-                                          Note: full chunk text is only included when chunk view is enabled.
+                                        <div className="flex-1 space-y-5 overflow-y-auto p-4">
+                                          <section className="space-y-2">
+                                            <div className="text-sm font-semibold">Evidence used</div>
+                                            {explainEvidence.length ? (
+                                              <div className="space-y-2">
+                                                {explainEvidence.map((row, idx) => (
+                                                  <div
+                                                    key={`${row.doc_id}-${row.chunk_id ?? idx}`}
+                                                    className={`rounded-lg border p-3 ${
+                                                      row.selected ? 'border-emerald-300 bg-emerald-50/40' : ''
+                                                    }`}
+                                                  >
+                                                    <div className="flex flex-wrap items-start justify-between gap-2">
+                                                      <div className="space-y-1">
+                                                        <div className="text-sm font-semibold">
+                                                          {row.doc_title ?? row.doc_id}
+                                                        </div>
+                                                        <div className="text-xs text-muted-foreground">
+                                                          {row.doc_source ?? row.doc_id}
+                                                        </div>
+                                                      </div>
+                                                      <Badge variant={row.selected ? 'success' : 'outline'}>
+                                                        {row.selected ? 'cited' : 'retrieved'}
+                                                      </Badge>
+                                                    </div>
+
+                                                    {row.snippet ? (
+                                                      <pre className="mt-2 whitespace-pre-wrap rounded bg-muted p-2 text-xs">
+                                                        {row.snippet}
+                                                      </pre>
+                                                    ) : null}
+
+                                                    <div className="mt-2 text-xs text-muted-foreground">{row.why_selected}</div>
+
+                                                    {canShowPrivateExplainDetails ? (
+                                                      <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                                                        {row.chunk_id ? (
+                                                          <Badge variant="outline" className="font-mono">
+                                                            {row.chunk_id.slice(0, 12)}…
+                                                          </Badge>
+                                                        ) : null}
+                                                        {typeof row.score === 'number' ? (
+                                                          <Badge variant="outline">score {row.score.toFixed(3)}</Badge>
+                                                        ) : null}
+                                                        {typeof row.lexical_score === 'number' ? (
+                                                          <Badge variant="outline">lex {row.lexical_score.toFixed(3)}</Badge>
+                                                        ) : null}
+                                                        {typeof row.vector_score === 'number' ? (
+                                                          <Badge variant="outline">vec {row.vector_score.toFixed(3)}</Badge>
+                                                        ) : null}
+                                                      </div>
+                                                    ) : null}
+                                                  </div>
+                                                ))}
+                                      </div>
+                                    ) : (
+                                              <div className="text-sm text-muted-foreground">
+                                                No retrieval evidence was available for this answer.
+                                              </div>
+                                            )}
+                                          </section>
+
+                                          <section className="space-y-2">
+                                            <div className="text-sm font-semibold">How retrieval works</div>
+                                            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                                              {explain.how_retrieval_works.summary}
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                              <Badge variant="outline">
+                                                top_k {explain.how_retrieval_works.top_k}
+                                              </Badge>
+                                              <Badge variant="outline">
+                                                retrieved {explain.how_retrieval_works.retrieved_chunks}
+                                              </Badge>
+                                              <Badge
+                                                variant={
+                                                  explain.how_retrieval_works.public_demo_mode ? 'warning' : 'secondary'
+                                                }
+                                              >
+                                                {explain.how_retrieval_works.public_demo_mode ? 'public demo mode' : 'private mode'}
+                                              </Badge>
+                                              {canShowPrivateExplainDetails ? (
+                                                <Badge variant="secondary">debug details enabled</Badge>
+                                              ) : null}
+                                            </div>
+                                          </section>
+
+                                          <section className="space-y-2">
+                                            <div className="text-sm font-semibold">Why the system refused</div>
+                                            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                                              {explain.refusal.message}
+                                              {explain.refusal.code ? (
+                                                <div className="mt-2 text-xs text-muted-foreground">
+                                                  code: <span className="font-mono">{explain.refusal.code}</span>
+                                                </div>
+                                              ) : null}
+                                            </div>
+                                          </section>
                                         </div>
                                       </div>
                                     ) : (
-                                      <div className="text-sm text-muted-foreground">No retrieval debug returned.</div>
+                                      <div className="p-4 text-sm text-muted-foreground">No explanation available.</div>
                                     )}
                                   </DialogContent>
                                 </Dialog>
