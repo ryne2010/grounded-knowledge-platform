@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .eval import run_eval, validate_eval_dataset
 from .ingestion import ingest_file, replay_doc
+from .retrieval_profile import cmd_profile_retrieval
 
 
 def cmd_ingest_folder(
@@ -446,6 +447,37 @@ def main() -> None:
         action="store_true",
         help="Only write JSONL snapshots and skip BigQuery loading.",
     )
+    p_profile_retrieval = sub.add_parser(
+        "profile-retrieval",
+        help="Profile Postgres lexical/vector retrieval plans via EXPLAIN ANALYZE BUFFERS.",
+    )
+    p_profile_retrieval.add_argument(
+        "--query",
+        action="append",
+        default=[],
+        help="Representative query text (repeatable). Defaults to data/eval/smoke.jsonl questions.",
+    )
+    p_profile_retrieval.add_argument(
+        "--tenant-id",
+        default="default",
+        help="Tenant id scope for profiling (default: default).",
+    )
+    p_profile_retrieval.add_argument(
+        "--top-k",
+        type=int,
+        default=40,
+        help="Limit per profiled retrieval query (default: 40).",
+    )
+    p_profile_retrieval.add_argument(
+        "--json-out",
+        default=None,
+        help="Optional output path for report JSON.",
+    )
+    p_profile_retrieval.add_argument(
+        "--include-plans",
+        action="store_true",
+        help="Include raw EXPLAIN JSON plans in --json-out payload.",
+    )
 
     args = parser.parse_args()
     if args.cmd == "ingest-file":
@@ -489,6 +521,14 @@ def main() -> None:
             batch_size=args.batch_size,
             location=args.location,
             jsonl_only=bool(args.jsonl_only),
+        )
+    elif args.cmd == "profile-retrieval":
+        cmd_profile_retrieval(
+            queries=list(args.query or []),
+            tenant_id=str(args.tenant_id),
+            top_k=int(args.top_k),
+            json_out=args.json_out,
+            include_plans=bool(args.include_plans),
         )
     elif args.cmd == "safety-eval":
         from app.safety_eval import run_safety_eval

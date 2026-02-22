@@ -62,6 +62,7 @@ Migration tracking:
 
 Hardening roadmap/spec:
 - `docs/SPECS/CLOUDSQL_HARDENING.md`
+- retrieval plan profiling runbook: `docs/RUNBOOKS/RETRIEVAL_PERF.md`
 
 For local verification with Postgres:
 
