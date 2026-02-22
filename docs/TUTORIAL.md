@@ -61,10 +61,16 @@ Installable PWA (optional):
 1. Open the app in a Chromium browser.
 2. Use "Install app" from the address bar/app menu.
 3. After first load, the app shell is cached for offline navigation.
+4. Manual offline verification:
+   - disconnect network (or use DevTools "Offline")
+   - refresh the app: shell should still load
+   - navigate between routes: cached shell should continue working
+   - API-backed views should show explicit offline messaging
 
 Offline limitations:
 - API-backed data still needs network.
 - `/api/query` responses are not cached by default.
+- Service worker API cache is intentionally minimal (`/api/meta`, `/api/docs`, `/api/stats` only).
 - Ask actions are disabled while offline.
 
 Housekeeping:

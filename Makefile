@@ -130,6 +130,7 @@ help:
 	@echo "  web-lint           Lint web (currently typecheck-only)"
 	@echo "  run-api            Run API locally (http://127.0.0.1:8080)"
 	@echo "  run-ui             Run UI locally (http://127.0.0.1:5173)"
+	@echo "  web-dev            Alias for run-ui (Vite dev server)"
 	@echo "  dev                Run API + UI concurrently"
 	@echo "  dev-doctor         Run full local quality harness"
 	@echo "  dev-ci             Run CI harness locally (same as GitHub Actions)"
@@ -167,7 +168,7 @@ help:
 # Local development (no GCP required)
 # -----------------------------
 
-.PHONY: py-install web-install db-up db-down db-reset db-logs db-psql run-api run-ui dev web-build web-lint web-typecheck lint typecheck test test-postgres dev-doctor dev-ci
+.PHONY: py-install web-install db-up db-down db-reset db-logs db-psql run-api run-ui web-dev dev web-build web-lint web-typecheck lint typecheck test test-postgres dev-doctor dev-ci
 
 
 # Connectors (private deployments)
@@ -216,6 +217,8 @@ run-api: ## Run API locally (http://127.0.0.1:8080)
 
 run-ui: ## Run UI locally (http://127.0.0.1:5173)
 	cd web && corepack pnpm dev
+
+web-dev: run-ui ## Alias for run-ui (Vite dev server)
 
 dev: ## Run API + UI concurrently (two terminals is still recommended for logs)
 	@bash -euo pipefail -c '\

@@ -2665,3 +2665,88 @@ Implemented Task #31 BigQuery modeling documentation + SQL examples:
 
 - Commit `TASK_BIGQUERY_MODELS` on this branch and open PR.
 - Move to queue item #32: `TASK_PWA`.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-pwa`
+- Current task: `TASK_PWA` (`agents/tasks/TASK_PWA.md`)
+
+## Task summary
+
+Completed Task #32 PWA hardening slice for offline-first UX, focusing on safe caching posture and operator/dev ergonomics:
+
+- audited existing PWA implementation already present in `main` (manifest, icons, service worker registration, offline banners, offline page states, browser-local conversation persistence)
+- hardened service worker API caching policy (`web/public/sw.js`):
+  - bumped SW cache version to rotate prior broad API cache
+  - restricted API cache to low-risk read endpoints only: `/api/meta`, `/api/docs`, `/api/stats`
+  - kept `/api/query*` explicitly uncached
+  - prevented silent undefined cache fallbacks by returning explicit rejected promises when offline and uncached
+- added `make web-dev` alias (maps to Vite dev server) to align task/local-dev workflow wording
+- updated tutorial offline section with explicit manual verification sequence and clarified cached API surface
+
+## Decisions made
+
+- Treated existing PWA base as already implemented and applied a minimal hardening diff rather than broad UI rewrites.
+- Prioritized safety invariant from ADR/public-demo posture by avoiding persistence of sensitive/private API responses in service-worker cache.
+- Kept network-first behavior only for allowlisted read endpoints; all other API routes now go direct-network only.
+- Added `web-dev` alias instead of renaming existing `run-ui` target to preserve backward compatibility.
+
+## Files changed
+
+- `web/public/sw.js`
+- `Makefile`
+- `docs/TUTORIAL.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_PWA.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git branch -f codex/task-pwa main && git checkout codex/task-pwa`
+3. Discovery/verification of existing implementation:
+   - `rg -n "manifest|service worker|offline|navigator.onLine|..." web docs/TUTORIAL.md`
+   - `sed -n ... web/public/manifest.webmanifest`
+   - `sed -n ... web/public/sw.js`
+   - `sed -n ... web/src/main.tsx`
+   - `sed -n ... web/src/lib/offline.ts`
+   - `sed -n ... web/src/pages/Home.tsx Docs.tsx Search.tsx`
+4. Task-specific validation:
+   - `make web-build`
+5. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make web-build`: PASS
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`84 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- Manual browser offline walkthrough was documented in `docs/TUTORIAL.md`; not executed inside this terminal-only environment.
+- Existing PWA installability and offline banners were already present before this slice; this task primarily tightened caching safety and developer workflow clarity.
+
+## What’s next
+
+- Commit `TASK_PWA` on this branch and open PR.
+- Move to queue item #33: `TASK_STREAMING`.
