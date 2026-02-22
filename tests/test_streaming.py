@@ -80,14 +80,26 @@ def test_query_stream_emits_expected_event_frames(tmp_path):
     assert "token" in names
     assert "citations" in names
     assert names[-1] == "done"
+    assert names.count("done") == 1
+    assert names.index("citations") < names.index("done")
 
     done = events[-1][1]
     assert isinstance(done, dict)
     assert done.get("refused") is False
+    assert isinstance(done.get("explain"), dict)
 
     citations_event = [payload for name, payload in events if name == "citations"][-1]
     assert isinstance(citations_event, list)
     assert len(citations_event) >= 1
+
+
+def test_sse_event_helper_emits_well_formed_frame(tmp_path):
+    main = _reload_app(str(tmp_path / "stream_frame.sqlite"), citations_required=True)
+    frame = main._sse_event("token", {"text": "hello"})
+
+    assert frame.startswith("event: token\n")
+    assert frame.endswith("\n\n")
+    assert _parse_sse(frame) == [("token", {"text": "hello"})]
 
 
 def test_query_stream_preserves_citations_required_refusal(tmp_path):
@@ -107,6 +119,7 @@ def test_query_stream_preserves_citations_required_refusal(tmp_path):
     assert isinstance(done, dict)
     assert done.get("refused") is True
     assert done.get("refusal_reason") == "insufficient_evidence"
+    assert isinstance(done.get("explain"), dict)
 
     citations_event = [payload for name, payload in events if name == "citations"][-1]
     assert citations_event == []

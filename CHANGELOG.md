@@ -44,12 +44,14 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Portfolio alignment docs now reflect implemented BigQuery export + modeling assets.
 - Service worker API caching is now restricted to low-risk read endpoints (`/api/meta`, `/api/docs`, `/api/stats`) to avoid persisting sensitive/private API responses.
 - Makefile now includes `web-dev` as an explicit alias for the Vite UI dev server workflow.
+- Streaming API contract docs now explicitly define terminal `done` semantics and document optional `done.explain` payload parity with `/api/query`.
 
 ### Fixed
 
 - SQLite ingest-event ordering now uses a deterministic tie-breaker for same-second ingests.
 - Streaming SSE tests now read response bodies correctly from streaming responses.
 - Added explicit invariant regression tests to keep demo mode safety constraints and citations-required behavior enforced.
+- Streaming regression tests now include direct SSE frame helper validation and stronger `done`/event-order assertions.
 
 ## 0.10.0
 

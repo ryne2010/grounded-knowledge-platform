@@ -145,6 +145,7 @@ Try questions that should be:
 
 In non-demo deployments, enable **Debug retrieval** on the home page.
 For long answers, enable **Streaming mode** on the Ask page to render incremental tokens/citations.
+Use **Cancel** during a stream to abort the request; the page remains usable for the next query.
 
 - Ask a question
 - Open **Retrieval** on the answer card to inspect the hybrid retrieval set (BM25 + embeddings)
