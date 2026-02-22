@@ -45,6 +45,13 @@ This repo includes baseline DevSecOps automation:
   - Analyzes both `python` and `javascript-typescript`
   - Findings are surfaced in GitHub Security code-scanning alerts
 
+- **Container image scanning (Trivy)** (`.github/workflows/container-image-scan.yml`)
+  - Builds the app container image from `docker/Dockerfile` on `main` and PRs
+  - Produces SARIF + JSON reports
+  - Uploads SARIF to GitHub Security and keeps JSON/SARIF as workflow artifacts
+  - Optional strict gate via repository variable `IMAGE_SCAN_FAIL_ON_SEVERITY` (for example `CRITICAL,HIGH`)
+
 Noise control:
 - CodeQL alerts are visible in GitHub Security, but by default findings are triaged there rather than blocking merges by severity.
+- Container scan reports are non-blocking by default; enable strict blocking with `IMAGE_SCAN_FAIL_ON_SEVERITY`.
 - Workflow failures still fail CI when scanning execution itself fails.

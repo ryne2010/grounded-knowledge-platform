@@ -2361,3 +2361,100 @@ Implemented Task #28 DevSecOps dependency and code-scanning baseline:
 
 - Commit `TASK_DEPENDABOT_CODE_SCANNING` on this branch and open PR.
 - Move to queue item #29: `TASK_CONTAINER_IMAGE_SCANNING`.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-container-image-scanning`
+- Current task: `TASK_CONTAINER_IMAGE_SCANNING` (`agents/tasks/TASK_CONTAINER_IMAGE_SCANNING.md`)
+
+## Task summary
+
+Implemented Task #29 container image vulnerability scanning baseline:
+
+- added a new GitHub Actions workflow (`.github/workflows/container-image-scan.yml`) that:
+  - builds the app image from `docker/Dockerfile`
+  - runs Trivy image scan to produce SARIF and JSON reports
+  - uploads SARIF to GitHub Security (code scanning)
+  - uploads SARIF + JSON as workflow artifacts
+- added optional strict CI fail gate controlled by repository variable `IMAGE_SCAN_FAIL_ON_SEVERITY`
+  - default behavior remains report-only (non-blocking)
+- updated `SECURITY.md` to document container scan posture and gate configuration
+- updated `CHANGELOG.md` Unreleased entries
+
+## Decisions made
+
+- Used Trivy for pragmatic image scanning with broad ecosystem coverage and SARIF support.
+- Chose report-first posture by default (`exit-code: 0`) to keep findings visible without adding brittle severity gate noise.
+- Added optional fail gate so teams can enforce blocking on `CRITICAL,HIGH` (or other severities) without modifying workflow code.
+- Published results in both Security tab (SARIF) and artifacts (JSON/SARIF) for easy triage and auditability.
+
+## Files changed
+
+- `.github/workflows/container-image-scan.yml`
+- `SECURITY.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_CONTAINER_IMAGE_SCANNING.md`
+   - `sed -n ... docs/SPECS/OBSERVABILITY_OPS.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git checkout -b codex/task-container-image-scanning`
+3. Discovery/implementation support:
+   - `rg -n ...` across workflows/docs for existing scanner setup
+   - `sed -n ... docker/Dockerfile cloudbuild.yaml SECURITY.md`
+4. Task-specific checks:
+   - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/container-image-scan.yml"); puts "YAML_OK"'`
+5. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- YAML parse/lint check: PASS (`YAML_OK`)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`81 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- Strict vulnerability enforcement is opt-in via repository variable `IMAGE_SCAN_FAIL_ON_SEVERITY`; no blocking severity gate is enabled by default.
+
+## What’s next
+
+- Commit `TASK_CONTAINER_IMAGE_SCANNING` on this branch and open PR.
+- Move to queue item #30: `TASK_BIGQUERY_EXPORT`.
+
+### Follow-up (2026-02-22): CI fix for container-image-scan build instability
+
+Applied a targeted fix after CI failure in the `container-image-scan` workflow when Docker build used lockfile URLs pointing at an internal mirror.
+
+Changes:
+- Added `actions/setup-python` + `astral-sh/setup-uv` in `.github/workflows/container-image-scan.yml`.
+- Added a pre-build step to normalize `uv.lock` URLs via `uv lock --refresh` when mirror-host URLs are detected.
+- Added retry loop for `docker build` to reduce transient network failure flakiness.
+
+Validation rerun (all PASS):
+- `make dev-doctor`
+- `python scripts/harness.py lint`
+- `python scripts/harness.py typecheck`
+- `python scripts/harness.py test`
+- `make backlog-audit`

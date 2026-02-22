@@ -1,0 +1,141 @@
+name: container-image-scan
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+env:
+  IMAGE_NAME: gkp-scan
+  # Optional severity gate (example: "CRITICAL,HIGH").
+  # Leave unset/empty to report only (non-blocking).
+  IMAGE_SCAN_FAIL_ON_SEVERITY: ${{ vars.IMAGE_SCAN_FAIL_ON_SEVERITY }}
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+
+      - name: Normalize uv.lock index URLs
+        shell: bash
+        env:
+          UV_DEFAULT_INDEX: "https://pypi.org/simple"
+          UV_HTTP_RETRIES: "10"
+          UV_HTTP_TIMEOUT: "120"
+          UV_HTTP_CONNECT_TIMEOUT: "30"
+          UV_CONCURRENT_DOWNLOADS: "4"
+        run: |
+          set -euo pipefail
+
+          if ! grep -Eq "packages\\.applied-caas-gateway1|pypi-public/simple" uv.lock; then
+            echo "uv.lock is already normalized for ${UV_DEFAULT_INDEX}"
+            exit 0
+          fi
+
+          max_attempts=5
+          for attempt in $(seq 1 "$max_attempts"); do
+            echo "uv lock refresh attempt ${attempt}/${max_attempts}"
+            if uv lock --refresh --no-progress; then
+              echo "uv.lock normalized for ${UV_DEFAULT_INDEX}"
+              exit 0
+            fi
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              break
+            fi
+            sleep_seconds=$((attempt * 10))
+            echo "Retrying lock refresh in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+          done
+
+          echo "uv lock refresh failed after ${max_attempts} attempts"
+          exit 1
+
+      - name: Build image
+        shell: bash
+        run: |
+          set -euo pipefail
+          max_attempts=3
+          for attempt in $(seq 1 "$max_attempts"); do
+            echo "docker build attempt ${attempt}/${max_attempts}"
+            if docker build -f docker/Dockerfile -t "${IMAGE_NAME}:${GITHUB_SHA}" .; then
+              exit 0
+            fi
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              break
+            fi
+            sleep_seconds=$((attempt * 15))
+            echo "Retrying docker build in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+          done
+          echo "docker build failed after ${max_attempts} attempts"
+          exit 1
+
+      - name: Trivy scan (SARIF report)
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          format: sarif
+          output: trivy-results.sarif
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          exit-code: "0"
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: container-image-trivy
+
+      - name: Trivy scan (JSON artifact)
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          format: json
+          output: trivy-results.json
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          exit-code: "0"
+
+      - name: Upload scan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results-${{ github.sha }}
+          path: |
+            trivy-results.sarif
+            trivy-results.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Optional vulnerability fail gate
+        if: ${{ env.IMAGE_SCAN_FAIL_ON_SEVERITY != '' }}
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          format: table
+          severity: "${{ env.IMAGE_SCAN_FAIL_ON_SEVERITY }}"
+          exit-code: "1"
