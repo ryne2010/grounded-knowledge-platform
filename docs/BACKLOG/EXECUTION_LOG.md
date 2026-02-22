@@ -2831,3 +2831,92 @@ Completed Task #33 streaming closure pass with a minimal, reviewable delta focus
 
 - Commit `TASK_STREAMING` on this branch and open PR.
 - After merge, either stop at queue completion or start unsequenced tasks based on maintainer priority.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-cloudsql`
+- Current task: `TASK_CLOUDSQL` (`agents/tasks/TASK_CLOUDSQL.md`)
+
+## Task summary
+
+Completed a focused Cloud SQL hardening slice for deterministic migrations, retrieval-index verification, and pgvector contract clarity:
+
+- added a CI-friendly migration runner unit test (`tests/test_postgres_migrations.py`) that verifies:
+  - migration files are applied in filename order
+  - `schema_migrations` tracking prevents re-applying already recorded files
+- strengthened Docker Postgres integration test (`tests/test_cloudsql_postgres.py`) to assert:
+  - all migration filenames are recorded in `schema_migrations`
+  - required retrieval indexes exist: `idx_chunks_fts` (`GIN`) and `idx_embeddings_vec_hnsw` (`HNSW`, `vector_cosine_ops`)
+- updated storage contract docs (`docs/CONTRACTS.md`) to explicitly document:
+  - `DATABASE_URL` Postgres mode
+  - pgvector requirement
+  - startup migration tracking behavior
+- updated Cloud SQL runbook (`docs/RUNBOOKS/CLOUDSQL.md`) with pgvector baseline and `schema_migrations` details
+- updated changelog entries (`CHANGELOG.md`) for Cloud SQL task closure
+
+## Decisions made
+
+- Kept scope tightly focused on acceptance criteria instead of broad infra refactors (Cloud SQL Terraform path already hardened in prior tasks).
+- Added one non-Docker unit test to guarantee migration determinism checks run in standard harness/CI lanes.
+- Preserved ADR constraints: no public-demo safety regressions, no change to extractive-only demo defaults.
+
+## Files changed
+
+- `tests/test_postgres_migrations.py`
+- `tests/test_cloudsql_postgres.py`
+- `docs/CONTRACTS.md`
+- `docs/RUNBOOKS/CLOUDSQL.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status -sb`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... docs/PRODUCT/PRODUCT_BRIEF.md`
+   - `sed -n ... docs/ARCHITECTURE/README.md`
+   - `sed -n ... docs/DESIGN.md`
+   - `sed -n ... docs/CONTRACTS.md`
+   - `sed -n ... agents/tasks/TASK_CLOUDSQL.md`
+   - `sed -n ... docs/SPECS/CLOUDSQL_HARDENING.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git branch -f codex/task-cloudsql main && git checkout codex/task-cloudsql`
+3. Focused validation:
+   - `uv run pytest -q tests/test_postgres_migrations.py tests/test_cloudsql_postgres.py`
+   - `make test-postgres`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `uv run pytest -q tests/test_postgres_migrations.py tests/test_cloudsql_postgres.py`: PASS (`1 passed, 1 skipped`)
+- `make test-postgres`: PASS (`1 skipped` in this environment; docker/psycopg-dependent integration lane)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`86 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- Cloud SQL integration tests are still docker/psycopg-gated and may skip in environments lacking those dependencies.
+- Migration determinism/tracking now has direct coverage in standard CI-compatible unit tests.
+
+## What’s next
+
+- Commit `TASK_CLOUDSQL` on this branch and open PR.
+- Continue unsequenced backlog with `TASK_CONNECTORS_GCS` or another maintainer-selected task.

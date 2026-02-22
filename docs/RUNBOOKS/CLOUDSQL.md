@@ -8,6 +8,7 @@ In this repo, **Cloud SQL (Postgres) is the production baseline**. The app can f
 
 Runtime behavior:
 - when `DATABASE_URL` is set to a Postgres DSN, API/ingest/retrieval paths use Postgres at runtime
+- Postgres deployments require pgvector support (`CREATE EXTENSION vector`)
 - when `DATABASE_URL` is unset, the app uses SQLite (`SQLITE_PATH`)
 
 ## Preconditions
@@ -53,7 +54,11 @@ Backup/restore and restore-drill workflow:
 ## Schema bootstrap
 
 Repository migration SQL:
-- `app/migrations/postgres/001_init.sql`
+- `app/migrations/postgres/*.sql` (applied in filename order)
+
+Migration tracking:
+- applied filenames are recorded in `schema_migrations(filename, applied_at)`
+- migrations are applied automatically on startup for Postgres connections (`init_db`)
 
 Hardening roadmap/spec:
 - `docs/SPECS/CLOUDSQL_HARDENING.md`
@@ -61,6 +66,7 @@ Hardening roadmap/spec:
 For local verification with Postgres:
 
 ```bash
+# Optional override (default): GKP_POSTGRES_IMAGE=pgvector/pgvector:0.8.0-pg16-bookworm
 make db-up
 make test-postgres
 ```
