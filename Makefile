@@ -95,7 +95,7 @@ define require
 	@command -v $(1) >/dev/null 2>&1 || (echo "Missing dependency: $(1)"; exit 1)
 endef
 
-.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify smoke smoke-local logs destroy lock clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit
+.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify smoke smoke-local logs destroy lock release-bump release-notes clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit
 
 help:
 	@echo "Targets:"
@@ -136,6 +136,8 @@ help:
 	@echo "  test-postgres      Run Postgres integration tests (Docker + psycopg)"
 	@echo "  eval-smoke         Run CI-style eval smoke gate locally"
 	@echo "  gcs-sync           Trigger GCS connector sync via API (private deployments only)"
+	@echo "  release-bump       Bump release version + roll CHANGELOG Unreleased (set VERSION=x.y.z)"
+	@echo "  release-notes      Generate release notes from CHANGELOG (set VERSION=x.y.z)"
 	@echo "  clean              Remove local caches/build artifacts"
 	@echo "  dist               Create a clean source ZIP in dist/"
 	@echo "  task-index         Regenerate docs/BACKLOG/TASK_INDEX.md"
@@ -636,6 +638,27 @@ lock:
 	@echo "Done. Commit uv.lock and pnpm-lock.yaml for team reproducibility."
 
 
+# Release helpers.
+# VERSION is required (semantic version X.Y.Z).
+# RELEASE_DATE is optional (YYYY-MM-DD; defaults to today's date in the script).
+# RELEASE_NOTES_OUT is optional; defaults to dist/release_notes_<VERSION>.md.
+
+release-bump: ## Bump version and roll CHANGELOG "Unreleased" into a dated release section
+	@test -n "$(VERSION)" || (echo "Set VERSION=x.y.z"; exit 1)
+	@if [ -n "$(RELEASE_DATE)" ]; then \
+	  uv run python scripts/release_tools.py bump --version "$(VERSION)" --date "$(RELEASE_DATE)"; \
+	else \
+	  uv run python scripts/release_tools.py bump --version "$(VERSION)"; \
+	fi
+
+release-notes: ## Extract release notes for VERSION from CHANGELOG.md
+	@test -n "$(VERSION)" || (echo "Set VERSION=x.y.z"; exit 1)
+	@OUT="$(RELEASE_NOTES_OUT)"; \
+	if [ -z "$$OUT" ]; then OUT="dist/release_notes_$(VERSION).md"; fi; \
+	uv run python scripts/release_tools.py notes --version "$(VERSION)" --output "$$OUT"; \
+	echo "Release notes written to $$OUT"
+
+
 # -----------------------------------------------------------------------------
 # Staff-level IaC hygiene (lint / security / policy)
 #
@@ -705,7 +728,7 @@ tf-check: tf-fmt tf-validate tf-lint tf-sec tf-checkov tf-policy ## Run all Terr
 # Packaging / housekeeping
 # -----------------------------
 
-.PHONY: clean dist task-index queue codex-prompt backlog-export backlog-refresh backlog-audit
+.PHONY: release-bump release-notes clean dist task-index queue codex-prompt backlog-export backlog-refresh backlog-audit
 
 clean: ## Remove local caches/build artifacts (safe)
 	bash scripts/clean.sh

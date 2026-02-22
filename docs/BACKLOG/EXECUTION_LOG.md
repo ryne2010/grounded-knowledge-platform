@@ -2186,3 +2186,94 @@ Implemented Task #26 Cloud SQL backup/restore ops slice:
 
 - Commit `TASK_BACKUP_RESTORE` on this branch and open PR.
 - Move to queue item #27: `TASK_RELEASE_PROCESS`.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-release-process`
+- Current task: `TASK_RELEASE_PROCESS` (`agents/tasks/TASK_RELEASE_PROCESS.md`)
+
+## Task summary
+
+Implemented Task #27 release-process baseline with consistent versioning + changelog workflow:
+
+- added release tooling script (`scripts/release_tools.py`) with:
+  - `bump`: updates `pyproject.toml` version and rolls `CHANGELOG.md` `Unreleased` into a dated release section
+  - `notes`: extracts release notes for a specific version from `CHANGELOG.md`
+- added Make targets:
+  - `make release-bump VERSION=x.y.z [RELEASE_DATE=YYYY-MM-DD]`
+  - `make release-notes VERSION=x.y.z [RELEASE_NOTES_OUT=...]`
+- added new release process guide: `docs/RELEASES.md`
+- updated release runbook and README docs map to link release process
+- added automated tests for release tooling (`tests/test_release_tools.py`)
+- updated `CHANGELOG.md` Unreleased entries to document release tooling/docs changes
+
+## Decisions made
+
+- Chose semantic versioning with `pyproject.toml` as the single source of truth for release version.
+- Explicitly documented that `app/version.py` is not manually edited per release; it resolves version from installed metadata / pyproject fallback.
+- Kept release tooling intentionally lightweight and repo-local (no new external release service dependency).
+- Kept GitHub release workflow optional; task acceptance is met by documented sequence + repeatable local commands.
+
+## Files changed
+
+- `scripts/release_tools.py`
+- `tests/test_release_tools.py`
+- `Makefile`
+- `docs/RELEASES.md`
+- `docs/RUNBOOKS/RELEASE.md`
+- `README.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `tail -n ... docs/BACKLOG/EXECUTION_LOG.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_RELEASE_PROCESS.md`
+   - `sed -n ... docs/SPECS/OBSERVABILITY_OPS.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git checkout -b codex/task-release-process`
+3. Discovery/implementation support:
+   - `rg -n ...` across Makefile/docs/scripts for version/changelog/release behavior
+   - `sed -n ... CHANGELOG.md docs/RUNBOOKS/RELEASE.md README.md Makefile pyproject.toml app/version.py`
+4. Task-specific checks:
+   - `uv run pytest -q tests/test_release_tools.py`
+   - `make release-notes VERSION=0.10.0`
+5. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-refresh`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `uv run pytest -q tests/test_release_tools.py`: PASS (`3 passed`)
+- `make release-notes VERSION=0.10.0`: PASS (`dist/release_notes_0.10.0.md` generated locally)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`81 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-refresh`: PASS
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- `make release-notes` output in `dist/` is intentionally local artifact and not committed.
+
+## What’s next
+
+- Commit `TASK_RELEASE_PROCESS` on this branch and open PR.
+- Move to queue item #28: `TASK_DEPENDABOT_CODE_SCANNING`.

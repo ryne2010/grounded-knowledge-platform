@@ -5,6 +5,9 @@ This repo supports two primary workflows:
 - **local dev** on an M2 Max MacBook Pro
 - **production** on Cloud Run
 
+Versioning/changelog discipline and tagging flow:
+- `docs/RELEASES.md`
+
 ---
 
 ## Before you release
@@ -25,6 +28,13 @@ make web-build
 
 - This project uses lightweight forward migrations in `app/storage.py:init_db`.
 - Any new schema change should be **additive** (new tables/columns) unless you also implement a data migration.
+
+4. Cut the release version + changelog section:
+
+```bash
+make release-bump VERSION=0.11.0
+make release-notes VERSION=0.11.0
+```
 
 ---
 
