@@ -70,6 +70,7 @@ from .storage import (
     list_ingest_events,
     list_recent_ingest_events,
 )
+from .tenant import reset_tenant_id, set_tenant_id
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
@@ -405,6 +406,10 @@ def _query_payload_too_large(request: Request) -> bool:
         return False
 
 
+def _sql_ph(conn: Any) -> str:
+    return "%s" if "psycopg" in type(conn).__module__ else "?"
+
+
 def _log_auth_denied(*, request_id: str, path: str, status: int, reason: str) -> None:
     """Emit a dedicated auth-denied event for security/audit filtering."""
 
@@ -509,6 +514,8 @@ async def _request_middleware(request: Request, call_next):
     request.state.auth_context = auth_ctx
     request.state.principal = auth_ctx.principal
     request.state.role = auth_ctx.role
+    request.state.tenant_id = auth_ctx.tenant_id
+    tenant_token = set_tenant_id(auth_ctx.tenant_id)
 
     # ---- Query payload size guardrail (defense-in-depth) ----
     if _query_payload_too_large(request):
@@ -534,6 +541,7 @@ async def _request_middleware(request: Request, call_next):
             error_type="PayloadTooLarge",
             severity="WARNING",
         )
+        reset_tenant_id(tenant_token)
         return JSONResponse(
             status_code=413,
             content={"detail": f"Payload too large (max {settings.max_query_payload_bytes} bytes)"},
@@ -566,6 +574,7 @@ async def _request_middleware(request: Request, call_next):
                 limited=True,
                 severity="WARNING",
             )
+            reset_tenant_id(tenant_token)
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded"},
@@ -605,6 +614,7 @@ async def _request_middleware(request: Request, call_next):
             error_type="HTTPException",
             severity="WARNING" if he.status_code < 500 else "ERROR",
         )
+        reset_tenant_id(tenant_token)
         raise
     except Exception as e:
         latency_ms = timer.ms()
@@ -629,6 +639,7 @@ async def _request_middleware(request: Request, call_next):
             error_type=type(e).__name__,
             severity="ERROR",
         )
+        reset_tenant_id(tenant_token)
         raise
 
     # Attach request ID for client correlation.
@@ -683,6 +694,7 @@ async def _request_middleware(request: Request, call_next):
         span_id=log_span_id,
         severity="INFO",
     )
+    reset_tenant_id(tenant_token)
     return response
 
 
@@ -1063,12 +1075,26 @@ def meta(_auth: AuthContext = Depends(require_role("reader"))) -> dict[str, obje
     eval_enabled = bool(settings.allow_eval and not settings.public_demo_mode)
     chunk_view_enabled = bool(settings.allow_chunk_view and not settings.public_demo_mode)
     doc_delete_enabled = bool(settings.allow_doc_delete and not settings.public_demo_mode)
+    tenant_id = str(getattr(_auth, "tenant_id", "default"))
 
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
-        doc_count = int(conn.execute("SELECT COUNT(1) AS n FROM docs").fetchone()["n"])
-        chunk_count = int(conn.execute("SELECT COUNT(1) AS n FROM chunks").fetchone()["n"])
-        embedding_rows = int(conn.execute("SELECT COUNT(1) AS n FROM embeddings").fetchone()["n"])
+        ph = _sql_ph(conn)
+        doc_count = int(conn.execute(f"SELECT COUNT(1) AS n FROM docs WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"])
+        chunk_count = int(
+            conn.execute(f"SELECT COUNT(1) AS n FROM chunks WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"]
+        )
+        embedding_rows = int(
+            conn.execute(
+                f"""
+                SELECT COUNT(1) AS n
+                FROM embeddings e
+                JOIN chunks c ON c.chunk_id = e.chunk_id
+                WHERE c.tenant_id={ph}
+                """,
+                (tenant_id,),
+            ).fetchone()["n"]
+        )
 
         sig_keys = [
             "index.embeddings_backend",
@@ -1084,6 +1110,7 @@ def meta(_auth: AuthContext = Depends(require_role("reader"))) -> dict[str, obje
         "version": app.version,
         "public_demo_mode": settings.public_demo_mode,
         "auth_mode": settings.auth_mode if not settings.public_demo_mode else "none",
+        "tenant_id": tenant_id,
         "database_backend": "postgres" if settings.database_url else "sqlite",
         "uploads_enabled": uploads_enabled,
         "metadata_edit_enabled": metadata_edit_enabled,
@@ -1120,28 +1147,48 @@ def meta(_auth: AuthContext = Depends(require_role("reader"))) -> dict[str, obje
 def stats_api(_auth: Any = Depends(require_role("reader"))) -> StatsResponse:
     """Index-level statistics for dashboards and diagnostics."""
 
+    tenant_id = str(getattr(_auth, "tenant_id", "default"))
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
+        ph = _sql_ph(conn)
 
-        docs = int(conn.execute("SELECT COUNT(1) AS n FROM docs").fetchone()["n"])
-        chunks = int(conn.execute("SELECT COUNT(1) AS n FROM chunks").fetchone()["n"])
-        embeddings = int(conn.execute("SELECT COUNT(1) AS n FROM embeddings").fetchone()["n"])
-        ingest_events = int(conn.execute("SELECT COUNT(1) AS n FROM ingest_events").fetchone()["n"])
+        docs = int(conn.execute(f"SELECT COUNT(1) AS n FROM docs WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"])
+        chunks = int(conn.execute(f"SELECT COUNT(1) AS n FROM chunks WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"])
+        embeddings = int(
+            conn.execute(
+                f"""
+                SELECT COUNT(1) AS n
+                FROM embeddings e
+                JOIN chunks c ON c.chunk_id = e.chunk_id
+                WHERE c.tenant_id={ph}
+                """,
+                (tenant_id,),
+            ).fetchone()["n"]
+        )
+        ingest_events = int(
+            conn.execute(f"SELECT COUNT(1) AS n FROM ingest_events WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"]
+        )
 
         by_classification: dict[str, int] = {}
-        cur = conn.execute("SELECT classification, COUNT(1) AS n FROM docs GROUP BY classification")
+        cur = conn.execute(
+            f"SELECT classification, COUNT(1) AS n FROM docs WHERE tenant_id={ph} GROUP BY classification",
+            (tenant_id,),
+        )
         for r in cur.fetchall():
             by_classification[str(r["classification"])] = int(r["n"])
 
         by_retention: dict[str, int] = {}
-        cur = conn.execute("SELECT retention, COUNT(1) AS n FROM docs GROUP BY retention")
+        cur = conn.execute(
+            f"SELECT retention, COUNT(1) AS n FROM docs WHERE tenant_id={ph} GROUP BY retention",
+            (tenant_id,),
+        )
         for r in cur.fetchall():
             by_retention[str(r["retention"])] = int(r["n"])
 
         # Tags are stored as JSON text; SQLite json1 is not always available,
         # so compute in Python.
         tag_counts: dict[str, int] = {}
-        cur = conn.execute("SELECT tags_json FROM docs")
+        cur = conn.execute(f"SELECT tags_json FROM docs WHERE tenant_id={ph}", (tenant_id,))
         for r in cur.fetchall():
             try:
                 tags = json.loads(r["tags_json"] or "[]")
@@ -1528,13 +1575,15 @@ def search_chunks(q: str, limit: int = 20, _auth: Any = Depends(require_role("re
 
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
+        tenant_id = str(getattr(_auth, "tenant_id", "default"))
+        ph = _sql_ph(conn)
 
         results: list[ChunkSearchResult] = []
 
         # Prefer FTS5 if available.
         try:
             cur = conn.execute(
-                """
+                f"""
                 SELECT
                     c.chunk_id,
                     c.doc_id,
@@ -1547,12 +1596,13 @@ def search_chunks(q: str, limit: int = 20, _auth: Any = Depends(require_role("re
                     d.tags_json AS tags_json
                 FROM chunks_fts
                 JOIN chunks c ON chunks_fts.chunk_id = c.chunk_id
-                JOIN docs d ON c.doc_id = d.doc_id
-                WHERE chunks_fts MATCH ?
+                JOIN docs d ON c.doc_id = d.doc_id AND d.tenant_id = c.tenant_id
+                WHERE chunks_fts MATCH {ph}
+                  AND c.tenant_id = {ph}
                 ORDER BY bm
-                LIMIT ?
+                LIMIT {ph}
                 """,
-                (fts_query, limit),
+                (fts_query, tenant_id, limit),
             )
             for r in cur.fetchall():
                 try:
@@ -1583,14 +1633,16 @@ def search_chunks(q: str, limit: int = 20, _auth: Any = Depends(require_role("re
 
         # Lexical fallback (token overlap).
         cur = conn.execute(
-            """
+            f"""
             SELECT c.chunk_id, c.doc_id, c.idx, c.text,
                    d.title AS doc_title, d.source AS doc_source,
                    d.classification AS classification, d.tags_json AS tags_json
             FROM chunks c
-            JOIN docs d ON c.doc_id = d.doc_id
+            JOIN docs d ON c.doc_id = d.doc_id AND d.tenant_id = c.tenant_id
+            WHERE c.tenant_id = {ph}
             ORDER BY d.updated_at DESC, c.idx ASC
-            """
+            """,
+            (tenant_id,),
         )
         scored: list[tuple[float, ChunkSearchResult]] = []
         tokset = set(tokens)

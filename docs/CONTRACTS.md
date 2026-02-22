@@ -29,11 +29,20 @@ This document defines the stable external contracts for the Grounded Knowledge P
   - `oidc`: reserved for Cloud Run/IAP JWT validation (not implemented in this build)
 
 - API key inputs (when `AUTH_MODE=api_key`):
-  - `API_KEYS_JSON` (preferred): JSON map of key -> role
-    - Example: `{"reader-key":"reader","editor-key":"editor","admin-key":"admin"}`
+  - `API_KEYS_JSON` (preferred): JSON map/list of key grants
+    - role-only map (backward-compatible):
+      - `{"reader-key":"reader","editor-key":"editor","admin-key":"admin"}`
+    - tenant-scoped grants (optional multi-workspace mode):
+      - `{"reader-a":{"role":"reader","tenants":["tenant-a"]},"admin":{"role":"admin","tenants":"*"}}`
   - `API_KEYS` (fallback): comma-separated keys, optional role suffix
     - Example: `reader-key:reader,admin-key:admin`
   - `API_KEY` (fallback): single key (defaults to `admin`)
+
+- Optional tenant selection header (private deployments):
+  - `X-Tenant-ID: <tenant>`
+  - default tenant is `default` when omitted
+  - allowed pattern: lowercase letters/numbers with `_`/`-` (up to 63 chars)
+  - if an API key is tenant-scoped and the header tenant is not allowed, API returns `403 Tenant access denied`
 
 Roles:
 - `reader`: read/query endpoints
@@ -162,6 +171,7 @@ Shape (stable keys):
 
 - `public_demo_mode: bool`
 - `auth_mode: string`
+- `tenant_id: string` (active tenant; `default` when not tenant-scoped)
 - `database_backend: string`
 - `version: string`
 - `uploads_enabled: bool`
@@ -191,6 +201,7 @@ Shape (stable keys):
 - `GET /api/stats`
 
 Returns aggregated index statistics for dashboards and diagnostics.
+In tenant-scoped deployments, stats are filtered to the active tenant.
 
 Shape (stable keys):
 
@@ -206,6 +217,9 @@ Shape (stable keys):
 
 - `GET /api/docs` → `{ docs: Doc[] }`
 - `GET /api/docs/{doc_id}` → `{ doc: Doc, ingest_events: IngestEvent[] }`
+
+Tenant note:
+- in tenant-scoped private deployments, docs/chunks/ingest-events are isolated by `X-Tenant-ID`
 
 `IngestEvent` includes (in addition to lineage fields):
 - `schema_fingerprint?: string`
@@ -335,6 +349,7 @@ Response (stable):
 
 Auth note:
 - when `AUTH_MODE=api_key`, requests must include `X-API-Key: <key>`
+- optional tenant-scoped deployments can include `X-Tenant-ID: <tenant>` (defaults to `default`)
 
 Streaming event schema (`/api/query/stream`):
 
