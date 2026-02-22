@@ -3093,3 +3093,93 @@ Completed hybrid retrieval tuning hardening with deterministic ranking, runtime 
 
 - Commit `TASK_HYBRID_RETRIEVAL_TUNING` on this branch and open PR.
 - After merge, continue with the next unsequenced task by maintainer priority.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-multitenancy-rbac`
+- Current task: `TASK_MULTITENANCY_RBAC` (`agents/tasks/TASK_MULTITENANCY_RBAC.md`)
+
+## Task summary
+
+Implemented an optional tenant/workspace boundary with tenant-scoped RBAC for private deployments:
+
+- added request-scoped tenant context (`X-Tenant-ID`) with normalization and safe default tenant (`default`)
+- extended API key auth grants to support tenant restrictions in `API_KEYS_JSON` while preserving legacy role-only formats
+- enforced tenant scoping across storage/retrieval/search paths for docs/chunks/ingest-events
+- added SQLite forward-migration support (`tenant_id` columns + backfill + tenant indexes)
+- added Postgres migration `006_tenant_boundary.sql` for `tenant_id` columns/backfill/indexes
+- added regression tests for cross-tenant data isolation and tenant-scoped RBAC enforcement
+
+## Decisions made
+
+- Preserved ADR baseline: one-project-per-client remains the default model; tenant boundary is optional and only active when private deployments use tenant-scoped API key grants + tenant headers.
+- Chose header-based tenant selection (`X-Tenant-ID`) to avoid route contract churn.
+- Kept existing API key env formats backward compatible (`API_KEYS_JSON` role map, `API_KEYS`, `API_KEY`) and added richer grant objects as an additive capability.
+
+## Files changed
+
+- `app/tenant.py`
+- `app/auth.py`
+- `app/storage.py`
+- `app/retrieval.py`
+- `app/ingestion.py`
+- `app/main.py`
+- `app/migrations/postgres/006_tenant_boundary.sql`
+- `tests/test_multitenancy_rbac.py`
+- `.env.example`
+- `docs/CONTRACTS.md`
+- `docs/ARCHITECTURE/SECURITY_MODEL.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git checkout main && git pull --ff-only`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_MULTITENANCY_RBAC.md`
+2. Focused validation during implementation:
+   - `uv run ruff check app/tenant.py app/auth.py app/main.py app/storage.py app/retrieval.py app/ingestion.py tests/test_multitenancy_rbac.py`
+   - `uv run mypy app`
+   - `uv run pytest -q tests/test_multitenancy_rbac.py`
+   - `uv run pytest -q tests/test_auth.py tests/test_ingestion_runs.py tests/test_connectors_gcs_sync_api.py tests/test_cloudsql_runtime.py`
+   - `uv run pytest`
+3. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make test-postgres`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `uv run ruff check ...`: PASS
+- `uv run mypy app`: PASS
+- `uv run pytest -q tests/test_multitenancy_rbac.py`: PASS (`2 passed`)
+- `uv run pytest -q tests/test_auth.py tests/test_ingestion_runs.py tests/test_connectors_gcs_sync_api.py tests/test_cloudsql_runtime.py`: PASS (`15 passed, 1 skipped`)
+- `uv run pytest`: PASS (`94 passed, 3 skipped`)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`94 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make test-postgres`: PASS (`2 skipped` in this local environment; Docker/psycopg-dependent)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- Tenant-scoped mode is private-deployment oriented and optional; default/no-header behavior remains single-tenant (`default`).
+- Existing API key env formats remain valid; richer tenant grants are additive.
+
+## What’s next
+
+- Commit `TASK_MULTITENANCY_RBAC` on this branch and open PR.
+- Continue with the next unsequenced task: `TASK_SEARCH_PERF_PROFILE`.

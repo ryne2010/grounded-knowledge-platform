@@ -15,6 +15,7 @@ from .embeddings import Embedder, HashEmbedder, NoEmbedder, SentenceTransformerE
 from .index_maintenance import ensure_index_compatible
 from .maintenance import retention_is_expired
 from .storage import Chunk, connect, get_chunks_by_ids, get_embeddings_by_ids, init_db, list_chunks
+from .tenant import current_tenant_id
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
@@ -154,9 +155,10 @@ def _expired_doc_ids_for_doc_ids(conn: Any, doc_ids: set[str], *, now: int) -> s
 
     ordered_ids = sorted(doc_ids)
     placeholders = ",".join([_ph(conn)] * len(ordered_ids))
+    tenant_id = current_tenant_id()
     cur = conn.execute(
-        f"SELECT doc_id, retention, updated_at FROM docs WHERE doc_id IN ({placeholders})",
-        tuple(ordered_ids),
+        f"SELECT doc_id, retention, updated_at FROM docs WHERE doc_id IN ({placeholders}) AND tenant_id={_ph(conn)}",
+        tuple(ordered_ids) + (tenant_id,),
     )
 
     expired: set[str] = set()
@@ -185,6 +187,7 @@ def _load_corpus(conn: sqlite3.Connection) -> tuple[list[Chunk], np.ndarray, lis
     key = "::".join(
         [
             "corpus",
+            current_tenant_id(),
             settings.sqlite_path,
             settings.embeddings_backend,
             settings.embeddings_model,
@@ -240,9 +243,17 @@ def _lexical_scores_fts(conn: sqlite3.Connection, query: str, limit: int) -> Opt
         if not toks:
             return {}
         q = " ".join(toks)
+        tenant_id = current_tenant_id()
         cur = conn.execute(
-            "SELECT chunk_id, bm25(chunks_fts) AS bm FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY bm LIMIT ?",
-            (q, limit),
+            """
+            SELECT chunks_fts.chunk_id, bm25(chunks_fts) AS bm
+            FROM chunks_fts
+            JOIN chunks c ON chunks_fts.chunk_id = c.chunk_id
+            WHERE chunks_fts MATCH ? AND c.tenant_id = ?
+            ORDER BY bm
+            LIMIT ?
+            """,
+            (q, tenant_id, limit),
         )
         rows = [(r["chunk_id"], float(r["bm"])) for r in cur.fetchall()]
     except Exception:
@@ -272,6 +283,7 @@ def _pg_lexical_scores(conn: Any, query: str, limit: int) -> dict[str, float]:
     q = " ".join(toks)
     limit = max(1, min(int(limit), 2000))
 
+    tenant_id = current_tenant_id()
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -279,10 +291,11 @@ def _pg_lexical_scores(conn: Any, query: str, limit: int) -> dict[str, float]:
             SELECT c.chunk_id, ts_rank_cd(to_tsvector('english', c.text), q.query) AS score
             FROM chunks c, q
             WHERE to_tsvector('english', c.text) @@ q.query
+              AND c.tenant_id = %s
             ORDER BY score DESC
             LIMIT %s
             """,
-            (q, limit),
+            (q, tenant_id, limit),
         )
         rows = cur.fetchall()
 
@@ -309,17 +322,21 @@ def _pg_vector_scores(conn: Any, query: str, embedder: Embedder, limit: int) -> 
     limit = max(1, min(int(limit), 2000))
     q_vec = embedder.embed([query]).reshape(-1).astype(np.float32)
     q_lit = _vec_to_pgvector_literal(q_vec)
+    tenant_id = current_tenant_id()
 
     with conn.cursor() as cur:
         cur.execute(
             """
             WITH q AS (SELECT %s::vector AS v)
             SELECT e.chunk_id, (1 - (e.vec <=> q.v)) AS score
-            FROM embeddings e, q
+            FROM embeddings e
+            JOIN chunks c ON c.chunk_id = e.chunk_id,
+                 q
+            WHERE c.tenant_id = %s
             ORDER BY e.vec <=> q.v
             LIMIT %s
             """,
-            (q_lit, limit),
+            (q_lit, tenant_id, limit),
         )
         rows = cur.fetchall()
 

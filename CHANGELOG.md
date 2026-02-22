@@ -30,6 +30,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - New runbook: `docs/RUNBOOKS/BIGQUERY_EXPORT.md`.
 - BigQuery modeling guide (`docs/BIGQUERY_MODELING.md`) with raw->curated->marts conventions.
 - Example BigQuery model SQL under `infra/bigquery_models/{raw,curated,marts}` for ingestion freshness, query latency, eval pass rates, and ops/governance marts.
+- Optional tenant-scoped private mode with `X-Tenant-ID` request context and API-key grants that can restrict allowed tenants.
 
 ### Changed
 
@@ -48,6 +49,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Cloud SQL contract/runbook docs now explicitly document `DATABASE_URL` Postgres behavior, `pgvector` baseline requirements, and migration tracking via `schema_migrations`.
 - Connector contract docs now explicitly pin GCS sync `max_objects` bounds (`1..5000`) and reaffirm add/update-only behavior.
 - Hybrid retrieval now supports runtime tuning knobs (`RETRIEVAL_*`) for candidate limits/weights, logs optional diagnostics (`RETRIEVAL_DEBUG_STATS`), and surfaces candidate limits in eval metadata.
+- Storage/retrieval paths now enforce tenant scoping for docs/chunks/ingest events when tenant mode is used.
 
 ### Fixed
 
@@ -58,6 +60,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Cloud SQL integration tests now verify Postgres migrations are recorded and required retrieval indexes (`GIN` FTS + `HNSW` pgvector) exist.
 - Added GCS sync safety regression tests for public-demo gating, admin-only access, and max-object bounds; idempotent reruns now assert per-result `changed=false`.
 - Hybrid retrieval ranking now uses deterministic tie-break ordering across SQLite and Postgres for equal-score candidates.
+- Added regression tests for tenant isolation + tenant-scoped RBAC enforcement to prevent cross-tenant data access.
 
 ## 0.10.0
 

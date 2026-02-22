@@ -16,7 +16,8 @@ Related:
 - **One GCP project per client** is the primary isolation boundary.
 - This keeps IAM, billing, incident response, and audit scope clean.
 
-Non-goal: in-app multi-tenancy/workspaces (optional future only).
+Default non-goal: in-app multi-tenancy/workspaces are not required for the primary deployment model.
+Optional mode: private deployments can now enforce tenant-scoped API-key access using `X-Tenant-ID`.
 
 ---
 
@@ -52,6 +53,10 @@ Roles:
 - `reader`: query + read-only browsing
 - `editor`: ingest uploads/text (when enabled)
 - `admin`: connectors, eval, deletes, maintenance operations
+
+Optional tenant-scoped mode:
+- API keys can be restricted to one or more tenant IDs.
+- docs/chunks/ingest-events retrieval paths are tenant-scoped by request tenant context.
 
 Principle: privileged operations are gated **twice**
 - role checks (auth)

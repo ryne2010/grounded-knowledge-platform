@@ -33,6 +33,7 @@ from .storage import (
     list_ingest_events,
     upsert_doc,
 )
+from .tenant import scope_doc_id
 
 
 def _vec_to_pgvector_literal(vec: np.ndarray) -> str:
@@ -191,6 +192,7 @@ def ingest_text(
 
     embedder = _get_embedder()
     doc_id = doc_id or stable_doc_id(title, source)
+    doc_id = scope_doc_id(doc_id)
 
     # Compute content fingerprint for drift tracking.
     text_bytes = text.encode("utf-8", errors="replace")

@@ -9,6 +9,7 @@ from typing import Callable, Literal
 from fastapi import HTTPException, Request
 
 from . import config
+from .tenant import default_tenant_id, normalize_tenant_id
 
 Role = Literal["reader", "editor", "admin"]
 AuthMode = Literal["none", "api_key", "oidc"]
@@ -28,12 +29,19 @@ class AuthContext:
     role: Role
     mode: AuthMode
     authenticated: bool
+    tenant_id: str
 
 
 @dataclass(frozen=True)
 class AuthError(Exception):
     status_code: int
     detail: str
+
+
+@dataclass(frozen=True)
+class ApiKeyGrant:
+    role: Role
+    tenants: tuple[str, ...]
 
 
 def _normalize_role(value: str | None, default: Role = "reader") -> Role:
@@ -52,19 +60,55 @@ def _mask_key(api_key: str) -> str:
     return f"{api_key[:4]}...{digest}"
 
 
-def _parse_api_keys_json(raw: str) -> dict[str, Role]:
+def _normalize_tenant_scope(raw: object) -> tuple[str, ...]:
+    if raw is None:
+        return ("*",)
+
+    if isinstance(raw, str):
+        token = raw.strip()
+        if not token or token == "*":
+            return ("*",)
+        return (normalize_tenant_id(token),)
+
+    if isinstance(raw, list):
+        normalized: set[str] = set()
+        for item in raw:
+            token = str(item).strip()
+            if not token:
+                continue
+            if token == "*":
+                return ("*",)
+            normalized.add(normalize_tenant_id(token))
+        if not normalized:
+            return ("*",)
+        return tuple(sorted(normalized))
+
+    return ("*",)
+
+
+def _parse_grant(value: object) -> ApiKeyGrant:
+    if isinstance(value, dict):
+        role = _normalize_role(str(value.get("role", "reader")), default="reader")
+        tenants = _normalize_tenant_scope(value.get("tenants"))
+        return ApiKeyGrant(role=role, tenants=tenants)
+
+    role = _normalize_role(str(value), default="reader")
+    return ApiKeyGrant(role=role, tenants=("*",))
+
+
+def _parse_api_keys_json(raw: str) -> dict[str, ApiKeyGrant]:
     try:
         data = json.loads(raw)
     except Exception:
         return {}
 
-    out: dict[str, Role] = {}
+    out: dict[str, ApiKeyGrant] = {}
     if isinstance(data, dict):
-        for key, role in data.items():
+        for key, grant in data.items():
             k = str(key).strip()
             if not k:
                 continue
-            out[k] = _normalize_role(str(role), default="reader")
+            out[k] = _parse_grant(grant)
         return out
 
     if isinstance(data, list):
@@ -74,12 +118,15 @@ def _parse_api_keys_json(raw: str) -> dict[str, Role]:
             key = str(item.get("key", "")).strip()
             if not key:
                 continue
-            out[key] = _normalize_role(str(item.get("role", "reader")), default="reader")
+            out[key] = ApiKeyGrant(
+                role=_normalize_role(str(item.get("role", "reader")), default="reader"),
+                tenants=_normalize_tenant_scope(item.get("tenants")),
+            )
     return out
 
 
-def _parse_api_keys(raw: str) -> dict[str, Role]:
-    out: dict[str, Role] = {}
+def _parse_api_keys(raw: str) -> dict[str, ApiKeyGrant]:
+    out: dict[str, ApiKeyGrant] = {}
     for token in raw.split(","):
         t = token.strip()
         if not t:
@@ -89,20 +136,20 @@ def _parse_api_keys(raw: str) -> dict[str, Role]:
             k = key.strip()
             if not k:
                 continue
-            out[k] = _normalize_role(role, default="reader")
+            out[k] = ApiKeyGrant(role=_normalize_role(role, default="reader"), tenants=("*",))
             continue
         if "=" in t:
             key, role = t.split("=", 1)
             k = key.strip()
             if not k:
                 continue
-            out[k] = _normalize_role(role, default="reader")
+            out[k] = ApiKeyGrant(role=_normalize_role(role, default="reader"), tenants=("*",))
             continue
-        out[t] = "reader"
+        out[t] = ApiKeyGrant(role="reader", tenants=("*",))
     return out
 
 
-def _api_key_role_map() -> dict[str, Role]:
+def _api_key_grants() -> dict[str, ApiKeyGrant]:
     # Priority:
     # 1) API_KEYS_JSON (explicit key->role map)
     # 2) API_KEYS (comma-separated; supports optional key:role)
@@ -118,7 +165,7 @@ def _api_key_role_map() -> dict[str, Role]:
     single = (os.getenv("API_KEY") or "").strip()
     if not single:
         return {}
-    return {single: "admin"}
+    return {single: ApiKeyGrant(role="admin", tenants=("*",))}
 
 
 def effective_auth_mode() -> AuthMode:
@@ -131,17 +178,43 @@ def effective_auth_mode() -> AuthMode:
     return "none"
 
 
+def _tenant_from_request(request: Request) -> str:
+    raw = request.headers.get("x-tenant-id")
+    try:
+        return normalize_tenant_id(raw)
+    except ValueError as e:
+        raise AuthError(status_code=400, detail=str(e)) from e
+
+
+def _grant_allows_tenant(grant: ApiKeyGrant, tenant_id: str) -> bool:
+    if "*" in grant.tenants:
+        return True
+    return tenant_id in grant.tenants
+
+
 def resolve_auth_context(request: Request) -> AuthContext:
     mode = effective_auth_mode()
     path = request.url.path
 
     if mode == "none":
         # Keep current private-mode behavior unchanged when auth is disabled.
-        return AuthContext(principal="anonymous", role="admin", mode="none", authenticated=False)
+        return AuthContext(
+            principal="anonymous",
+            role="admin",
+            mode="none",
+            authenticated=False,
+            tenant_id=default_tenant_id(),
+        )
 
     # Keep health checks unauthenticated so Cloud Run probes continue to work.
     if path in _HEALTH_PATHS:
-        return AuthContext(principal="anonymous", role="reader", mode=mode, authenticated=False)
+        return AuthContext(
+            principal="anonymous",
+            role="reader",
+            mode=mode,
+            authenticated=False,
+            tenant_id=default_tenant_id(),
+        )
 
     if mode == "oidc":
         raise AuthError(status_code=501, detail="AUTH_MODE=oidc is not implemented in this build")
@@ -151,19 +224,23 @@ def resolve_auth_context(request: Request) -> AuthContext:
     if not key:
         raise AuthError(status_code=401, detail="Missing API key")
 
-    role_map = _api_key_role_map()
-    if not role_map:
+    grants = _api_key_grants()
+    if not grants:
         raise AuthError(status_code=500, detail="AUTH_MODE=api_key requires API_KEYS_JSON, API_KEYS, or API_KEY")
 
-    role = role_map.get(key)
-    if role is None:
+    grant = grants.get(key)
+    if grant is None:
         raise AuthError(status_code=401, detail="Invalid API key")
+    tenant_id = _tenant_from_request(request)
+    if not _grant_allows_tenant(grant, tenant_id):
+        raise AuthError(status_code=403, detail="Tenant access denied")
 
     return AuthContext(
         principal=f"api_key:{_mask_key(key)}",
-        role=role,
+        role=grant.role,
         mode="api_key",
         authenticated=True,
+        tenant_id=tenant_id,
     )
 
 
@@ -175,6 +252,7 @@ def _ensure_ctx(request: Request) -> AuthContext:
     request.state.auth_context = ctx
     request.state.principal = ctx.principal
     request.state.role = ctx.role
+    request.state.tenant_id = ctx.tenant_id
     return ctx
 
 

@@ -12,6 +12,7 @@ from typing import Any, Iterable, Iterator
 
 from .config import settings
 from .migrations_runner import apply_postgres_migrations
+from .tenant import current_tenant_id, default_tenant_id, scope_doc_id
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class Doc:
     doc_version: int
     created_at: int
     updated_at: int
+    tenant_id: str = "default"
 
     @property
     def tags(self) -> list[str]:
@@ -62,6 +64,7 @@ class Chunk:
     doc_id: str
     idx: int
     text: str
+    tenant_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,7 @@ class IngestEvent:
     schema_drifted: int = 0
     run_id: str | None = None
     notes: str | None = None
+    tenant_id: str = "default"
 
     @property
     def changed_bool(self) -> bool:
@@ -162,6 +166,7 @@ class IngestEventView:
 
     run_id: str | None = None
     notes: str | None = None
+    tenant_id: str = "default"
 
     @property
     def tags(self) -> list[str]:
@@ -236,6 +241,7 @@ class IngestionRun:
     bytes_processed: int
     errors_json: str
     event_count: int = 0
+    tenant_id: str = "default"
 
     @property
     def trigger_payload(self) -> dict[str, object]:
@@ -423,6 +429,13 @@ def _ph(conn: Any) -> str:
     return "%s" if _is_postgres_conn(conn) else "?"
 
 
+def _tenant_id() -> str:
+    try:
+        return current_tenant_id()
+    except Exception:
+        return default_tenant_id()
+
+
 _PG_SCHEMA_INITIALIZED: set[str] = set()
 
 
@@ -494,6 +507,7 @@ def init_db(conn: Any) -> None:
         """
         CREATE TABLE IF NOT EXISTS docs (
             doc_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
             title TEXT NOT NULL,
             source TEXT NOT NULL,
             classification TEXT NOT NULL DEFAULT 'public',
@@ -512,6 +526,7 @@ def init_db(conn: Any) -> None:
         """
         CREATE TABLE IF NOT EXISTS chunks (
             chunk_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
             doc_id TEXT NOT NULL,
             idx INTEGER NOT NULL,
             text TEXT NOT NULL,
@@ -533,6 +548,7 @@ def init_db(conn: Any) -> None:
         """
         CREATE TABLE IF NOT EXISTS ingest_events (
             event_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
             doc_id TEXT NOT NULL,
             doc_version INTEGER NOT NULL,
             ingested_at INTEGER NOT NULL,
@@ -560,6 +576,7 @@ def init_db(conn: Any) -> None:
         """
         CREATE TABLE IF NOT EXISTS ingestion_runs (
             run_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT 'default',
             started_at INTEGER NOT NULL,
             finished_at INTEGER,
             status TEXT NOT NULL,
@@ -635,6 +652,8 @@ def init_db(conn: Any) -> None:
             conn.execute("ALTER TABLE docs ADD COLUMN classification TEXT NOT NULL DEFAULT 'public'")
         if "retention" not in cols:
             conn.execute("ALTER TABLE docs ADD COLUMN retention TEXT NOT NULL DEFAULT 'indefinite'")
+        if "tenant_id" not in cols:
+            conn.execute("ALTER TABLE docs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
         if "tags_json" not in cols:
             conn.execute("ALTER TABLE docs ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'")
         if "content_sha256" not in cols:
@@ -655,25 +674,75 @@ def init_db(conn: Any) -> None:
             conn.execute("UPDATE docs SET updated_at = created_at WHERE updated_at = 0 AND created_at != 0")
         except Exception:
             pass
+        try:
+            conn.execute("UPDATE docs SET tenant_id='default' WHERE tenant_id IS NULL OR trim(tenant_id)=''")
+        except Exception:
+            pass
+
+    if "chunks" in {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}:
+        _ensure_column(conn, "chunks", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
+        try:
+            conn.execute(
+                """
+                UPDATE chunks
+                SET tenant_id = COALESCE(
+                    (SELECT d.tenant_id FROM docs d WHERE d.doc_id = chunks.doc_id),
+                    'default'
+                )
+                WHERE tenant_id IS NULL OR trim(tenant_id) = ''
+                """
+            )
+        except Exception:
+            pass
 
     if "ingest_events" in {
         r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }:
+        _ensure_column(conn, "ingest_events", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
         _ensure_column(conn, "ingest_events", "schema_fingerprint", "TEXT")
         _ensure_column(conn, "ingest_events", "contract_sha256", "TEXT")
         _ensure_column(conn, "ingest_events", "validation_status", "TEXT")
         _ensure_column(conn, "ingest_events", "validation_errors_json", "TEXT")
         _ensure_column(conn, "ingest_events", "schema_drifted", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "ingest_events", "run_id", "TEXT")
+        try:
+            conn.execute(
+                """
+                UPDATE ingest_events
+                SET tenant_id = COALESCE(
+                    (SELECT d.tenant_id FROM docs d WHERE d.doc_id = ingest_events.doc_id),
+                    'default'
+                )
+                WHERE tenant_id IS NULL OR trim(tenant_id) = ''
+                """
+            )
+        except Exception:
+            pass
+
+    if "ingestion_runs" in {
+        r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }:
+        _ensure_column(conn, "ingestion_runs", "tenant_id", "TEXT NOT NULL DEFAULT 'default'")
+        try:
+            conn.execute("UPDATE ingestion_runs SET tenant_id='default' WHERE tenant_id IS NULL OR trim(tenant_id)=''")
+        except Exception:
+            pass
 
     # --- Indexes ---
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_tenant ON docs(tenant_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_tenant_doc ON chunks(tenant_id, doc_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc_idx ON chunks(doc_id, idx)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_tenant_doc_idx ON chunks(tenant_id, doc_id, idx)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_tenant ON ingest_events(tenant_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_doc ON ingest_events(doc_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_doc_ver ON ingest_events(doc_id, doc_version)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_tenant_doc_ver ON ingest_events(tenant_id, doc_id, doc_version)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ingested_at ON ingest_events(ingested_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_tenant_ingested_at ON ingest_events(tenant_id, ingested_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_validation_status ON ingest_events(validation_status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_run_id ON ingest_events(run_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ingestion_runs_tenant_started_at ON ingestion_runs(tenant_id, started_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ingestion_runs_started_at ON ingestion_runs(started_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ingestion_runs_status ON ingestion_runs(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_occurred_at ON audit_events(occurred_at)")
@@ -682,6 +751,7 @@ def init_db(conn: Any) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_runs_started_at ON eval_runs(started_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_runs_status ON eval_runs(status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_runs_dataset_name ON eval_runs(dataset_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_tenant_updated_at ON docs(tenant_id, updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_updated_at ON docs(updated_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_title ON docs(title)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_docs_source ON docs(source)")
@@ -797,18 +867,21 @@ def upsert_doc(
     num_chunks: int = 0,
     doc_version: int = 1,
 ) -> None:
+    doc_id = scope_doc_id(doc_id)
+    tenant_id = _tenant_id()
     now = int(time.time())
     if _is_postgres_conn(conn):
         conn.execute(
             """
             INSERT INTO docs (
-              doc_id, title, source,
+              doc_id, tenant_id, title, source,
               classification, retention, tags_json,
               content_sha256, content_bytes, num_chunks, doc_version,
               created_at, updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(doc_id) DO UPDATE SET
+              tenant_id=excluded.tenant_id,
               title=excluded.title,
               source=excluded.source,
               classification=excluded.classification,
@@ -822,6 +895,7 @@ def upsert_doc(
             """,
             (
                 doc_id,
+                tenant_id,
                 title,
                 source,
                 classification,
@@ -840,13 +914,14 @@ def upsert_doc(
     conn.execute(
         """
         INSERT INTO docs (
-          doc_id, title, source,
+          doc_id, tenant_id, title, source,
           classification, retention, tags_json,
           content_sha256, content_bytes, num_chunks, doc_version,
           created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(doc_id) DO UPDATE SET
+          tenant_id=excluded.tenant_id,
           title=excluded.title,
           source=excluded.source,
           classification=excluded.classification,
@@ -860,6 +935,7 @@ def upsert_doc(
         """,
         (
             doc_id,
+            tenant_id,
             title,
             source,
             classification,
@@ -893,6 +969,8 @@ def update_doc_metadata(
       - If you want auditability, add an explicit audit table/event (see TASK_AUTH / TASK_OTEL).
     """
 
+    doc_id = scope_doc_id(doc_id)
+    tenant_id = _tenant_id()
     sets: list[str] = []
     params: list[object] = []
 
@@ -917,20 +995,22 @@ def update_doc_metadata(
     if not sets:
         return
 
-    params.append(doc_id)
-    conn.execute(f"UPDATE docs SET {', '.join(sets)} WHERE doc_id={ph}", params)
+    params.extend([doc_id, tenant_id])
+    conn.execute(f"UPDATE docs SET {', '.join(sets)} WHERE doc_id={ph} AND tenant_id={ph}", params)
 
 
 def get_doc(conn: Any, doc_id: str) -> Doc | None:
+    doc_id = scope_doc_id(doc_id)
+    tenant_id = _tenant_id()
     ph = _ph(conn)
     cur = conn.execute(
         f"""
-        SELECT doc_id, title, source, classification, retention, tags_json,
+        SELECT doc_id, tenant_id, title, source, classification, retention, tags_json,
                content_sha256, content_bytes, num_chunks, doc_version, created_at, updated_at
         FROM docs
-        WHERE doc_id={ph}
+        WHERE doc_id={ph} AND tenant_id={ph}
         """,
-        (doc_id,),
+        (doc_id, tenant_id),
     )
     row = cur.fetchone()
     return Doc(**dict(row)) if row is not None else None
@@ -938,8 +1018,10 @@ def get_doc(conn: Any, doc_id: str) -> Doc | None:
 
 def delete_doc_contents(conn: Any, doc_id: str) -> None:
     """Remove old chunks/embeddings for re-ingest."""
+    doc_id = scope_doc_id(doc_id)
+    tenant_id = _tenant_id()
     ph = _ph(conn)
-    cur = conn.execute(f"SELECT chunk_id FROM chunks WHERE doc_id={ph}", (doc_id,))
+    cur = conn.execute(f"SELECT chunk_id FROM chunks WHERE doc_id={ph} AND tenant_id={ph}", (doc_id, tenant_id))
     chunk_ids = [r["chunk_id"] for r in cur.fetchall()]
 
     if chunk_ids:
@@ -949,19 +1031,22 @@ def delete_doc_contents(conn: Any, doc_id: str) -> None:
             tuple(chunk_ids),
         )
 
-    conn.execute(f"DELETE FROM chunks WHERE doc_id={ph}", (doc_id,))
+    conn.execute(f"DELETE FROM chunks WHERE doc_id={ph} AND tenant_id={ph}", (doc_id, tenant_id))
 
 
 def delete_doc(conn: Any, doc_id: str) -> None:
     """Delete an entire doc, including chunks, embeddings, and ingest events."""
+    doc_id = scope_doc_id(doc_id)
+    tenant_id = _tenant_id()
     ph = _ph(conn)
     delete_doc_contents(conn, doc_id)
-    conn.execute(f"DELETE FROM ingest_events WHERE doc_id={ph}", (doc_id,))
-    conn.execute(f"DELETE FROM docs WHERE doc_id={ph}", (doc_id,))
+    conn.execute(f"DELETE FROM ingest_events WHERE doc_id={ph} AND tenant_id={ph}", (doc_id, tenant_id))
+    conn.execute(f"DELETE FROM docs WHERE doc_id={ph} AND tenant_id={ph}", (doc_id, tenant_id))
 
 
 def insert_chunks(conn: Any, chunks: Iterable[Chunk]) -> None:
-    rows = [(c.chunk_id, c.doc_id, c.idx, c.text) for c in chunks]
+    tenant_id = _tenant_id()
+    rows = [(c.chunk_id, tenant_id, scope_doc_id(c.doc_id), c.idx, c.text) for c in chunks]
     if not rows:
         return
 
@@ -969,9 +1054,10 @@ def insert_chunks(conn: Any, chunks: Iterable[Chunk]) -> None:
         with conn.cursor() as cur:
             cur.executemany(
                 """
-                INSERT INTO chunks (chunk_id, doc_id, idx, text)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO chunks (chunk_id, tenant_id, doc_id, idx, text)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (chunk_id) DO UPDATE SET
+                  tenant_id=excluded.tenant_id,
                   doc_id=excluded.doc_id,
                   idx=excluded.idx,
                   text=excluded.text
@@ -981,7 +1067,7 @@ def insert_chunks(conn: Any, chunks: Iterable[Chunk]) -> None:
         return
 
     conn.executemany(
-        "INSERT OR REPLACE INTO chunks (chunk_id, doc_id, idx, text) VALUES (?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO chunks (chunk_id, tenant_id, doc_id, idx, text) VALUES (?, ?, ?, ?, ?)",
         rows,
     )
 
@@ -1014,11 +1100,13 @@ def insert_embeddings(conn: Any, rows: Iterable[tuple[str, int, bytes | str]]) -
 
 
 def insert_ingest_event(conn: Any, e: IngestEvent) -> None:
+    tenant_id = _tenant_id()
+    doc_id = scope_doc_id(e.doc_id)
     if _is_postgres_conn(conn):
         conn.execute(
             """
             INSERT INTO ingest_events (
-              event_id, doc_id, doc_version, ingested_at,
+              event_id, tenant_id, doc_id, doc_version, ingested_at,
               content_sha256, prev_content_sha256, changed,
               num_chunks,
               embedding_backend, embeddings_model, embedding_dim,
@@ -1027,11 +1115,12 @@ def insert_ingest_event(conn: Any, e: IngestEvent) -> None:
               run_id,
               notes
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 e.event_id,
-                e.doc_id,
+                tenant_id,
+                doc_id,
                 int(e.doc_version),
                 int(e.ingested_at),
                 e.content_sha256,
@@ -1057,7 +1146,7 @@ def insert_ingest_event(conn: Any, e: IngestEvent) -> None:
     conn.execute(
         """
         INSERT INTO ingest_events (
-          event_id, doc_id, doc_version, ingested_at,
+          event_id, tenant_id, doc_id, doc_version, ingested_at,
           content_sha256, prev_content_sha256, changed,
           num_chunks,
           embedding_backend, embeddings_model, embedding_dim,
@@ -1066,11 +1155,12 @@ def insert_ingest_event(conn: Any, e: IngestEvent) -> None:
           run_id,
           notes
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             e.event_id,
-            e.doc_id,
+            tenant_id,
+            doc_id,
             int(e.doc_version),
             int(e.ingested_at),
             e.content_sha256,
@@ -1094,10 +1184,12 @@ def insert_ingest_event(conn: Any, e: IngestEvent) -> None:
 
 
 def list_ingest_events(conn: Any, doc_id: str, *, limit: int = 50) -> list[IngestEvent]:
+    doc_id = scope_doc_id(doc_id)
+    tenant_id = _tenant_id()
     if _is_postgres_conn(conn):
         cur = conn.execute(
             """
-            SELECT event_id, doc_id, doc_version, ingested_at,
+            SELECT event_id, tenant_id, doc_id, doc_version, ingested_at,
                    content_sha256, prev_content_sha256, changed,
                    num_chunks,
                    embedding_backend, embeddings_model, embedding_dim,
@@ -1106,17 +1198,17 @@ def list_ingest_events(conn: Any, doc_id: str, *, limit: int = 50) -> list[Inges
                    run_id,
                    notes
             FROM ingest_events
-            WHERE doc_id=%s
+            WHERE doc_id=%s AND tenant_id=%s
             ORDER BY ingested_at DESC, doc_version DESC, event_id DESC
             LIMIT %s
             """,
-            (doc_id, int(limit)),
+            (doc_id, tenant_id, int(limit)),
         )
         return [IngestEvent(**dict(r)) for r in cur.fetchall()]
 
     cur = conn.execute(
         """
-        SELECT event_id, doc_id, doc_version, ingested_at,
+        SELECT event_id, tenant_id, doc_id, doc_version, ingested_at,
                content_sha256, prev_content_sha256, changed,
                num_chunks,
                embedding_backend, embeddings_model, embedding_dim,
@@ -1125,11 +1217,11 @@ def list_ingest_events(conn: Any, doc_id: str, *, limit: int = 50) -> list[Inges
                run_id,
                notes
         FROM ingest_events
-        WHERE doc_id=?
+        WHERE doc_id=? AND tenant_id=?
         ORDER BY ingested_at DESC, rowid DESC
         LIMIT ?
         """,
-        (doc_id, int(limit)),
+        (doc_id, tenant_id, int(limit)),
     )
     return [IngestEvent(**dict(r)) for r in cur.fetchall()]
 
@@ -1145,157 +1237,53 @@ def list_recent_ingest_events(
     This powers the UI's global ingest/audit view and is useful for ops debugging.
     """
     limit = max(1, min(int(limit), 500))
+    tenant_id = _tenant_id()
+    ph = _ph(conn)
+    where = [f"e.tenant_id={ph}", f"d.tenant_id={ph}", "d.doc_id = e.doc_id"]
+    params: list[object] = [tenant_id, tenant_id]
+
     if doc_id:
-        if _is_postgres_conn(conn):
-            cur = conn.execute(
-                """
-                SELECT
-                  e.event_id,
-                  e.doc_id,
-                  d.title AS doc_title,
-                  d.source AS doc_source,
-                  d.classification,
-                  d.retention,
-                  d.tags_json,
-                  e.doc_version,
-                  e.ingested_at,
-                  e.content_sha256,
-                  e.prev_content_sha256,
-                  e.changed,
-                  e.num_chunks,
-                  e.embedding_backend,
-                  e.embeddings_model,
-                  e.embedding_dim,
-                  e.chunk_size_chars,
-                  e.chunk_overlap_chars,
-                  e.schema_fingerprint,
-                  e.contract_sha256,
-                  e.validation_status,
-                  e.validation_errors_json,
-                  e.schema_drifted,
-                  e.run_id,
-                  e.notes
-                FROM ingest_events e
-                JOIN docs d ON d.doc_id = e.doc_id
-                WHERE e.doc_id=%s
-                ORDER BY e.ingested_at DESC, e.doc_version DESC, e.event_id DESC
-                LIMIT %s
-                """,
-                (doc_id, limit),
-            )
-            return [IngestEventView(**dict(r)) for r in cur.fetchall()]
+        where.append(f"e.doc_id={ph}")
+        params.append(scope_doc_id(doc_id))
 
-        cur = conn.execute(
-            """
-            SELECT
-              e.event_id,
-              e.doc_id,
-              d.title AS doc_title,
-              d.source AS doc_source,
-              d.classification,
-              d.retention,
-              d.tags_json,
-              e.doc_version,
-              e.ingested_at,
-              e.content_sha256,
-              e.prev_content_sha256,
-              e.changed,
-              e.num_chunks,
-              e.embedding_backend,
-              e.embeddings_model,
-              e.embedding_dim,
-              e.chunk_size_chars,
-              e.chunk_overlap_chars,
-              e.schema_fingerprint,
-              e.contract_sha256,
-              e.validation_status,
-              e.validation_errors_json,
-              e.schema_drifted,
-              e.run_id,
-              e.notes
-            FROM ingest_events e
-            JOIN docs d ON d.doc_id = e.doc_id
-            WHERE e.doc_id=?
-            ORDER BY e.ingested_at DESC, e.rowid DESC
-            LIMIT ?
-            """,
-            (doc_id, limit),
-        )
-    else:
-        if _is_postgres_conn(conn):
-            cur = conn.execute(
-                """
-                SELECT
-                  e.event_id,
-                  e.doc_id,
-                  d.title AS doc_title,
-                  d.source AS doc_source,
-                  d.classification,
-                  d.retention,
-                  d.tags_json,
-                  e.doc_version,
-                  e.ingested_at,
-                  e.content_sha256,
-                  e.prev_content_sha256,
-                  e.changed,
-                  e.num_chunks,
-                  e.embedding_backend,
-                  e.embeddings_model,
-                  e.embedding_dim,
-                  e.chunk_size_chars,
-                  e.chunk_overlap_chars,
-                  e.schema_fingerprint,
-                  e.contract_sha256,
-                  e.validation_status,
-                  e.validation_errors_json,
-                  e.schema_drifted,
-                  e.run_id,
-                  e.notes
-                FROM ingest_events e
-                JOIN docs d ON d.doc_id = e.doc_id
-                ORDER BY e.ingested_at DESC, e.doc_version DESC, e.event_id DESC
-                LIMIT %s
-                """,
-                (limit,),
-            )
-            return [IngestEventView(**dict(r)) for r in cur.fetchall()]
-
-        cur = conn.execute(
-            """
-            SELECT
-              e.event_id,
-              e.doc_id,
-              d.title AS doc_title,
-              d.source AS doc_source,
-              d.classification,
-              d.retention,
-              d.tags_json,
-              e.doc_version,
-              e.ingested_at,
-              e.content_sha256,
-              e.prev_content_sha256,
-              e.changed,
-              e.num_chunks,
-              e.embedding_backend,
-              e.embeddings_model,
-              e.embedding_dim,
-              e.chunk_size_chars,
-              e.chunk_overlap_chars,
-              e.schema_fingerprint,
-              e.contract_sha256,
-              e.validation_status,
-              e.validation_errors_json,
-              e.schema_drifted,
-              e.run_id,
-              e.notes
-            FROM ingest_events e
-            JOIN docs d ON d.doc_id = e.doc_id
-            ORDER BY e.ingested_at DESC, e.rowid DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
-
+    order_sql = "e.ingested_at DESC, e.doc_version DESC, e.event_id DESC" if _is_postgres_conn(conn) else "e.ingested_at DESC, e.rowid DESC"
+    params.append(limit)
+    cur = conn.execute(
+        f"""
+        SELECT
+          e.event_id,
+          e.tenant_id,
+          e.doc_id,
+          d.title AS doc_title,
+          d.source AS doc_source,
+          d.classification,
+          d.retention,
+          d.tags_json,
+          e.doc_version,
+          e.ingested_at,
+          e.content_sha256,
+          e.prev_content_sha256,
+          e.changed,
+          e.num_chunks,
+          e.embedding_backend,
+          e.embeddings_model,
+          e.embedding_dim,
+          e.chunk_size_chars,
+          e.chunk_overlap_chars,
+          e.schema_fingerprint,
+          e.contract_sha256,
+          e.validation_status,
+          e.validation_errors_json,
+          e.schema_drifted,
+          e.run_id,
+          e.notes
+        FROM ingest_events e
+        JOIN docs d ON {' AND '.join(where)}
+        ORDER BY {order_sql}
+        LIMIT {ph}
+        """,
+        tuple(params),
+    )
     return [IngestEventView(**dict(r)) for r in cur.fetchall()]
 
 
@@ -1308,31 +1296,33 @@ def create_ingestion_run(
     principal: str | None = None,
     started_at: int | None = None,
 ) -> IngestionRun:
+    tenant_id = _tenant_id()
     now = int(started_at if started_at is not None else time.time())
     if _is_postgres_conn(conn):
         conn.execute(
             """
             INSERT INTO ingestion_runs (
-              run_id, started_at, finished_at, status, trigger_type, trigger_payload_json,
+              run_id, tenant_id, started_at, finished_at, status, trigger_type, trigger_payload_json,
               principal, objects_scanned, docs_changed, docs_unchanged, bytes_processed, errors_json
             )
-            VALUES (%s, %s, NULL, %s, %s, %s, %s, 0, 0, 0, 0, '[]')
+            VALUES (%s, %s, %s, NULL, %s, %s, %s, %s, 0, 0, 0, 0, '[]')
             """,
-            (run_id, now, "running", trigger_type, trigger_payload_json, principal),
+            (run_id, tenant_id, now, "running", trigger_type, trigger_payload_json, principal),
         )
     else:
         conn.execute(
             """
             INSERT INTO ingestion_runs (
-              run_id, started_at, finished_at, status, trigger_type, trigger_payload_json,
+              run_id, tenant_id, started_at, finished_at, status, trigger_type, trigger_payload_json,
               principal, objects_scanned, docs_changed, docs_unchanged, bytes_processed, errors_json
             )
-            VALUES (?, ?, NULL, ?, ?, ?, ?, 0, 0, 0, 0, '[]')
+            VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 0, 0, 0, 0, '[]')
             """,
-            (run_id, now, "running", trigger_type, trigger_payload_json, principal),
+            (run_id, tenant_id, now, "running", trigger_type, trigger_payload_json, principal),
         )
     return IngestionRun(
         run_id=run_id,
+        tenant_id=tenant_id,
         started_at=now,
         finished_at=None,
         status="running",
@@ -1363,6 +1353,7 @@ def complete_ingestion_run(
     if status not in {"running", "succeeded", "failed", "cancelled"}:
         raise ValueError("invalid ingestion run status")
     fin = int(finished_at if finished_at is not None else time.time())
+    tenant_id = _tenant_id()
     if _is_postgres_conn(conn):
         conn.execute(
             """
@@ -1375,7 +1366,7 @@ def complete_ingestion_run(
               docs_unchanged=%s,
               bytes_processed=%s,
               errors_json=%s
-            WHERE run_id=%s
+            WHERE run_id=%s AND tenant_id=%s
             """,
             (
                 fin,
@@ -1386,6 +1377,7 @@ def complete_ingestion_run(
                 int(bytes_processed),
                 errors_json,
                 run_id,
+                tenant_id,
             ),
         )
         return
@@ -1401,7 +1393,7 @@ def complete_ingestion_run(
           docs_unchanged=?,
           bytes_processed=?,
           errors_json=?
-        WHERE run_id=?
+        WHERE run_id=? AND tenant_id=?
         """,
         (
             fin,
@@ -1412,6 +1404,7 @@ def complete_ingestion_run(
             int(bytes_processed),
             errors_json,
             run_id,
+            tenant_id,
         ),
     )
 
@@ -1420,6 +1413,7 @@ def _ingestion_run_select_sql() -> str:
     return """
         SELECT
           r.run_id,
+          r.tenant_id,
           r.started_at,
           r.finished_at,
           r.status,
@@ -1433,64 +1427,45 @@ def _ingestion_run_select_sql() -> str:
           r.errors_json,
           COUNT(e.event_id) AS event_count
         FROM ingestion_runs r
-        LEFT JOIN ingest_events e ON e.run_id = r.run_id
+        LEFT JOIN ingest_events e ON e.run_id = r.run_id AND e.tenant_id = r.tenant_id
     """
 
 
 def list_ingestion_runs(conn: Any, *, limit: int = 100) -> list[IngestionRun]:
     limit = max(1, min(int(limit), 500))
+    tenant_id = _tenant_id()
+    ph = _ph(conn)
     base = _ingestion_run_select_sql()
-    if _is_postgres_conn(conn):
-        cur = conn.execute(
-            base
-            + """
-            GROUP BY
-              r.run_id, r.started_at, r.finished_at, r.status, r.trigger_type, r.trigger_payload_json,
-              r.principal, r.objects_scanned, r.docs_changed, r.docs_unchanged, r.bytes_processed, r.errors_json
-            ORDER BY r.started_at DESC, r.run_id DESC
-            LIMIT %s
-            """,
-            (limit,),
-        )
-    else:
-        cur = conn.execute(
-            base
-            + """
-            GROUP BY
-              r.run_id, r.started_at, r.finished_at, r.status, r.trigger_type, r.trigger_payload_json,
-              r.principal, r.objects_scanned, r.docs_changed, r.docs_unchanged, r.bytes_processed, r.errors_json
-            ORDER BY r.started_at DESC, r.rowid DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+    order_sql = "r.started_at DESC, r.run_id DESC" if _is_postgres_conn(conn) else "r.started_at DESC, r.rowid DESC"
+    cur = conn.execute(
+        base
+        + f"""
+        WHERE r.tenant_id = {ph}
+        GROUP BY
+          r.run_id, r.tenant_id, r.started_at, r.finished_at, r.status, r.trigger_type, r.trigger_payload_json,
+          r.principal, r.objects_scanned, r.docs_changed, r.docs_unchanged, r.bytes_processed, r.errors_json
+        ORDER BY {order_sql}
+        LIMIT {ph}
+        """,
+        (tenant_id, limit),
+    )
     return [IngestionRun(**dict(r)) for r in cur.fetchall()]
 
 
 def get_ingestion_run(conn: Any, run_id: str) -> IngestionRun | None:
+    tenant_id = _tenant_id()
+    ph = _ph(conn)
     base = _ingestion_run_select_sql()
-    if _is_postgres_conn(conn):
-        cur = conn.execute(
-            base
-            + """
-            WHERE r.run_id = %s
-            GROUP BY
-              r.run_id, r.started_at, r.finished_at, r.status, r.trigger_type, r.trigger_payload_json,
-              r.principal, r.objects_scanned, r.docs_changed, r.docs_unchanged, r.bytes_processed, r.errors_json
-            """,
-            (run_id,),
-        )
-    else:
-        cur = conn.execute(
-            base
-            + """
-            WHERE r.run_id = ?
-            GROUP BY
-              r.run_id, r.started_at, r.finished_at, r.status, r.trigger_type, r.trigger_payload_json,
-              r.principal, r.objects_scanned, r.docs_changed, r.docs_unchanged, r.bytes_processed, r.errors_json
-            """,
-            (run_id,),
-        )
+    cur = conn.execute(
+        base
+        + f"""
+        WHERE r.run_id = {ph} AND r.tenant_id = {ph}
+        GROUP BY
+          r.run_id, r.tenant_id, r.started_at, r.finished_at, r.status, r.trigger_type, r.trigger_payload_json,
+          r.principal, r.objects_scanned, r.docs_changed, r.docs_unchanged, r.bytes_processed, r.errors_json
+        """,
+        (run_id, tenant_id),
+    )
     row = cur.fetchone()
     return IngestionRun(**dict(row)) if row is not None else None
 
@@ -1772,136 +1747,102 @@ def list_doc_ids_for_run(conn: Any, run_id: str, *, limit: int = 10000) -> list[
     """Return unique doc_ids linked to a run, in first-seen ingest order."""
 
     limit = max(1, min(int(limit), 20000))
-    if _is_postgres_conn(conn):
-        cur = conn.execute(
-            """
-            SELECT e.doc_id, MIN(e.ingested_at) AS first_ingested_at
-            FROM ingest_events e
-            WHERE e.run_id=%s
-            GROUP BY e.doc_id
-            ORDER BY first_ingested_at ASC, e.doc_id ASC
-            LIMIT %s
-            """,
-            (run_id, limit),
-        )
-    else:
-        cur = conn.execute(
-            """
-            SELECT e.doc_id, MIN(e.ingested_at) AS first_ingested_at
-            FROM ingest_events e
-            WHERE e.run_id=?
-            GROUP BY e.doc_id
-            ORDER BY first_ingested_at ASC, e.doc_id ASC
-            LIMIT ?
-            """,
-            (run_id, limit),
-        )
+    tenant_id = _tenant_id()
+    ph = _ph(conn)
+    cur = conn.execute(
+        f"""
+        SELECT e.doc_id, MIN(e.ingested_at) AS first_ingested_at
+        FROM ingest_events e
+        WHERE e.run_id={ph} AND e.tenant_id={ph}
+        GROUP BY e.doc_id
+        ORDER BY first_ingested_at ASC, e.doc_id ASC
+        LIMIT {ph}
+        """,
+        (run_id, tenant_id, limit),
+    )
     return [str(r["doc_id"]) for r in cur.fetchall()]
 
 
 def list_ingest_events_for_run(conn: Any, run_id: str, *, limit: int = 500) -> list[IngestEventView]:
     limit = max(1, min(int(limit), 2000))
-    if _is_postgres_conn(conn):
-        cur = conn.execute(
-            """
-            SELECT
-              e.event_id,
-              e.doc_id,
-              d.title AS doc_title,
-              d.source AS doc_source,
-              d.classification,
-              d.retention,
-              d.tags_json,
-              e.doc_version,
-              e.ingested_at,
-              e.content_sha256,
-              e.prev_content_sha256,
-              e.changed,
-              e.num_chunks,
-              e.embedding_backend,
-              e.embeddings_model,
-              e.embedding_dim,
-              e.chunk_size_chars,
-              e.chunk_overlap_chars,
-              e.schema_fingerprint,
-              e.contract_sha256,
-              e.validation_status,
-              e.validation_errors_json,
-              e.schema_drifted,
-              e.run_id,
-              e.notes
-            FROM ingest_events e
-            JOIN docs d ON d.doc_id = e.doc_id
-            WHERE e.run_id=%s
-            ORDER BY e.ingested_at DESC, e.doc_version DESC, e.event_id DESC
-            LIMIT %s
-            """,
-            (run_id, limit),
-        )
-    else:
-        cur = conn.execute(
-            """
-            SELECT
-              e.event_id,
-              e.doc_id,
-              d.title AS doc_title,
-              d.source AS doc_source,
-              d.classification,
-              d.retention,
-              d.tags_json,
-              e.doc_version,
-              e.ingested_at,
-              e.content_sha256,
-              e.prev_content_sha256,
-              e.changed,
-              e.num_chunks,
-              e.embedding_backend,
-              e.embeddings_model,
-              e.embedding_dim,
-              e.chunk_size_chars,
-              e.chunk_overlap_chars,
-              e.schema_fingerprint,
-              e.contract_sha256,
-              e.validation_status,
-              e.validation_errors_json,
-              e.schema_drifted,
-              e.run_id,
-              e.notes
-            FROM ingest_events e
-            JOIN docs d ON d.doc_id = e.doc_id
-            WHERE e.run_id=?
-            ORDER BY e.ingested_at DESC, e.rowid DESC
-            LIMIT ?
-            """,
-            (run_id, limit),
-        )
+    tenant_id = _tenant_id()
+    ph = _ph(conn)
+    order_sql = "e.ingested_at DESC, e.doc_version DESC, e.event_id DESC" if _is_postgres_conn(conn) else "e.ingested_at DESC, e.rowid DESC"
+    cur = conn.execute(
+        f"""
+        SELECT
+          e.event_id,
+          e.tenant_id,
+          e.doc_id,
+          d.title AS doc_title,
+          d.source AS doc_source,
+          d.classification,
+          d.retention,
+          d.tags_json,
+          e.doc_version,
+          e.ingested_at,
+          e.content_sha256,
+          e.prev_content_sha256,
+          e.changed,
+          e.num_chunks,
+          e.embedding_backend,
+          e.embeddings_model,
+          e.embedding_dim,
+          e.chunk_size_chars,
+          e.chunk_overlap_chars,
+          e.schema_fingerprint,
+          e.contract_sha256,
+          e.validation_status,
+          e.validation_errors_json,
+          e.schema_drifted,
+          e.run_id,
+          e.notes
+        FROM ingest_events e
+        JOIN docs d ON d.doc_id = e.doc_id AND d.tenant_id = e.tenant_id
+        WHERE e.run_id={ph} AND e.tenant_id={ph}
+        ORDER BY {order_sql}
+        LIMIT {ph}
+        """,
+        (run_id, tenant_id, limit),
+    )
     return [IngestEventView(**dict(r)) for r in cur.fetchall()]
 
 
 def list_docs(conn: Any) -> list[Doc]:
+    tenant_id = _tenant_id()
+    ph = _ph(conn)
     cur = conn.execute(
-        """
-        SELECT doc_id, title, source, classification, retention, tags_json,
+        f"""
+        SELECT doc_id, tenant_id, title, source, classification, retention, tags_json,
                content_sha256, content_bytes, num_chunks, doc_version, created_at, updated_at
         FROM docs
+        WHERE tenant_id={ph}
         ORDER BY updated_at DESC
-        """
+        """,
+        (tenant_id,),
     )
     return [Doc(**dict(r)) for r in cur.fetchall()]
 
 
 def list_chunks(conn: Any) -> list[Chunk]:
-    cur = conn.execute("SELECT chunk_id, doc_id, idx, text FROM chunks ORDER BY doc_id, idx")
+    tenant_id = _tenant_id()
+    ph = _ph(conn)
+    cur = conn.execute(
+        f"SELECT chunk_id, doc_id, idx, text, tenant_id FROM chunks WHERE tenant_id={ph} ORDER BY doc_id, idx",
+        (tenant_id,),
+    )
     return [Chunk(**dict(r)) for r in cur.fetchall()]
 
 
 def get_chunks_by_ids(conn: Any, chunk_ids: list[str]) -> list[Chunk]:
     if not chunk_ids:
         return []
+    tenant_id = _tenant_id()
     placeholders = ",".join([_ph(conn)] * len(chunk_ids))
+    ph = _ph(conn)
     cur = conn.execute(
-        f"SELECT chunk_id, doc_id, idx, text FROM chunks WHERE chunk_id IN ({placeholders})",
-        tuple(chunk_ids),
+        f"SELECT chunk_id, doc_id, idx, text, tenant_id FROM chunks WHERE chunk_id IN ({placeholders}) AND tenant_id={ph}",
+        tuple(chunk_ids) + (tenant_id,),
     )
     rows = [Chunk(**dict(r)) for r in cur.fetchall()]
     by_id = {c.chunk_id: c for c in rows}
@@ -1911,10 +1852,17 @@ def get_chunks_by_ids(conn: Any, chunk_ids: list[str]) -> list[Chunk]:
 def get_embeddings_by_ids(conn: Any, chunk_ids: list[str]) -> list[tuple[str, int, bytes]]:
     if not chunk_ids:
         return []
+    tenant_id = _tenant_id()
     placeholders = ",".join([_ph(conn)] * len(chunk_ids))
+    ph = _ph(conn)
     cur = conn.execute(
-        f"SELECT chunk_id, dim, vec FROM embeddings WHERE chunk_id IN ({placeholders})",
-        tuple(chunk_ids),
+        f"""
+        SELECT e.chunk_id, e.dim, e.vec
+        FROM embeddings e
+        JOIN chunks c ON c.chunk_id = e.chunk_id
+        WHERE e.chunk_id IN ({placeholders}) AND c.tenant_id={ph}
+        """,
+        tuple(chunk_ids) + (tenant_id,),
     )
     rows = [(r["chunk_id"], r["dim"], r["vec"]) for r in cur.fetchall()]
     by_id = {cid: (cid, dim, vec) for cid, dim, vec in rows}
@@ -1923,7 +1871,11 @@ def get_embeddings_by_ids(conn: Any, chunk_ids: list[str]) -> list[tuple[str, in
 
 def get_chunk(conn: Any, chunk_id: str) -> Chunk | None:
     ph = _ph(conn)
-    cur = conn.execute(f"SELECT chunk_id, doc_id, idx, text FROM chunks WHERE chunk_id={ph}", (chunk_id,))
+    tenant_id = _tenant_id()
+    cur = conn.execute(
+        f"SELECT chunk_id, doc_id, idx, text, tenant_id FROM chunks WHERE chunk_id={ph} AND tenant_id={ph}",
+        (chunk_id, tenant_id),
+    )
     row = cur.fetchone()
     return Chunk(**dict(row)) if row is not None else None
 
@@ -1935,17 +1887,19 @@ def list_chunks_for_doc(
     limit: int = 200,
     offset: int = 0,
 ) -> list[Chunk]:
+    doc_id = scope_doc_id(doc_id)
+    tenant_id = _tenant_id()
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
     if _is_postgres_conn(conn):
         cur = conn.execute(
-            "SELECT chunk_id, doc_id, idx, text FROM chunks WHERE doc_id=%s ORDER BY idx LIMIT %s OFFSET %s",
-            (doc_id, limit, offset),
+            "SELECT chunk_id, doc_id, idx, text, tenant_id FROM chunks WHERE doc_id=%s AND tenant_id=%s ORDER BY idx LIMIT %s OFFSET %s",
+            (doc_id, tenant_id, limit, offset),
         )
     else:
         cur = conn.execute(
-            "SELECT chunk_id, doc_id, idx, text FROM chunks WHERE doc_id=? ORDER BY idx LIMIT ? OFFSET ?",
-            (doc_id, limit, offset),
+            "SELECT chunk_id, doc_id, idx, text, tenant_id FROM chunks WHERE doc_id=? AND tenant_id=? ORDER BY idx LIMIT ? OFFSET ?",
+            (doc_id, tenant_id, limit, offset),
         )
     return [Chunk(**dict(r)) for r in cur.fetchall()]
 
@@ -1962,16 +1916,18 @@ def list_all_chunks_for_doc(
     accidentally materialize an unbounded amount of text in memory.
     """
 
+    doc_id = scope_doc_id(doc_id)
+    tenant_id = _tenant_id()
     limit = max(1, min(int(limit), 20000))
     if _is_postgres_conn(conn):
         cur = conn.execute(
-            "SELECT chunk_id, doc_id, idx, text FROM chunks WHERE doc_id=%s ORDER BY idx LIMIT %s",
-            (doc_id, limit),
+            "SELECT chunk_id, doc_id, idx, text, tenant_id FROM chunks WHERE doc_id=%s AND tenant_id=%s ORDER BY idx LIMIT %s",
+            (doc_id, tenant_id, limit),
         )
     else:
         cur = conn.execute(
-            "SELECT chunk_id, doc_id, idx, text FROM chunks WHERE doc_id=? ORDER BY idx LIMIT ?",
-            (doc_id, limit),
+            "SELECT chunk_id, doc_id, idx, text, tenant_id FROM chunks WHERE doc_id=? AND tenant_id=? ORDER BY idx LIMIT ?",
+            (doc_id, tenant_id, limit),
         )
     return [Chunk(**dict(r)) for r in cur.fetchall()]
 
