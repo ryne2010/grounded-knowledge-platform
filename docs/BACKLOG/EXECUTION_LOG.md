@@ -2442,3 +2442,19 @@ Implemented Task #29 container image vulnerability scanning baseline:
 
 - Commit `TASK_CONTAINER_IMAGE_SCANNING` on this branch and open PR.
 - Move to queue item #30: `TASK_BIGQUERY_EXPORT`.
+
+### Follow-up (2026-02-22): CI fix for container-image-scan build instability
+
+Applied a targeted fix after CI failure in the `container-image-scan` workflow when Docker build used lockfile URLs pointing at an internal mirror.
+
+Changes:
+- Added `actions/setup-python` + `astral-sh/setup-uv` in `.github/workflows/container-image-scan.yml`.
+- Added a pre-build step to normalize `uv.lock` URLs via `uv lock --refresh` when mirror-host URLs are detected.
+- Added retry loop for `docker build` to reduce transient network failure flakiness.
+
+Validation rerun (all PASS):
+- `make dev-doctor`
+- `python scripts/harness.py lint`
+- `python scripts/harness.py typecheck`
+- `python scripts/harness.py test`
+- `make backlog-audit`
