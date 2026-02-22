@@ -25,6 +25,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - New release process guide: `docs/RELEASES.md`.
 - Dependabot configuration for weekly Python (`pip`) and web (`npm`) dependency update PRs.
 - CodeQL workflow for Python + JavaScript/TypeScript code scanning on `main` and PRs.
+- Container image vulnerability scanning workflow (Trivy) on PRs and `main` with SARIF + JSON outputs.
 
 ### Changed
 
@@ -34,6 +35,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Docs and deployment guides updated for auth, OTEL, streaming, PWA, data contracts, and Cloud SQL.
 - Makefile now includes `release-bump` and `release-notes` targets for consistent release/version workflows.
 - `SECURITY.md` now documents the repo's continuous security posture (Dependabot + CodeQL) and alert triage model.
+- `SECURITY.md` now includes container image scan posture and optional strict severity-gate config.
 
 ### Fixed
 

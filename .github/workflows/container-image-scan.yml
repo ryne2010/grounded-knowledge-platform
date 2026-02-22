@@ -1,0 +1,77 @@
+name: container-image-scan
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+env:
+  IMAGE_NAME: gkp-scan
+  # Optional severity gate (example: "CRITICAL,HIGH").
+  # Leave unset/empty to report only (non-blocking).
+  IMAGE_SCAN_FAIL_ON_SEVERITY: ${{ vars.IMAGE_SCAN_FAIL_ON_SEVERITY }}
+
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build -f docker/Dockerfile -t "${IMAGE_NAME}:${GITHUB_SHA}" .
+
+      - name: Trivy scan (SARIF report)
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          format: sarif
+          output: trivy-results.sarif
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          exit-code: "0"
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: container-image-trivy
+
+      - name: Trivy scan (JSON artifact)
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          format: json
+          output: trivy-results.json
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          exit-code: "0"
+
+      - name: Upload scan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results-${{ github.sha }}
+          path: |
+            trivy-results.sarif
+            trivy-results.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Optional vulnerability fail gate
+        if: ${{ env.IMAGE_SCAN_FAIL_ON_SEVERITY != '' }}
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: image
+          image-ref: "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          format: table
+          severity: "${{ env.IMAGE_SCAN_FAIL_ON_SEVERITY }}"
+          exit-code: "1"
