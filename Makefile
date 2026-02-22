@@ -95,7 +95,7 @@ define require
 	@command -v $(1) >/dev/null 2>&1 || (echo "Missing dependency: $(1)"; exit 1)
 endef
 
-.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify smoke smoke-local logs destroy lock release-bump release-notes clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit
+.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify smoke smoke-local logs destroy lock release-bump release-notes clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit bigquery-export
 
 help:
 	@echo "Targets:"
@@ -136,6 +136,7 @@ help:
 	@echo "  test-postgres      Run Postgres integration tests (Docker + psycopg)"
 	@echo "  eval-smoke         Run CI-style eval smoke gate locally"
 	@echo "  gcs-sync           Trigger GCS connector sync via API (private deployments only)"
+	@echo "  bigquery-export    Export docs/ingest/eval datasets (JSONL + optional BigQuery load)"
 	@echo "  release-bump       Bump release version + roll CHANGELOG Unreleased (set VERSION=x.y.z)"
 	@echo "  release-notes      Generate release notes from CHANGELOG (set VERSION=x.y.z)"
 	@echo "  clean              Remove local caches/build artifacts"
@@ -256,8 +257,15 @@ BASE   ?= http://127.0.0.1:8080
 ENDPOINT ?= /api/query
 K ?= 5
 MIN_PASS_RATE ?= 0.80
+BQ_PROJECT ?= $(PROJECT_ID)
+BQ_DATASET ?=
+BQ_TABLE_PREFIX ?= gkp_
+BQ_LOCATION ?=
+BQ_JSONL_DIR ?= dist/bigquery_export/raw
+BQ_BATCH_SIZE ?= 500
+BQ_JSONL_ONLY ?= true
 
-.PHONY: eval eval-smoke safety-eval retention-sweep retention-sweep-apply purge-expired purge-expired-apply
+.PHONY: eval eval-smoke safety-eval retention-sweep retention-sweep-apply purge-expired purge-expired-apply bigquery-export
 
 eval: ## Run retrieval evaluation on a golden set (JSONL)
 	uv run python -m app.cli eval $(GOLDEN) --k $(K)
@@ -277,6 +285,26 @@ retention-sweep-apply: ## Delete docs whose retention policy has expired (DANGER
 purge-expired: retention-sweep ## Deprecated alias: use retention-sweep
 
 purge-expired-apply: retention-sweep-apply ## Deprecated alias: use retention-sweep-apply
+
+bigquery-export: ## Export docs/ingest/eval datasets to JSONL and optionally load BigQuery
+	@set -euo pipefail; \
+	CMD=(uv run python -m app.cli export-bigquery \
+	  --jsonl-dir "$(BQ_JSONL_DIR)" \
+	  --table-prefix "$(BQ_TABLE_PREFIX)" \
+	  --batch-size "$(BQ_BATCH_SIZE)"); \
+	if [ "$(BQ_JSONL_ONLY)" = "true" ]; then \
+	  CMD+=(--jsonl-only); \
+	else \
+	  if [ -z "$(BQ_PROJECT)" ] || [ -z "$(BQ_DATASET)" ]; then \
+	    echo "Set BQ_PROJECT and BQ_DATASET (or keep BQ_JSONL_ONLY=true)."; \
+	    exit 1; \
+	  fi; \
+	  CMD+=(--project "$(BQ_PROJECT)" --dataset "$(BQ_DATASET)"); \
+	  if [ -n "$(BQ_LOCATION)" ]; then \
+	    CMD+=(--location "$(BQ_LOCATION)"); \
+	  fi; \
+	fi; \
+	"$${CMD[@]}"
 
 dev-doctor: ## Run full local quality harness
 	bash scripts/doctor.sh

@@ -26,6 +26,8 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Dependabot configuration for weekly Python (`pip`) and web (`npm`) dependency update PRs.
 - CodeQL workflow for Python + JavaScript/TypeScript code scanning on `main` and PRs.
 - Container image vulnerability scanning workflow (Trivy) on PRs and `main` with SARIF + JSON outputs.
+- BigQuery export module + CLI (`export-bigquery`) for private deployments, with idempotent JSONL snapshots and optional direct BigQuery loads for `docs`, `ingest_events`, and `eval_runs`.
+- New runbook: `docs/RUNBOOKS/BIGQUERY_EXPORT.md`.
 
 ### Changed
 
@@ -36,6 +38,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Makefile now includes `release-bump` and `release-notes` targets for consistent release/version workflows.
 - `SECURITY.md` now documents the repo's continuous security posture (Dependabot + CodeQL) and alert triage model.
 - `SECURITY.md` now includes container image scan posture and optional strict severity-gate config.
+- Product docs now mark BigQuery export as available for private deployments.
 
 ### Fixed
 

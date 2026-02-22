@@ -310,6 +310,52 @@ def cmd_replay_run(*, run_id: str, force: bool) -> None:
     )
 
 
+def cmd_export_bigquery(
+    *,
+    project: str | None,
+    dataset: str | None,
+    table_prefix: str,
+    jsonl_dir: str,
+    batch_size: int,
+    location: str | None,
+    jsonl_only: bool,
+) -> None:
+    from .bigquery_export import export_jsonl_snapshot, export_to_bigquery
+    from .config import settings
+    from .storage import connect, init_db
+
+    if settings.public_demo_mode:
+        raise SystemExit("BigQuery export is disabled in PUBLIC_DEMO_MODE")
+
+    if not jsonl_only and (not project or not dataset):
+        raise SystemExit("--project and --dataset are required unless --jsonl-only is set")
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        counts = export_jsonl_snapshot(conn, output_dir=Path(jsonl_dir), batch_size=batch_size)
+        print(f"Exported JSONL snapshot: {jsonl_dir}")
+        for table in sorted(counts):
+            print(f"  - {table}: {counts[table]} row(s)")
+
+        if jsonl_only:
+            return
+
+        assert project is not None and dataset is not None
+        loaded = export_to_bigquery(
+            conn,
+            project_id=project,
+            dataset=dataset,
+            table_prefix=table_prefix,
+            batch_size=batch_size,
+            location=location,
+        )
+        print(f"Loaded BigQuery dataset: {project}.{dataset}")
+        for table in sorted(loaded):
+            result = loaded[table]
+            jobs = ", ".join(result.load_job_ids) if result.load_job_ids else "none"
+            print(f"  - {table}: table={result.table_id} rows={result.rows_exported} jobs={jobs}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="grounded-kp")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -368,6 +414,39 @@ def main() -> None:
     p_replay_run.add_argument("--run-id", required=True, help="Ingestion run id to replay.")
     p_replay_run.add_argument("--force", action="store_true", help="Force re-chunk/re-embed even if unchanged.")
 
+    p_export_bigquery = sub.add_parser(
+        "export-bigquery",
+        help="Export docs/ingest_events/eval_runs to JSONL and optionally load into BigQuery (private mode only).",
+    )
+    p_export_bigquery.add_argument("--project", default=None, help="Target GCP project id for BigQuery.")
+    p_export_bigquery.add_argument("--dataset", default=None, help="Target BigQuery dataset name.")
+    p_export_bigquery.add_argument(
+        "--table-prefix",
+        default="gkp_",
+        help="Prefix for BigQuery table names (default: gkp_).",
+    )
+    p_export_bigquery.add_argument(
+        "--jsonl-dir",
+        default="dist/bigquery_export/raw",
+        help="Local output directory for JSONL snapshots.",
+    )
+    p_export_bigquery.add_argument(
+        "--batch-size",
+        type=int,
+        default=500,
+        help="Rows per export/load chunk (default: 500).",
+    )
+    p_export_bigquery.add_argument(
+        "--location",
+        default=None,
+        help="Optional BigQuery location override (for example: us-central1).",
+    )
+    p_export_bigquery.add_argument(
+        "--jsonl-only",
+        action="store_true",
+        help="Only write JSONL snapshots and skip BigQuery loading.",
+    )
+
     args = parser.parse_args()
     if args.cmd == "ingest-file":
         cmd_ingest_file(
@@ -401,6 +480,16 @@ def main() -> None:
         cmd_replay_doc(doc_id=str(args.doc_id), force=bool(args.force))
     elif args.cmd == "replay-run":
         cmd_replay_run(run_id=str(args.run_id), force=bool(args.force))
+    elif args.cmd == "export-bigquery":
+        cmd_export_bigquery(
+            project=args.project,
+            dataset=args.dataset,
+            table_prefix=args.table_prefix,
+            jsonl_dir=args.jsonl_dir,
+            batch_size=args.batch_size,
+            location=args.location,
+            jsonl_only=bool(args.jsonl_only),
+        )
     elif args.cmd == "safety-eval":
         from app.safety_eval import run_safety_eval
 

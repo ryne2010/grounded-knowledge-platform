@@ -2458,3 +2458,105 @@ Validation rerun (all PASS):
 - `python scripts/harness.py typecheck`
 - `python scripts/harness.py test`
 - `make backlog-audit`
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-bigquery-export`
+- Current task: `TASK_BIGQUERY_EXPORT` (`agents/tasks/TASK_BIGQUERY_EXPORT.md`)
+
+## Task summary
+
+Implemented Task #30 BigQuery export baseline for private deployments:
+
+- added a new export module (`app/bigquery_export.py`) with:
+  - stable export schemas and row mappers for `docs`, `ingest_events`, and `eval_runs`
+  - deterministic row iteration + chunking helpers
+  - idempotent JSONL snapshot export (`docs.jsonl`, `ingest_events.jsonl`, `eval_runs.jsonl`, `manifest.json`)
+  - optional direct BigQuery loading with truncate+append chunk strategy (idempotent reruns)
+- added CLI command `export-bigquery` in `app/cli.py`:
+  - blocked in `PUBLIC_DEMO_MODE`
+  - supports JSONL-only mode (default workflow) and optional BigQuery load (`--project`, `--dataset`)
+- added Makefile operator shortcut `make bigquery-export` with `BQ_*` overrides
+- added dedicated runbook `docs/RUNBOOKS/BIGQUERY_EXPORT.md`
+- updated docs discoverability (`README.md`, `docs/PRODUCT/FEATURE_MATRIX.md`) and changelog
+- added unit tests `tests/test_bigquery_export.py` for:
+  - schema mapping (lineage + governance fields)
+  - export chunking behavior
+  - idempotent JSONL snapshot output
+
+## Decisions made
+
+- Kept export path private-only and explicitly blocked in `PUBLIC_DEMO_MODE` to preserve ADR demo safety posture.
+- Implemented JSONL snapshots as the default repeatable warehouse-compatible format, with optional BigQuery load layered on top.
+- Chose full-snapshot idempotency semantics (rewrite JSONL + BigQuery truncate/append) to avoid duplicate rows on rerun.
+- Included governance fields (`classification`, `retention`, `tags`) in `ingest_events` export via join with `docs` metadata.
+- Kept BigQuery dependency optional at runtime (`google-cloud-bigquery` imported lazily), avoiding baseline dependency changes for demo/private non-BQ installs.
+
+## Files changed
+
+- `app/bigquery_export.py`
+- `app/cli.py`
+- `tests/test_bigquery_export.py`
+- `Makefile`
+- `docs/RUNBOOKS/BIGQUERY_EXPORT.md`
+- `README.md`
+- `docs/PRODUCT/FEATURE_MATRIX.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_BIGQUERY_EXPORT.md`
+   - `sed -n ... docs/SPECS/BIGQUERY_EXPORT.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git checkout -b codex/task-bigquery-export`
+3. Discovery/implementation support:
+   - `rg -n "bigquery|export|..." app scripts docs tests Makefile pyproject.toml`
+   - `sed -n ... app/cli.py`
+   - `sed -n ... app/storage.py`
+   - `sed -n ... README.md docs/PRODUCT/FEATURE_MATRIX.md Makefile CHANGELOG.md`
+4. Targeted validation:
+   - `uv run ruff check app/bigquery_export.py app/cli.py tests/test_bigquery_export.py`
+   - `uv run mypy app/bigquery_export.py app/cli.py`
+   - `uv run pytest -q tests/test_bigquery_export.py`
+5. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- Targeted checks:
+  - `uv run ruff check app/bigquery_export.py app/cli.py tests/test_bigquery_export.py`: PASS
+  - `uv run mypy app/bigquery_export.py app/cli.py`: PASS
+  - `uv run pytest -q tests/test_bigquery_export.py`: PASS (`3 passed`)
+- Required gates:
+  - `make dev-doctor`: PASS
+  - `python scripts/harness.py lint`: PASS
+  - `python scripts/harness.py typecheck`: PASS
+  - `python scripts/harness.py test`: PASS (`84 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+  - `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- Direct BigQuery load requires `google-cloud-bigquery` to be installed in the runtime environment.
+- Task #31 (`TASK_BIGQUERY_MODELS`) remains next in queue for raw→curated→marts docs and SQL examples.
+
+## What’s next
+
+- Commit `TASK_BIGQUERY_EXPORT` on this branch and open PR.
+- Move to queue item #31: `TASK_BIGQUERY_MODELS`.

@@ -27,7 +27,7 @@ Source of truth for the posture: `docs/DECISIONS/ADR-20260221-public-demo-and-de
 | Auth | ❌ None | ✅ Recommended (`AUTH_MODE=api_key`) |
 | Rate limiting | ✅ Enabled | ✅ Optional |
 | Observability (logs/metrics) | ✅ Basic | ✅ Expanded (OTEL, dashboards, SLOs) |
-| BigQuery export | ❌ Disabled | ✅ Planned |
+| BigQuery export | ❌ Disabled | ✅ Optional (`python -m app.cli export-bigquery`, private-only) |
 
 ## Notes
 
