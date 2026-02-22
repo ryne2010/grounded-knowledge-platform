@@ -62,6 +62,11 @@ image_tag          = "latest"
 # cloudsql_disk_size_gb = 20
 # cloudsql_database     = "gkp"
 # cloudsql_user         = "gkp_app"
+# cloudsql_backup_start_time             = "03:00"  # UTC
+# cloudsql_retained_backups              = 14
+# cloudsql_enable_point_in_time_recovery = true
+# cloudsql_transaction_log_retention_days = 7
+# cloudsql_backup_location               = null      # optional override
 
 # Optional: Cloud Run request guardrails
 # max_request_concurrency = 40

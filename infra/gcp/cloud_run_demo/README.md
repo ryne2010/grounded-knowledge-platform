@@ -94,10 +94,23 @@ enable_cloudsql = false
 
 This stack will:
 - create a Cloud SQL Postgres instance + DB + user
+- enable automated backups with retention controls
+- enable PITR by default with transaction-log retention controls
 - mount the Cloud SQL connection into Cloud Run at `/cloudsql`
 - inject `DATABASE_URL` for app runtime
 
 Runbook: `docs/RUNBOOKS/CLOUDSQL.md`
+Backup/restore drill runbook: `docs/RUNBOOKS/BACKUP_RESTORE.md`
+
+Backup defaults can be tuned in tfvars:
+
+```hcl
+cloudsql_backup_start_time              = "03:00" # UTC
+cloudsql_retained_backups               = 14
+cloudsql_enable_point_in_time_recovery  = true
+cloudsql_transaction_log_retention_days = 7
+# cloudsql_backup_location              = null
+```
 
 ---
 

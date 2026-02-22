@@ -2103,3 +2103,86 @@ Implemented Task #25 post-deploy smoke workflow with Makefile shortcuts and acti
 
 - Commit `TASK_SMOKE_TESTS_DEPLOY` on this branch and open PR.
 - Move to queue item #26: `TASK_BACKUP_RESTORE`.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-backup-restore`
+- Current task: `TASK_BACKUP_RESTORE` (`agents/tasks/TASK_BACKUP_RESTORE.md`)
+
+## Task summary
+
+Implemented Task #26 Cloud SQL backup/restore ops slice:
+
+- hardened Cloud SQL Terraform backup configuration with explicit retention + PITR controls
+- added operator-facing backup/restore drill runbook with RTO/RPO assumptions and step-by-step restore flow
+- documented post-restore service smoke verification path and cleanup guidance
+- updated deployment/Cloud SQL docs to point to the new runbook and backup knobs
+
+## Decisions made
+
+- Kept Cloud SQL backup automation enabled by default and made key backup controls explicit Terraform variables (`cloudsql_retained_backups`, backup start time, PITR toggle, transaction-log retention).
+- Set PITR default to enabled for private deployment resilience; retained values remain configurable in tfvars.
+- Chose documentation-first restore drill (task optional script not required) to keep this diff small and reviewable.
+- Recommended PITR clone path in the runbook for staging restores, with backup-ID restore documented as an alternate operator path.
+
+## Files changed
+
+- `infra/gcp/cloud_run_demo/cloudsql.tf`
+- `infra/gcp/cloud_run_demo/variables.tf`
+- `infra/gcp/cloud_run_demo/terraform.tfvars.example`
+- `infra/gcp/cloud_run_demo/README.md`
+- `docs/DEPLOY_GCP.md`
+- `docs/RUNBOOKS/CLOUDSQL.md`
+- `docs/RUNBOOKS/BACKUP_RESTORE.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... harness.toml`
+   - `sed -n ... docs/PRODUCT/PRODUCT_BRIEF.md docs/DOMAIN.md docs/ARCHITECTURE/README.md docs/DESIGN.md docs/CONTRACTS.md docs/WORKFLOW.md`
+   - `sed -n ... agents/tasks/TASK_BACKUP_RESTORE.md`
+   - `sed -n ... docs/SPECS/OBSERVABILITY_OPS.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git checkout -b codex/task-backup-restore`
+3. Implementation/discovery support:
+   - `rg -n ...` across Terraform/docs/runbooks
+   - `gcloud sql backups restore --help`
+   - `gcloud sql instances clone --help`
+   - `terraform -chdir=infra/gcp/cloud_run_demo fmt -recursive`
+4. Validation:
+   - `make tf-check` (validated successfully via temporary Docker-backed `terraform` PATH wrapper due local host Terraform provider startup timeouts)
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make tf-check`: PASS
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`78 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- This workstation intermittently times out launching the local `hashicorp/google` Terraform provider for `terraform validate`; Docker-backed Terraform validation passed and produced a clean `make tf-check` run for this task.
+
+## What’s next
+
+- Commit `TASK_BACKUP_RESTORE` on this branch and open PR.
+- Move to queue item #27: `TASK_RELEASE_PROCESS`.

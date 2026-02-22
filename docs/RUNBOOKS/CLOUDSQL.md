@@ -40,6 +40,16 @@ When Cloud SQL is enabled, expected outcome:
 - `DATABASE_URL` injected into Cloud Run env
 - `/api/meta` reports `"database_backend": "postgres"`
 
+Backup defaults in this repo:
+- automated backups are enabled
+- backup start time is configurable (`cloudsql_backup_start_time`)
+- retained backups are configurable (`cloudsql_retained_backups`)
+- PITR is enabled by default (`cloudsql_enable_point_in_time_recovery=true`)
+- transaction log retention is configurable (`cloudsql_transaction_log_retention_days`)
+
+Backup/restore and restore-drill workflow:
+- `docs/RUNBOOKS/BACKUP_RESTORE.md`
+
 ## Schema bootstrap
 
 Repository migration SQL:
