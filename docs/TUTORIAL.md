@@ -158,6 +158,9 @@ You can also run the built-in evaluation suites:
 # Retrieval quality (hit@k, MRR)
 make eval
 
+# Retrieval smoke regression set (small, CI-friendly)
+uv run python -m app.cli eval data/eval/smoke.jsonl --k 5
+
 # Prompt-injection regression
 make safety-eval
 ```

@@ -43,7 +43,7 @@ from .observability import (
     request_id_from_headers,
 )
 from .ratelimit import SlidingWindowRateLimiter
-from .retrieval import RetrievedChunk, invalidate_cache, retrieve
+from .retrieval import RetrievedChunk, effective_hybrid_weights, invalidate_cache, retrieve
 from .safety import detect_prompt_injection
 from .storage import (
     complete_ingestion_run,
@@ -2793,12 +2793,15 @@ def _eval_dataset_sha256(path: str) -> str:
 
 def _eval_retrieval_config(*, k: int) -> dict[str, object]:
     use_vector = settings.embeddings_backend != "none"
-    lexical_weight = 0.5 if use_vector else 1.0
-    vector_weight = 0.5 if use_vector else 0.0
+    lexical_weight, vector_weight = effective_hybrid_weights(use_vector=use_vector)
     return {
         "k": int(k),
         "top_k_default": int(settings.top_k_default),
         "max_top_k": int(settings.max_top_k),
+        "candidate_limits": {
+            "lexical": int(settings.retrieval_lexical_limit),
+            "vector": int(settings.retrieval_vector_limit),
+        },
         "hybrid_weights": {"lexical": lexical_weight, "vector": vector_weight},
         "vector_enabled": bool(use_vector),
     }

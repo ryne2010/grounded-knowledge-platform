@@ -129,6 +129,11 @@ class Settings:
     chunk_size_chars: int
     chunk_overlap_chars: int
     top_k_default: int
+    retrieval_lexical_limit: int
+    retrieval_vector_limit: int
+    retrieval_lexical_weight: float
+    retrieval_vector_weight: float
+    retrieval_debug_stats: bool
 
     # ---- Answering ----
     llm_provider: str  # extractive | openai | gemini | ollama
@@ -223,6 +228,11 @@ def load_settings() -> Settings:
     chunk_size_chars = _env_int("CHUNK_SIZE_CHARS", 1200)
     chunk_overlap_chars = _env_int("CHUNK_OVERLAP_CHARS", 200)
     top_k_default = _env_int("TOP_K_DEFAULT", 5)
+    retrieval_lexical_limit = max(1, _env_int("RETRIEVAL_LEXICAL_LIMIT", 40))
+    retrieval_vector_limit = max(1, _env_int("RETRIEVAL_VECTOR_LIMIT", 40))
+    retrieval_lexical_weight = max(0.0, _env_float("RETRIEVAL_LEXICAL_WEIGHT", 0.5))
+    retrieval_vector_weight = max(0.0, _env_float("RETRIEVAL_VECTOR_WEIGHT", 0.5))
+    retrieval_debug_stats = _env_bool("RETRIEVAL_DEBUG_STATS", False)
 
     llm_provider = _env_str("LLM_PROVIDER", "extractive").lower().strip()
     if llm_provider not in _ALLOWED_LLM_PROVIDERS:
@@ -279,6 +289,11 @@ def load_settings() -> Settings:
         chunk_size_chars=chunk_size_chars,
         chunk_overlap_chars=chunk_overlap_chars,
         top_k_default=top_k_default,
+        retrieval_lexical_limit=retrieval_lexical_limit,
+        retrieval_vector_limit=retrieval_vector_limit,
+        retrieval_lexical_weight=retrieval_lexical_weight,
+        retrieval_vector_weight=retrieval_vector_weight,
+        retrieval_debug_stats=retrieval_debug_stats,
         llm_provider=llm_provider,
         max_context_chunks=max_context_chunks,
         openai_api_key=openai_api_key,
@@ -334,6 +349,11 @@ def load_settings() -> Settings:
             chunk_size_chars=s.chunk_size_chars,
             chunk_overlap_chars=s.chunk_overlap_chars,
             top_k_default=min(s.top_k_default, 6),
+            retrieval_lexical_limit=s.retrieval_lexical_limit,
+            retrieval_vector_limit=s.retrieval_vector_limit,
+            retrieval_lexical_weight=s.retrieval_lexical_weight,
+            retrieval_vector_weight=s.retrieval_vector_weight,
+            retrieval_debug_stats=s.retrieval_debug_stats,
             llm_provider="extractive",
             max_context_chunks=s.max_context_chunks,
             openai_api_key=None,

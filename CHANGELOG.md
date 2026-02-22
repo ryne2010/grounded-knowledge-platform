@@ -47,6 +47,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Streaming API contract docs now explicitly define terminal `done` semantics and document optional `done.explain` payload parity with `/api/query`.
 - Cloud SQL contract/runbook docs now explicitly document `DATABASE_URL` Postgres behavior, `pgvector` baseline requirements, and migration tracking via `schema_migrations`.
 - Connector contract docs now explicitly pin GCS sync `max_objects` bounds (`1..5000`) and reaffirm add/update-only behavior.
+- Hybrid retrieval now supports runtime tuning knobs (`RETRIEVAL_*`) for candidate limits/weights, logs optional diagnostics (`RETRIEVAL_DEBUG_STATS`), and surfaces candidate limits in eval metadata.
 
 ### Fixed
 
@@ -56,6 +57,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Streaming regression tests now include direct SSE frame helper validation and stronger `done`/event-order assertions.
 - Cloud SQL integration tests now verify Postgres migrations are recorded and required retrieval indexes (`GIN` FTS + `HNSW` pgvector) exist.
 - Added GCS sync safety regression tests for public-demo gating, admin-only access, and max-object bounds; idempotent reruns now assert per-result `changed=false`.
+- Hybrid retrieval ranking now uses deterministic tie-break ordering across SQLite and Postgres for equal-score candidates.
 
 ## 0.10.0
 
