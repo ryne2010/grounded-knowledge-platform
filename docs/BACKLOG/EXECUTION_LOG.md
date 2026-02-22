@@ -1913,3 +1913,105 @@ Implemented Task #23 SLO + burn-rate alert baseline for Cloud Run in Terraform:
 
 - Commit `TASK_SLOS_BURN_RATE` on this branch and open PR.
 - Move to queue item #24: `TASK_COST_GUARDRAILS`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-cost-guardrails`
+- Current task: `TASK_COST_GUARDRAILS` (`agents/tasks/TASK_COST_GUARDRAILS.md`)
+
+## Task summary
+
+Implemented Task #24 cost guardrails across infra, app, tests, and runbooks:
+
+- added Cloud Run request guardrail knobs in Terraform:
+  - `max_request_concurrency` (default `40`)
+  - `request_timeout_seconds` (default `30`)
+- added optional Terraform-managed project budget alerts:
+  - `google_billing_budget` resource (`cost_guardrails.tf`)
+  - budget amount + threshold configuration variables
+  - optional Monitoring notification channels
+  - output `billing_budget_name`
+- added app payload size guardrail for query endpoints:
+  - `MAX_QUERY_PAYLOAD_BYTES` (default `32768`)
+  - enforced on `POST /api/query` and `POST /api/query/stream`
+  - returns `413` for oversized payloads
+- added test coverage for payload limit behavior and `/api/meta` surface
+- added cost incident runbook and updated cost/safety docs with concrete knobs
+
+## Decisions made
+
+- Kept billing budgets optional by default (`enable_billing_budget=false`) to avoid forcing Billing Account configuration in every demo deploy.
+- Enforced a required `billing_account_id` when budgets are enabled to prevent silent no-op config.
+- Scoped payload-size guardrail to query endpoints only (the highest-risk abuse path) and preserved existing upload-specific size enforcement.
+- Preserved ADR posture: no edge WAF dependency; controls stay in-app + Cloud Run + Terraform budgeting.
+
+## Files changed
+
+- `infra/gcp/modules/cloud_run_service/main.tf`
+- `infra/gcp/modules/cloud_run_service/variables.tf`
+- `infra/gcp/modules/cloud_run_service/README.md`
+- `infra/gcp/cloud_run_demo/main.tf`
+- `infra/gcp/cloud_run_demo/variables.tf`
+- `infra/gcp/cloud_run_demo/cost_guardrails.tf`
+- `infra/gcp/cloud_run_demo/outputs.tf`
+- `infra/gcp/cloud_run_demo/terraform.tfvars.example`
+- `infra/gcp/cloud_run_demo/README.md`
+- `app/config.py`
+- `app/main.py`
+- `tests/test_cost_guardrails.py`
+- `docs/COST_HYGIENE.md`
+- `docs/public-demo-checklist.md`
+- `docs/RUNBOOKS/COST_INCIDENT.md`
+- `docs/RUNBOOKS/INCIDENT.md`
+- `docs/CONTRACTS.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... harness.toml`
+   - `sed -n ... agents/tasks/TASK_COST_GUARDRAILS.md`
+   - `sed -n ... docs/SPECS/OBSERVABILITY_OPS.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git checkout -b codex/task-cost-guardrails`
+3. Targeted discovery/implementation checks:
+   - `rg -n ...` across infra/app/docs for existing guardrails
+   - `sed -n ...` across Terraform module/root/docs/app/test files
+   - `terraform ... providers schema -json ...` (temporary backendless copies) to confirm `google_billing_budget` and Cloud Run v2 timeout/concurrency schema fields
+4. Validation:
+   - `terraform -chdir=infra/gcp/cloud_run_demo fmt -recursive`
+   - `make tf-check`
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make tf-check`: PASS
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`76 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- Local `terraform validate`/`tf-check` initially hit a provider startup timeout on this workstation; rerunning after clearing local `.terraform` directory resolved it.
+
+## What’s next
+
+- Commit `TASK_COST_GUARDRAILS` on this branch and open PR.
+- Move to queue item #25: `TASK_SMOKE_TESTS_DEPLOY`.

@@ -94,6 +94,28 @@ variable "max_instances" {
   default     = 1
 }
 
+variable "max_request_concurrency" {
+  type        = number
+  description = "Maximum number of requests a single Cloud Run instance can serve concurrently."
+  default     = 40
+
+  validation {
+    condition     = var.max_request_concurrency >= 1 && var.max_request_concurrency <= 1000
+    error_message = "max_request_concurrency must be between 1 and 1000."
+  }
+}
+
+variable "request_timeout_seconds" {
+  type        = number
+  description = "Cloud Run request timeout in seconds."
+  default     = 30
+
+  validation {
+    condition     = var.request_timeout_seconds >= 1 && var.request_timeout_seconds <= 3600
+    error_message = "request_timeout_seconds must be between 1 and 3600."
+  }
+}
+
 variable "deletion_protection" {
   type        = bool
   description = "Enable deletion protection for Cloud Run and Cloud SQL resources (recommended for real client deployments)."
@@ -362,6 +384,72 @@ variable "notification_channels" {
   type        = list(string)
   description = "Optional Monitoring notification channel IDs to attach to alert policies. If empty, incidents will be created without notifications."
   default     = []
+}
+
+variable "enable_billing_budget" {
+  type        = bool
+  description = "Create an optional Billing budget and threshold alerts for this project."
+  default     = false
+
+  validation {
+    condition     = !var.enable_billing_budget || length(trimspace(var.billing_account_id)) > 0
+    error_message = "enable_billing_budget=true requires billing_account_id to be set."
+  }
+}
+
+variable "billing_account_id" {
+  type        = string
+  description = "Cloud Billing account ID (either raw ID or full form `billingAccounts/XXXXXX-XXXXXX-XXXXXX`) used for budget resources."
+  default     = ""
+
+  validation {
+    condition = (
+      length(trimspace(var.billing_account_id)) == 0 ||
+      can(regex("^billingAccounts/[A-Za-z0-9-]+$", trimspace(var.billing_account_id))) ||
+      can(regex("^[A-Za-z0-9-]+$", trimspace(var.billing_account_id)))
+    )
+    error_message = "billing_account_id must be empty, a raw billing account id, or `billingAccounts/<id>`."
+  }
+}
+
+variable "billing_budget_amount_usd" {
+  type        = number
+  description = "Billing budget amount (USD units) for monthly cost alerts."
+  default     = 20
+
+  validation {
+    condition = (
+      var.billing_budget_amount_usd > 0 &&
+      var.billing_budget_amount_usd == floor(var.billing_budget_amount_usd)
+    )
+    error_message = "billing_budget_amount_usd must be a whole number greater than 0."
+  }
+}
+
+variable "billing_budget_alert_thresholds" {
+  type        = list(number)
+  description = "Threshold percentages for billing budget alerts (for example: 0.5, 0.9, 1.0)."
+  default     = [0.5, 0.9, 1.0]
+
+  validation {
+    condition = (
+      length(var.billing_budget_alert_thresholds) >= 1 &&
+      alltrue([for t in var.billing_budget_alert_thresholds : t >= 0 && t <= 5])
+    )
+    error_message = "billing_budget_alert_thresholds must include at least one value between 0 and 5."
+  }
+}
+
+variable "billing_budget_monitoring_notification_channels" {
+  type        = list(string)
+  description = "Optional Monitoring notification channels for billing budget alerts."
+  default     = []
+}
+
+variable "billing_budget_disable_default_iam_recipients" {
+  type        = bool
+  description = "Disable default billing IAM email recipients for budget alerts."
+  default     = false
 }
 
 variable "bootstrap_demo_corpus" {

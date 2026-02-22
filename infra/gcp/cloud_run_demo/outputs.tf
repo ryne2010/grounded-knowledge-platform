@@ -78,3 +78,8 @@ output "scheduler_sync_service_account" {
   value       = local.enable_scheduler_sync ? google_service_account.scheduler_sync_invoker[0].email : null
   description = "Service account email used by Cloud Scheduler to invoke Cloud Run (if enabled)."
 }
+
+output "billing_budget_name" {
+  value       = local.enable_billing_budget_guardrail ? google_billing_budget.project_cost_guardrail[0].name : null
+  description = "Billing budget resource name for project cost guardrails (if enabled)."
+}

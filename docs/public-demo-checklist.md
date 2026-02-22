@@ -22,8 +22,8 @@ This checklist is optimized for running a **public-facing demo** of the Grounded
 - [ ] Deploy with `min_instances = 0` (scale to zero)
 - [ ] Set a **hard cap**: `max_instances = 1`
 - [ ] Use small resources: `cpu = 1`, `memory = 256Mi`
-- [ ] Set a reasonable request timeout (e.g. 10–30s) to avoid runaway requests
-- [ ] Limit concurrency if needed (optional): start with 20–40
+- [ ] Set a reasonable request timeout (`request_timeout_seconds`, e.g. 10–30s)
+- [ ] Limit concurrency (`max_request_concurrency`, start with 20–40)
 
 ## Network + access
 
@@ -48,6 +48,7 @@ This checklist is optimized for running a **public-facing demo** of the Grounded
 ## Billing hygiene
 
 - [ ] Create a **budget + alerts** in GCP billing
+- [ ] (Optional IaC) set `enable_billing_budget=true` + `billing_account_id` in Terraform
 - [ ] Keep Artifact Registry storage small (delete old images)
 - [ ] Keep Cloud Build usage minimal (reuse cached builds where possible)
 

@@ -140,9 +140,11 @@ module "cloud_run" {
 
   cpu = "1"
   # Cloud Run v2 enforces >= 512Mi for some CPU allocation modes; 512Mi is also safer for Python apps.
-  memory        = "512Mi"
-  min_instances = var.min_instances
-  max_instances = var.max_instances
+  memory                  = "512Mi"
+  min_instances           = var.min_instances
+  max_instances           = var.max_instances
+  max_request_concurrency = var.max_request_concurrency
+  request_timeout_seconds = var.request_timeout_seconds
 
   allow_unauthenticated = var.allow_unauthenticated
   env_vars              = local.env_vars

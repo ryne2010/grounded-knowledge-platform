@@ -390,6 +390,21 @@ def _should_rate_limit(path: str) -> bool:
     return p == "/api/query"
 
 
+def _query_payload_too_large(request: Request) -> bool:
+    if request.method.upper() != "POST":
+        return False
+    if request.url.path not in {"/api/query", "/api/query/stream"}:
+        return False
+
+    raw = request.headers.get("content-length")
+    if raw is None:
+        return False
+    try:
+        return int(raw) > settings.max_query_payload_bytes
+    except ValueError:
+        return False
+
+
 def _log_auth_denied(*, request_id: str, path: str, status: int, reason: str) -> None:
     """Emit a dedicated auth-denied event for security/audit filtering."""
 
@@ -494,6 +509,36 @@ async def _request_middleware(request: Request, call_next):
     request.state.auth_context = auth_ctx
     request.state.principal = auth_ctx.principal
     request.state.role = auth_ctx.role
+
+    # ---- Query payload size guardrail (defense-in-depth) ----
+    if _query_payload_too_large(request):
+        latency_ms = timer.ms()
+        record_http_request_metric(
+            method=request.method,
+            path=request.url.path,
+            status_code=413,
+            latency_ms=latency_ms,
+        )
+        log_trace_id, log_span_id = _effective_trace_context()
+        log_http_request(
+            request_id=rid,
+            method=request.method,
+            url=str(request.url),
+            path=request.url.path,
+            status=413,
+            latency_ms=latency_ms,
+            remote_ip=remote_ip,
+            user_agent=user_agent,
+            trace_id=log_trace_id,
+            span_id=log_span_id,
+            error_type="PayloadTooLarge",
+            severity="WARNING",
+        )
+        return JSONResponse(
+            status_code=413,
+            content={"detail": f"Payload too large (max {settings.max_query_payload_bytes} bytes)"},
+            headers={"X-Request-Id": rid},
+        )
 
     # ---- Rate limiting (defense-in-depth) ----
     # In demo mode this is enabled by default; private deployments can opt in via RATE_LIMIT_ENABLED=1.
@@ -1053,6 +1098,7 @@ def meta(_auth: AuthContext = Depends(require_role("reader"))) -> dict[str, obje
         "rate_limit_max_requests": settings.rate_limit_max_requests,
         "api_docs_url": "/api/swagger",
         "max_upload_bytes": settings.max_upload_bytes,
+        "max_query_payload_bytes": settings.max_query_payload_bytes,
         "max_top_k": settings.max_top_k,
         "top_k_default": settings.top_k_default,
         "max_question_chars": settings.max_question_chars,

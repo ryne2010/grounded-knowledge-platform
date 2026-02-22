@@ -93,6 +93,7 @@ class Settings:
 
     # Upload limits (defense-in-depth)
     max_upload_bytes: int
+    max_query_payload_bytes: int
 
     # Read-only demo bootstrap
     bootstrap_demo_corpus: bool
@@ -183,6 +184,7 @@ def load_settings() -> Settings:
 
     # Upload limits
     max_upload_bytes = _env_int("MAX_UPLOAD_BYTES", 10_000_000)  # 10MB
+    max_query_payload_bytes = max(1024, _env_int("MAX_QUERY_PAYLOAD_BYTES", 32_768))  # 32KB
 
     bootstrap_demo_corpus = _env_bool("BOOTSTRAP_DEMO_CORPUS", public_demo_mode)
     demo_corpus_path = _env_str("DEMO_CORPUS_PATH", "data/demo_corpus")
@@ -255,6 +257,7 @@ def load_settings() -> Settings:
         allow_doc_delete=allow_doc_delete,
         citations_required=citations_required,
         max_upload_bytes=max_upload_bytes,
+        max_query_payload_bytes=max_query_payload_bytes,
         bootstrap_demo_corpus=bootstrap_demo_corpus,
         demo_corpus_path=demo_corpus_path,
         max_question_chars=max_question_chars,
@@ -309,6 +312,7 @@ def load_settings() -> Settings:
             allow_doc_delete=False,
             citations_required=True,
             max_upload_bytes=min(s.max_upload_bytes, 10_000_000),
+            max_query_payload_bytes=max(1024, min(s.max_query_payload_bytes, 32_768)),
             bootstrap_demo_corpus=True,
             demo_corpus_path=s.demo_corpus_path,
             max_question_chars=min(s.max_question_chars, 2000),

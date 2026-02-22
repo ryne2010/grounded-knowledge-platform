@@ -33,6 +33,14 @@ This runbook is tuned for **Grounded Knowledge Platform** on **Cloud Run**.
   - If public: keep `PUBLIC_DEMO_MODE=1` and increase `RATE_LIMIT_MAX_REQUESTS` cautiously.
   - As a last resort, temporarily restrict invokers (require authentication) while you investigate.
 
+### Cost spike / abuse traffic
+
+- Cause: sustained abusive traffic or misconfigured scaling/concurrency/timeouts.
+- Mitigation:
+  - follow `docs/RUNBOOKS/COST_INCIDENT.md`
+  - reduce `max_instances`
+  - restrict invokers temporarily (`allow_unauthenticated=false`) while investigating
+
 ### Ingest failures
 
 - Cause: file too large (`413`), invalid metadata (`400`), missing PDF deps, embedding model download issues.

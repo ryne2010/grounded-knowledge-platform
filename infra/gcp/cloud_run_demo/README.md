@@ -12,6 +12,8 @@ What this demonstrates (staff-level):
 - Optional **Cloud Scheduler periodic sync** (`POST /api/connectors/gcs/sync`)
 - **Scale-to-zero** (min instances 0)
 - **Cost guardrails** (max instances cap)
+- **Request guardrails** (Cloud Run timeout + per-instance concurrency caps)
+- Optional **Billing budget alerts** (project-scoped, threshold-based)
 - macOS-friendly **Cloud Build** based image builds
 - **Serverless VPC Access connector** (auto-enabled when Cloud SQL is enabled)
 - **Cloud SQL Postgres** persistence (enabled by default)
@@ -141,6 +143,40 @@ This stack creates:
 - a Cloud Scheduler HTTP job that posts to `/api/connectors/gcs/sync`
 
 Runbook: `docs/RUNBOOKS/CONNECTORS_GCS.md`
+
+---
+
+## Cost guardrail knobs
+
+Built-in defaults are tuned for public demo safety/cost hygiene:
+
+- `min_instances = 0`
+- `max_instances = 1`
+- `max_request_concurrency = 40`
+- `request_timeout_seconds = 30`
+
+Optional billing budget alerts (recommended for shared/public projects):
+
+```hcl
+enable_billing_budget = true
+billing_account_id    = "billingAccounts/XXXXXX-XXXXXX-XXXXXX" # or raw account id
+
+billing_budget_amount_usd     = 20
+billing_budget_alert_thresholds = [0.5, 0.9, 1.0]
+
+# Optional: Cloud Monitoring channels for billing alerts
+# billing_budget_monitoring_notification_channels = [
+#   "projects/<project>/notificationChannels/<id>",
+# ]
+```
+
+Budget resource output:
+
+```bash
+terraform -chdir=infra/gcp/cloud_run_demo output -raw billing_budget_name
+```
+
+Runbook: `docs/RUNBOOKS/COST_INCIDENT.md`
 
 ---
 
