@@ -24,6 +24,7 @@ A small, safety-minded, citation-first **RAG** (retrieval augmented generation) 
 - Specs: `docs/SPECS/`
 - Runbooks: `docs/RUNBOOKS/`
 - Release process: `docs/RELEASES.md`
+- BigQuery export runbook (private deployments): `docs/RUNBOOKS/BIGQUERY_EXPORT.md`
 
 This repo is intentionally designed to run well:
 
@@ -241,3 +242,12 @@ make purge-expired-apply   # delete expired docs
 The web UI also includes a **Maintenance** page that lists currently-expired docs (read-only).
 
 See `docs/RUNBOOKS/MAINTENANCE.md`.
+
+BigQuery/warehouse export is also available for private deployments:
+
+```bash
+make bigquery-export
+```
+
+For direct BigQuery load (instead of JSONL-only snapshots), see
+`docs/RUNBOOKS/BIGQUERY_EXPORT.md`.
