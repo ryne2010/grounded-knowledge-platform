@@ -23,6 +23,8 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - New runbook: `docs/RUNBOOKS/CLOUDSQL.md`.
 - Release tooling script: `scripts/release_tools.py` (`bump`, `notes`).
 - New release process guide: `docs/RELEASES.md`.
+- Dependabot configuration for weekly Python (`pip`) and web (`npm`) dependency update PRs.
+- CodeQL workflow for Python + JavaScript/TypeScript code scanning on `main` and PRs.
 
 ### Changed
 
@@ -31,6 +33,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Runtime storage operations now switch to Postgres when `DATABASE_URL` is configured.
 - Docs and deployment guides updated for auth, OTEL, streaming, PWA, data contracts, and Cloud SQL.
 - Makefile now includes `release-bump` and `release-notes` targets for consistent release/version workflows.
+- `SECURITY.md` now documents the repo's continuous security posture (Dependabot + CodeQL) and alert triage model.
 
 ### Fixed
 
