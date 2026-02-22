@@ -15,7 +15,7 @@
 #   make infra                # apply prerequisite infra (APIs/AR/service accounts)
 #   make plan                 # terraform plan
 #   make apply                # terraform apply
-#   make deploy               # infra + build image (Cloud Build) + apply + verify
+#   make deploy               # infra + build image (Cloud Build) + apply + smoke
 #
 # Overrides (team/CI friendly):
 #   make deploy PROJECT_ID=my-proj REGION=us-central1 TAG=v1
@@ -69,6 +69,14 @@ DELETION_PROTECTION ?= false
 GKP_API_URL ?= http://127.0.0.1:8080
 GKP_API_KEY ?=
 
+# Deploy smoke checks.
+SMOKE_URL ?=
+SMOKE_QUERY ?= Why use Cloud SQL for persistence?
+SMOKE_TIMEOUT_S ?= 8
+SMOKE_RETRIES ?= 2
+SMOKE_RETRY_DELAY_S ?= 2
+SMOKE_API_KEY ?=
+
 # GCS connector convenience vars (private deployments only).
 GCS_BUCKET ?=
 GCS_PREFIX ?=
@@ -87,7 +95,7 @@ define require
 	@command -v $(1) >/dev/null 2>&1 || (echo "Missing dependency: $(1)"; exit 1)
 endef
 
-.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify logs destroy lock clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit
+.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify smoke smoke-local logs destroy lock clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit
 
 help:
 	@echo "Targets:"
@@ -101,9 +109,11 @@ help:
 	@echo "  plan              Terraform plan (uses remote state)"
 	@echo "  apply             Terraform apply (deploy Cloud Run)"
 	@echo "  build             Build+push image with Cloud Build"
-	@echo "  deploy            infra + build + apply + verify"
+	@echo "  deploy            infra + build + apply + smoke"
 	@echo "  url               Print Cloud Run service URL"
 	@echo "  verify            Hit /health and /api/meta"
+	@echo "  smoke             Post-deploy smoke suite (/health,/ready,/api/meta,/api/query)"
+	@echo "  smoke-local       Smoke suite against local API (default $(GKP_API_URL))"
 	@echo "  logs              Read recent Cloud Run logs"
 	@echo "  destroy           Terraform destroy (does NOT delete tfstate bucket)"
 	@echo "  lock              Generate lockfiles locally (uv.lock + pnpm-lock.yaml)"
@@ -557,7 +567,7 @@ build: doctor infra grant-cloudbuild
 
 # One-command demo deployment.
 # Safe to run repeatedly; converges infrastructure.
-deploy: build apply verify
+deploy: build apply smoke
 
 url: tf-init
 	@terraform -chdir=$(TF_DIR) output -raw service_url
@@ -567,6 +577,35 @@ verify: tf-init
 	echo "Service URL: $$URL"; \
 	curl -fsS "$$URL/health" >/dev/null && echo "OK: /health"; \
 	curl -fsS "$$URL/api/meta" >/dev/null && echo "OK: /api/meta"
+
+smoke: ## Post-deploy smoke checks (use SMOKE_URL=... to override Terraform output URL)
+	@set -euo pipefail; \
+	URL="$(SMOKE_URL)"; \
+	if [ -z "$$URL" ]; then \
+	  $(MAKE) tf-init >/dev/null; \
+	  URL="$$(terraform -chdir=$(TF_DIR) output -raw service_url)"; \
+	fi; \
+	echo "Smoke URL: $$URL"; \
+	CMD=(uv run python scripts/deploy_smoke.py \
+	  --base-url "$$URL" \
+	  --question "$(SMOKE_QUERY)" \
+	  --timeout-s "$(SMOKE_TIMEOUT_S)" \
+	  --retries "$(SMOKE_RETRIES)" \
+	  --retry-delay-s "$(SMOKE_RETRY_DELAY_S)"); \
+	if [ -n "$(SMOKE_API_KEY)" ]; then CMD+=(--api-key "$(SMOKE_API_KEY)"); fi; \
+	"$${CMD[@]}"
+
+smoke-local: ## Smoke checks against local API (default: GKP_API_URL)
+	@set -euo pipefail; \
+	echo "Smoke URL: $(GKP_API_URL)"; \
+	CMD=(uv run python scripts/deploy_smoke.py \
+	  --base-url "$(GKP_API_URL)" \
+	  --question "$(SMOKE_QUERY)" \
+	  --timeout-s "$(SMOKE_TIMEOUT_S)" \
+	  --retries "$(SMOKE_RETRIES)" \
+	  --retry-delay-s "$(SMOKE_RETRY_DELAY_S)"); \
+	if [ -n "$(SMOKE_API_KEY)" ]; then CMD+=(--api-key "$(SMOKE_API_KEY)"); fi; \
+	"$${CMD[@]}"
 
 logs: doctor
 	gcloud run services logs read "$(SERVICE_NAME)" --region "$(REGION)" --limit 100

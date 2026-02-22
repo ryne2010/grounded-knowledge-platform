@@ -2015,3 +2015,91 @@ Implemented Task #24 cost guardrails across infra, app, tests, and runbooks:
 
 - Commit `TASK_COST_GUARDRAILS` on this branch and open PR.
 - Move to queue item #25: `TASK_SMOKE_TESTS_DEPLOY`.
+
+---
+
+## Session
+
+- Date: 2026-02-21
+- Agent: Codex
+- Branch: `codex/task-smoke-tests-deploy`
+- Current task: `TASK_SMOKE_TESTS_DEPLOY` (`agents/tasks/TASK_SMOKE_TESTS_DEPLOY.md`)
+
+## Task summary
+
+Implemented Task #25 post-deploy smoke workflow with Makefile shortcuts and actionable output:
+
+- added `scripts/deploy_smoke.py` smoke runner for:
+  - `GET /health`
+  - `GET /ready`
+  - `GET /api/meta`
+  - `POST /api/query` with demo-safe known-answer question
+- added Make targets:
+  - `make smoke` (uses `SMOKE_URL` or Terraform `service_url` output)
+  - `make smoke-local` (uses `GKP_API_URL`, intended for local `make dev`)
+- updated `make deploy` to run smoke checks after apply (`deploy: build apply smoke`)
+- added configurable smoke knobs:
+  - `SMOKE_URL`, `SMOKE_QUERY`, `SMOKE_TIMEOUT_S`, `SMOKE_RETRIES`, `SMOKE_RETRY_DELAY_S`, `SMOKE_API_KEY`
+- added unit tests for smoke runner behavior (`tests/test_deploy_smoke.py`)
+- updated deploy/release docs to use the new smoke workflow
+
+## Decisions made
+
+- Kept existing `make verify` unchanged for quick endpoint checks and introduced `make smoke` as the richer post-deploy gate.
+- Smoke runner enforces stricter assertions when deployment reports `public_demo_mode=true`:
+  - extractive-only provider
+  - uploads/connectors/eval disabled
+  - query returns non-refusal with citations
+- Added optional `SMOKE_API_KEY` support so smoke checks can also run against private deployments.
+- Added lightweight retry support to reduce false negatives from fresh revision warm-up.
+
+## Files changed
+
+- `Makefile`
+- `scripts/deploy_smoke.py`
+- `tests/test_deploy_smoke.py`
+- `docs/RUNBOOKS/RELEASE.md`
+- `docs/DEPLOY_GCP.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_SMOKE_TESTS_DEPLOY.md`
+   - `sed -n ... docs/SPECS/OBSERVABILITY_OPS.md`
+   - `sed -n ... Makefile`
+   - `rg -n ...` across workflows/docs/scripts for existing smoke/verify behavior
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git checkout -b codex/task-smoke-tests-deploy`
+3. Task-specific validation:
+   - `uv run pytest -q tests/test_deploy_smoke.py`
+   - `uv run uvicorn app.main:app --port 8081` (temporary background)
+   - `make smoke-local GKP_API_URL=http://127.0.0.1:8081`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `uv run pytest -q tests/test_deploy_smoke.py`: PASS (`2 passed`)
+- `make smoke-local GKP_API_URL=http://127.0.0.1:8081`: PASS (`6/6` checks passed)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`78 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## What’s next
+
+- Commit `TASK_SMOKE_TESTS_DEPLOY` on this branch and open PR.
+- Move to queue item #26: `TASK_BACKUP_RESTORE`.

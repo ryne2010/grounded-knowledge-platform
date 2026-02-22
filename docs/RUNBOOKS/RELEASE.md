@@ -50,10 +50,24 @@ RATE_LIMIT_ENABLED=1
 
 ## Post-deploy smoke test
 
+Run the built-in smoke suite:
+
+```bash
+make smoke
+```
+
+What it verifies:
+
 1. `GET /health`
-2. `GET /api/meta` (verify flags)
-3. `POST /api/query` against a known answerable question
-4. Confirm citations are returned and refusal behavior is correct
+2. `GET /ready`
+3. `GET /api/meta` (including public-demo safety flags)
+4. `POST /api/query` with a demo-safe known-answer question
+
+For local API verification (`make dev`):
+
+```bash
+make smoke-local
+```
 
 ---
 
