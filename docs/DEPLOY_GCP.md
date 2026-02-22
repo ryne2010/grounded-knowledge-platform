@@ -144,6 +144,7 @@ Operational runbook: `docs/RUNBOOKS/CLOUDSQL.md`.
 ```bash
 make url
 make verify
+make smoke
 ```
 
 ---
