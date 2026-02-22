@@ -2277,3 +2277,87 @@ Implemented Task #27 release-process baseline with consistent versioning + chang
 
 - Commit `TASK_RELEASE_PROCESS` on this branch and open PR.
 - Move to queue item #28: `TASK_DEPENDABOT_CODE_SCANNING`.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-dependabot-code-scanning`
+- Current task: `TASK_DEPENDABOT_CODE_SCANNING` (`agents/tasks/TASK_DEPENDABOT_CODE_SCANNING.md`)
+
+## Task summary
+
+Implemented Task #28 DevSecOps dependency and code-scanning baseline:
+
+- added Dependabot config (`.github/dependabot.yml`) for weekly updates:
+  - Python dependencies (`pip` ecosystem, repo root)
+  - web dependencies (`npm` ecosystem, `web/`)
+  - grouped minor/patch updates and PR limits to reduce noise
+- added CodeQL workflow (`.github/workflows/codeql.yml`) for:
+  - `push` to `main`
+  - `pull_request` targeting `main`
+  - weekly scheduled scan + manual dispatch
+  - matrix languages: `python` and `javascript-typescript`
+- updated `SECURITY.md` with CI security posture and noise-control guidance
+- updated `CHANGELOG.md` Unreleased section for discoverability
+
+## Decisions made
+
+- Chose weekly cadence for both ecosystems with small open PR caps to keep update flow manageable.
+- Grouped minor/patch updates for Dependabot to reduce review overhead while still surfacing actionable update PRs.
+- Used CodeQL default analysis profile for visibility without introducing severity-based merge blocking.
+- Documented that CodeQL findings are visible in GitHub Security alerts while CI fails only for scanning execution failures.
+
+## Files changed
+
+- `.github/dependabot.yml`
+- `.github/workflows/codeql.yml`
+- `SECURITY.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_DEPENDABOT_CODE_SCANNING.md`
+   - `sed -n ... docs/SPECS/OBSERVABILITY_OPS.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git checkout -b codex/task-dependabot-code-scanning`
+3. Discovery/implementation support:
+   - `ls -la .github .github/workflows`
+   - `sed -n ... SECURITY.md .github/workflows/ci.yml`
+4. Task-specific checks:
+   - `ruby -e 'require "yaml"; YAML.load_file(".github/dependabot.yml"); YAML.load_file(".github/workflows/codeql.yml"); puts "YAML_OK"'`
+5. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- YAML parse/lint check: PASS (`YAML_OK`)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`81 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- CodeQL alert triage remains in GitHub Security (no severity-based hard fail gate configured by default).
+
+## What’s next
+
+- Commit `TASK_DEPENDABOT_CODE_SCANNING` on this branch and open PR.
+- Move to queue item #29: `TASK_CONTAINER_IMAGE_SCANNING`.

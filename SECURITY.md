@@ -30,3 +30,21 @@ If you ingest sensitive documents:
 - Configure budgets and billing alerts in your cloud account.
 - Review logging settings so you don't log sensitive content.
 - Prefer **one GCP project per client** to keep IAM and cost boundaries clean.
+
+## Continuous security posture (GitHub)
+
+This repo includes baseline DevSecOps automation:
+
+- **Dependabot** (`.github/dependabot.yml`)
+  - Weekly Python dependency updates (`pip` / `pyproject.toml` + `uv.lock`)
+  - Weekly web dependency updates (`npm` for `web/` + `pnpm-lock.yaml`)
+  - Minor/patch updates are grouped to reduce PR noise
+
+- **Code scanning (CodeQL)** (`.github/workflows/codeql.yml`)
+  - Runs on pushes to `main`, pull requests targeting `main`, and weekly schedule
+  - Analyzes both `python` and `javascript-typescript`
+  - Findings are surfaced in GitHub Security code-scanning alerts
+
+Noise control:
+- CodeQL alerts are visible in GitHub Security, but by default findings are triaged there rather than blocking merges by severity.
+- Workflow failures still fail CI when scanning execution itself fails.
