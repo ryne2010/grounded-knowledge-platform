@@ -6,6 +6,7 @@ import socket
 import subprocess
 import time
 import uuid
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -81,6 +82,31 @@ def test_postgres_repository_ingest_query_delete():
 
         repo = PostgresRepository(url)
         repo.init_schema()
+
+        import psycopg
+
+        migrations_dir = Path(__file__).resolve().parents[1] / "app" / "migrations" / "postgres"
+        expected_migrations = sorted(path.name for path in migrations_dir.glob("*.sql"))
+        with psycopg.connect(url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT filename FROM schema_migrations ORDER BY filename ASC")
+                applied_migrations = [str(r[0]) for r in cur.fetchall()]
+                assert applied_migrations == expected_migrations
+
+                cur.execute(
+                    """
+                    SELECT indexname, indexdef
+                    FROM pg_indexes
+                    WHERE schemaname = 'public'
+                      AND indexname IN ('idx_chunks_fts', 'idx_embeddings_vec_hnsw')
+                    """
+                )
+                idx_defs = {str(r[0]): str(r[1]).lower() for r in cur.fetchall()}
+                assert "idx_chunks_fts" in idx_defs
+                assert "using gin" in idx_defs["idx_chunks_fts"]
+                assert "idx_embeddings_vec_hnsw" in idx_defs
+                assert "using hnsw" in idx_defs["idx_embeddings_vec_hnsw"]
+                assert "vector_cosine_ops" in idx_defs["idx_embeddings_vec_hnsw"]
 
         text = "Cloud Run provides managed containers with automatic scaling."
         vec = np.ones((8,), dtype=np.float32).tobytes()

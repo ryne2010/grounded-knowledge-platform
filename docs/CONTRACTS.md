@@ -69,6 +69,12 @@ These should be **off for public URLs**.
   - Default in private mode: `data/index.sqlite`
   - Default in public demo mode: `/tmp/index.sqlite`
 
+- `DATABASE_URL`
+  - Optional Postgres DSN (for Cloud SQL or local Postgres).
+  - When set, runtime storage/retrieval uses Postgres instead of SQLite.
+  - Postgres baseline requires `pgvector` (`CREATE EXTENSION vector`) and `psycopg` (`uv sync --extra cloudsql`).
+  - Postgres schema migrations are auto-applied from `app/migrations/postgres/*.sql` and tracked in `schema_migrations`.
+
 > Cloud Run note: the filesystem is ephemeral. For persistence, migrate to Cloud SQL or a managed store.
 
 ### Retrieval
