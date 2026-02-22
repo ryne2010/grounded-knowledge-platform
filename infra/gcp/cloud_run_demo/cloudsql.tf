@@ -98,7 +98,16 @@ resource "google_sql_database_instance" "cloudsql" {
     }
 
     backup_configuration {
-      enabled = true
+      enabled                        = true
+      location                       = var.cloudsql_backup_location
+      start_time                     = var.cloudsql_backup_start_time
+      point_in_time_recovery_enabled = var.cloudsql_enable_point_in_time_recovery
+      transaction_log_retention_days = var.cloudsql_enable_point_in_time_recovery ? var.cloudsql_transaction_log_retention_days : null
+
+      backup_retention_settings {
+        retained_backups = var.cloudsql_retained_backups
+        retention_unit   = "COUNT"
+      }
     }
   }
 

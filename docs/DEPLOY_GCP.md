@@ -135,7 +135,9 @@ enable_cloudsql = false
 
 On apply, Terraform provisions Cloud SQL resources and injects `DATABASE_URL` into Cloud Run.
 When Cloud SQL is enabled, the Terraform root also creates/attaches a Serverless VPC Access connector so Cloud Run can connect over private IP.
+Backups are enabled with retention and PITR controls (`cloudsql_retained_backups`, `cloudsql_enable_point_in_time_recovery`, `cloudsql_transaction_log_retention_days`).
 Operational runbook: `docs/RUNBOOKS/CLOUDSQL.md`.
+Backup/restore drill runbook: `docs/RUNBOOKS/BACKUP_RESTORE.md`.
 
 ---
 

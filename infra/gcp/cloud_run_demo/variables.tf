@@ -320,6 +320,51 @@ variable "cloudsql_user" {
   default     = "gkp_app"
 }
 
+variable "cloudsql_backup_location" {
+  type        = string
+  description = "Optional backup storage location (multi-region/region). Leave null for Cloud SQL default."
+  default     = null
+}
+
+variable "cloudsql_backup_start_time" {
+  type        = string
+  description = "Daily backup start time in UTC, HH:MM format."
+  default     = "03:00"
+
+  validation {
+    condition     = can(regex("^([01][0-9]|2[0-3]):[0-5][0-9]$", var.cloudsql_backup_start_time))
+    error_message = "cloudsql_backup_start_time must be in HH:MM format (UTC)."
+  }
+}
+
+variable "cloudsql_retained_backups" {
+  type        = number
+  description = "Number of automated backups retained by Cloud SQL."
+  default     = 14
+
+  validation {
+    condition     = var.cloudsql_retained_backups >= 1
+    error_message = "cloudsql_retained_backups must be at least 1."
+  }
+}
+
+variable "cloudsql_enable_point_in_time_recovery" {
+  type        = bool
+  description = "Enable point-in-time recovery (PITR) for Cloud SQL Postgres."
+  default     = true
+}
+
+variable "cloudsql_transaction_log_retention_days" {
+  type        = number
+  description = "Transaction log retention (days) used for PITR. Standard Postgres supports 1-7 days."
+  default     = 7
+
+  validation {
+    condition     = var.cloudsql_transaction_log_retention_days >= 1 && var.cloudsql_transaction_log_retention_days <= 7
+    error_message = "cloudsql_transaction_log_retention_days must be between 1 and 7 for standard Postgres instances."
+  }
+}
+
 # --- Workspace / team IAM (Google Groups) ---
 # We intentionally keep this optional so you can run a solo demo in a personal project.
 
