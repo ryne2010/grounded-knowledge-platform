@@ -42,6 +42,8 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - `SECURITY.md` now includes container image scan posture and optional strict severity-gate config.
 - Product docs now mark BigQuery export as available for private deployments.
 - Portfolio alignment docs now reflect implemented BigQuery export + modeling assets.
+- Service worker API caching is now restricted to low-risk read endpoints (`/api/meta`, `/api/docs`, `/api/stats`) to avoid persisting sensitive/private API responses.
+- Makefile now includes `web-dev` as an explicit alias for the Vite UI dev server workflow.
 
 ### Fixed
 

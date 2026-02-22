@@ -1,9 +1,10 @@
-const SW_VERSION = "gkp-sw-v1";
+const SW_VERSION = "gkp-sw-v2";
 const SHELL_CACHE = `${SW_VERSION}-shell`;
 const STATIC_CACHE = `${SW_VERSION}-static`;
 const API_CACHE = `${SW_VERSION}-api`;
 
 const SHELL_URLS = ["/", "/index.html", "/manifest.webmanifest"];
+const CACHEABLE_API_PATHS = new Set(["/api/meta", "/api/docs", "/api/stats"]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -33,7 +34,10 @@ function staleWhileRevalidate(request) {
           }
           return response;
         })
-        .catch(() => cached);
+        .catch(() => {
+          if (cached) return cached;
+          return Promise.reject(new Error("offline and static asset not cached"));
+        });
       return cached || network;
     }),
   );
@@ -48,7 +52,12 @@ function networkFirstApi(request) {
         }
         return response;
       })
-      .catch(() => cache.match(request)),
+      .catch(() =>
+        cache.match(request).then((cached) => {
+          if (cached) return cached;
+          return Promise.reject(new Error("offline and api response not cached"));
+        }),
+      ),
   );
 }
 
@@ -66,7 +75,13 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (url.pathname.startsWith("/api/")) {
-    event.respondWith(networkFirstApi(request));
+    // Keep API caching minimal and safe-by-default.
+    // Do not persist sensitive/private endpoints in offline cache.
+    if (CACHEABLE_API_PATHS.has(url.pathname)) {
+      event.respondWith(networkFirstApi(request));
+    } else {
+      event.respondWith(fetch(request));
+    }
     return;
   }
 
