@@ -247,7 +247,7 @@ test: ## Run unit tests (pytest)
 	uv run python scripts/harness.py test
 
 test-postgres: ## Run Postgres integration tests (requires Docker + psycopg)
-	uv run python -m pytest -q tests/test_cloudsql_postgres.py
+	uv run python -m pytest -q tests/test_cloudsql_postgres.py tests/test_cloudsql_runtime.py
 
 
 # -----------------------------

@@ -2999,3 +2999,97 @@ Completed a focused closure pass for GCS connector acceptance criteria by adding
 
 - Commit `TASK_CONNECTORS_GCS` on this branch and open PR.
 - Continue with next unsequenced backlog task (`TASK_HYBRID_RETRIEVAL_TUNING` or maintainer-prioritized item).
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-hybrid-retrieval-tuning`
+- Current task: `TASK_HYBRID_RETRIEVAL_TUNING` (`agents/tasks/TASK_HYBRID_RETRIEVAL_TUNING.md`)
+
+## Task summary
+
+Completed hybrid retrieval tuning hardening with deterministic ranking, runtime knobs, and diagnostics:
+
+- added runtime retrieval knobs in `Settings`/env parsing:
+  - `RETRIEVAL_LEXICAL_LIMIT`
+  - `RETRIEVAL_VECTOR_LIMIT`
+  - `RETRIEVAL_LEXICAL_WEIGHT`
+  - `RETRIEVAL_VECTOR_WEIGHT`
+  - `RETRIEVAL_DEBUG_STATS`
+- implemented normalized hybrid weighting and deterministic tie-break ordering in retrieval paths (SQLite + Postgres)
+- added optional retrieval diagnostics logging (candidate counts + stage latency breakdown) behind `RETRIEVAL_DEBUG_STATS`
+- updated eval metadata to surface effective hybrid weights and retrieval candidate limits
+- expanded `make test-postgres` to include runtime Postgres retrieval tests (`tests/test_cloudsql_runtime.py`)
+- added regression tests in `tests/test_retrieval_tuning.py` for weight normalization/fallback, eval config wiring, and deterministic sort ordering
+
+## Decisions made
+
+- Kept hybrid merge formula aligned with architecture docs (`score = lexical_weight * lexical_score + vector_weight * vector_score`) and normalized weights at runtime.
+- Enforced deterministic ordering using explicit tie-break fields (score, lexical, vector, doc/chunk identifiers) to avoid unstable ranking on equal scores.
+- Made diagnostics log-only and opt-in (`RETRIEVAL_DEBUG_STATS=1`) to avoid changing API contracts while still supporting performance debugging.
+
+## Files changed
+
+- `.env.example`
+- `Makefile`
+- `app/config.py`
+- `app/main.py`
+- `app/retrieval.py`
+- `tests/test_retrieval_tuning.py`
+- `docs/ARCHITECTURE/RETRIEVAL_PIPELINE.md`
+- `docs/CONTRACTS.md`
+- `docs/TUTORIAL.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... harness.toml`
+   - `sed -n ... docs/PRODUCT/PRODUCT_BRIEF.md`
+   - `sed -n ... docs/DESIGN.md`
+   - `sed -n ... docs/WORKFLOW.md`
+   - `sed -n ... agents/tasks/TASK_HYBRID_RETRIEVAL_TUNING.md`
+   - `sed -n ... docs/SPECS/CLOUDSQL_HARDENING.md`
+2. Focused validation:
+   - `uv run ruff check app/config.py app/retrieval.py app/main.py tests/test_retrieval_tuning.py`
+   - `uv run pytest -q tests/test_retrieval_tuning.py`
+   - `uv run python -m app.cli eval data/eval/smoke.jsonl --k 5`
+3. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make test-postgres`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `uv run ruff check ...`: PASS
+- `uv run pytest -q tests/test_retrieval_tuning.py`: PASS (`3 passed`)
+- `uv run python -m app.cli eval data/eval/smoke.jsonl --k 5`: PASS (`examples=3 hit@5=1.000 mrr=1.000`)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`92 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make test-postgres`: PASS (`2 skipped` in this local environment; Docker/psycopg-dependent)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- Retrieval smoke dataset (`data/eval/smoke.jsonl`) is now explicitly documented in tutorial/architecture as a lightweight ranking-regression guardrail.
+- `make test-postgres` includes runtime retrieval coverage now; in CI with Docker + psycopg available this lane executes fully.
+
+## What’s next
+
+- Commit `TASK_HYBRID_RETRIEVAL_TUNING` on this branch and open PR.
+- After merge, continue with the next unsequenced task by maintainer priority.

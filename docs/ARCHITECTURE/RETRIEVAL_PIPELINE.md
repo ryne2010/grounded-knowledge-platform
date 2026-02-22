@@ -18,7 +18,9 @@ Retrieval is designed to be:
 2) **Retrieve candidates**
    - **Lexical**: Postgres full-text search (FTS) over `chunks.text`
    - **Vector**: pgvector cosine distance over `embeddings.vec`
-   - Merge and rerank (hybrid strategy)
+   - Merge and rerank using weighted hybrid score:
+     - `score = lexical_weight * lexical_score + vector_weight * vector_score`
+     - tie-break order is deterministic: score, lexical score, vector score, then doc/chunk identifiers
 
 3) **Assemble evidence pack**
    - pick top-K chunks
@@ -47,3 +49,13 @@ Retrieval should emit (planned / partially implemented):
 - retrieval latency (lexical/vector/rerank)
 - hit counts and score distributions
 - refusal rates and reasons (without logging sensitive content)
+
+Runtime tuning knobs:
+- `RETRIEVAL_LEXICAL_LIMIT`
+- `RETRIEVAL_VECTOR_LIMIT`
+- `RETRIEVAL_LEXICAL_WEIGHT`
+- `RETRIEVAL_VECTOR_WEIGHT`
+- `RETRIEVAL_DEBUG_STATS` (log-only diagnostics for candidate counts + latency breakdown)
+
+Regression guardrail:
+- `data/eval/smoke.jsonl` is the small retrieval smoke dataset used by eval smoke gate flows to catch ranking regressions.

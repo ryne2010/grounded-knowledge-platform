@@ -82,6 +82,14 @@ These should be **off for public URLs**.
 - `TOP_K_DEFAULT` (default: `5`)
 - `MAX_TOP_K` (default: `8`)
 - `MAX_QUESTION_CHARS` (default: `2000`)
+- `RETRIEVAL_LEXICAL_LIMIT` (default: `40`)
+- `RETRIEVAL_VECTOR_LIMIT` (default: `40`)
+- `RETRIEVAL_LEXICAL_WEIGHT` (default: `0.5`)
+- `RETRIEVAL_VECTOR_WEIGHT` (default: `0.5`)
+  - weights are normalized at runtime when vector retrieval is enabled
+  - when vector retrieval is disabled (`EMBEDDINGS_BACKEND=none`), effective weights are lexical=`1.0`, vector=`0.0`
+- `RETRIEVAL_DEBUG_STATS` (default: `0`)
+  - when enabled, retrieval emits lightweight lexical/vector candidate-count + latency diagnostics to logs
 
 ### Upload hardening
 
@@ -378,7 +386,7 @@ Notes:
     - `app_version: string`
     - `embeddings_backend: string`
     - `embeddings_model: string`
-    - `retrieval_config: object` (includes `k` and `hybrid_weights`)
+    - `retrieval_config: object` (includes `k`, `hybrid_weights`, and `candidate_limits`)
     - `provider_config: object` (provider/model)
     - `diff_from_prev: object`
     - optional `details: EvalExample[]` when `include_details=true`

@@ -48,6 +48,63 @@ class RetrievedChunk:
     vector_score: float
 
 
+def effective_hybrid_weights(*, use_vector: bool) -> tuple[float, float]:
+    """Return normalized lexical/vector weights for hybrid retrieval."""
+    if not use_vector:
+        return (1.0, 0.0)
+
+    lexical = max(0.0, float(settings.retrieval_lexical_weight))
+    vector = max(0.0, float(settings.retrieval_vector_weight))
+    total = lexical + vector
+    if total <= 0:
+        return (0.5, 0.5)
+    return (lexical / total, vector / total)
+
+
+def _retrieval_sort_key(item: RetrievedChunk) -> tuple[float, float, float, str, int, str]:
+    """Deterministic ordering for ties on floating scores."""
+    return (-item.score, -item.lexical_score, -item.vector_score, item.doc_id, int(item.idx), item.chunk_id)
+
+
+def _log_retrieval_diagnostics(
+    *,
+    backend: str,
+    top_k: int,
+    lexical_limit: int,
+    vector_limit: int,
+    lexical_weight: float,
+    vector_weight: float,
+    lexical_candidates: int,
+    vector_candidates: int,
+    merged_candidates: int,
+    lexical_ms: float,
+    vector_ms: float,
+    merge_ms: float,
+) -> None:
+    if not settings.retrieval_debug_stats:
+        return
+
+    logger.info(
+        (
+            "retrieval.hybrid.stats backend=%s top_k=%d lexical_limit=%d vector_limit=%d "
+            "lexical_weight=%.3f vector_weight=%.3f lexical_candidates=%d vector_candidates=%d "
+            "merged_candidates=%d lexical_ms=%.2f vector_ms=%.2f merge_ms=%.2f"
+        ),
+        backend,
+        int(top_k),
+        int(lexical_limit),
+        int(vector_limit),
+        float(lexical_weight),
+        float(vector_weight),
+        int(lexical_candidates),
+        int(vector_candidates),
+        int(merged_candidates),
+        float(lexical_ms),
+        float(vector_ms),
+        float(merge_ms),
+    )
+
+
 _embedder_singleton: Embedder | None = None
 _embedder_lock = Lock()
 
@@ -287,16 +344,42 @@ def _retrieve_postgres(
     top_k: int,
     lexical_limit: int,
     vector_limit: int,
+    lexical_weight: float,
+    vector_weight: float,
     embedder: Embedder,
     use_vector: bool,
 ) -> list[RetrievedChunk]:
+    lexical_start = time.perf_counter()
     lex = _pg_lexical_scores(conn, question, lexical_limit)
-    vec = _pg_vector_scores(conn, question, embedder, vector_limit) if use_vector else {}
+    lexical_ms = (time.perf_counter() - lexical_start) * 1000.0
+
+    vector_ms = 0.0
+    if use_vector:
+        vector_start = time.perf_counter()
+        vec = _pg_vector_scores(conn, question, embedder, vector_limit)
+        vector_ms = (time.perf_counter() - vector_start) * 1000.0
+    else:
+        vec = {}
 
     cand_ids = set(lex.keys()) | set(vec.keys())
     if not cand_ids:
+        _log_retrieval_diagnostics(
+            backend="postgres",
+            top_k=top_k,
+            lexical_limit=lexical_limit,
+            vector_limit=vector_limit,
+            lexical_weight=lexical_weight,
+            vector_weight=vector_weight,
+            lexical_candidates=0,
+            vector_candidates=0,
+            merged_candidates=0,
+            lexical_ms=lexical_ms,
+            vector_ms=vector_ms,
+            merge_ms=0.0,
+        )
         return []
 
+    merge_start = time.perf_counter()
     # Fetch chunk records for candidates.
     chunk_ids = list(cand_ids)
     chunks = get_chunks_by_ids(conn, chunk_ids)
@@ -313,8 +396,7 @@ def _retrieve_postgres(
             continue
         lex_s = float(lex.get(cid, 0.0))
         vec_s = float(vec.get(cid, 0.0))
-        denom = 2.0 if use_vector else 1.0
-        score = (lex_s + vec_s) / denom
+        score = (lexical_weight * lex_s) + (vector_weight * vec_s)
         scored.append(
             RetrievedChunk(
                 chunk_id=c.chunk_id,
@@ -327,7 +409,22 @@ def _retrieve_postgres(
             )
         )
 
-    scored.sort(key=lambda r: r.score, reverse=True)
+    scored.sort(key=_retrieval_sort_key)
+    merge_ms = (time.perf_counter() - merge_start) * 1000.0
+    _log_retrieval_diagnostics(
+        backend="postgres",
+        top_k=top_k,
+        lexical_limit=lexical_limit,
+        vector_limit=vector_limit,
+        lexical_weight=lexical_weight,
+        vector_weight=vector_weight,
+        lexical_candidates=len(lex),
+        vector_candidates=len(vec),
+        merged_candidates=len(scored),
+        lexical_ms=lexical_ms,
+        vector_ms=vector_ms,
+        merge_ms=merge_ms,
+    )
     return scored[: max(1, min(int(top_k), 50))]
 
 def _lexical_scores_bm25(tokenized_chunks: list[list[str]], query: str) -> dict[int, float]:
@@ -374,8 +471,8 @@ def retrieve(
     question: str,
     *,
     top_k: int | None = None,
-    lexical_limit: int = 40,
-    vector_limit: int = 40,
+    lexical_limit: int | None = None,
+    vector_limit: int | None = None,
 ) -> list[RetrievedChunk]:
     """Hybrid retrieval:
 
@@ -384,8 +481,11 @@ def retrieve(
     - combine: average of normalized lexical + vector
     """
 
-    top_k = top_k or settings.top_k_default
+    top_k = max(1, min(int(top_k or settings.top_k_default), 50))
+    lexical_limit = max(1, min(int(lexical_limit or settings.retrieval_lexical_limit), 2000))
+    vector_limit = max(1, min(int(vector_limit or settings.retrieval_vector_limit), 2000))
     use_vector = settings.embeddings_backend != "none"
+    lexical_weight, vector_weight = effective_hybrid_weights(use_vector=use_vector)
     embedder = _get_embedder()
 
     with connect(settings.sqlite_path) as conn:
@@ -400,6 +500,8 @@ def retrieve(
                 top_k=top_k,
                 lexical_limit=lexical_limit,
                 vector_limit=vector_limit,
+                lexical_weight=lexical_weight,
+                vector_weight=vector_weight,
                 embedder=embedder,
                 use_vector=use_vector,
             )
@@ -425,6 +527,7 @@ def retrieve(
             return []
 
         # Lexical
+        lexical_start = time.perf_counter()
         lex_fts = _lexical_scores_fts(conn, question, lexical_limit)
         if lex_fts is not None:
             index_of = {c.chunk_id: i for i, c in enumerate(chunks)}
@@ -437,9 +540,12 @@ def retrieve(
             lex_scores = {
                 i: s for i, s in _lexical_scores_bm25(tokenized, question).items() if i in active_chunk_index_set
             }
+        lexical_ms = (time.perf_counter() - lexical_start) * 1000.0
 
         # Vector (optional)
+        vector_ms = 0.0
         if use_vector:
+            vector_start = time.perf_counter()
             q_vec = embedder.embed([question]).reshape(-1).astype(np.float32)
             n = float(np.linalg.norm(q_vec))
             if n > 0:
@@ -451,10 +557,13 @@ def retrieve(
             sims = sims - float(sims.min())
             if float(sims.max()) > 0:
                 sims = sims / float(sims.max())
+            vector_ms = (time.perf_counter() - vector_start) * 1000.0
         else:
             sims = np.zeros((len(chunks),), dtype=np.float32)
 
+        merge_start = time.perf_counter()
         cand_idx: set[int] = set()
+        top_vec_idx: list[int] = []
         if lex_scores:
             top_lex = sorted(lex_scores.items(), key=lambda kv: kv[1], reverse=True)[:lexical_limit]
             cand_idx.update(i for i, _ in top_lex)
@@ -470,7 +579,7 @@ def retrieve(
                 continue
             lex_score = float(lex_scores.get(i, 0.0))
             vec_score = float(sims[i])
-            score = (0.5 * lex_score + 0.5 * vec_score) if use_vector else lex_score
+            score = (lexical_weight * lex_score) + (vector_weight * vec_score)
             results.append(
                 RetrievedChunk(
                     chunk_id=c.chunk_id,
@@ -483,5 +592,20 @@ def retrieve(
                 )
             )
 
-        results.sort(key=lambda r: r.score, reverse=True)
+        results.sort(key=_retrieval_sort_key)
+        merge_ms = (time.perf_counter() - merge_start) * 1000.0
+        _log_retrieval_diagnostics(
+            backend="sqlite",
+            top_k=top_k,
+            lexical_limit=lexical_limit,
+            vector_limit=vector_limit,
+            lexical_weight=lexical_weight,
+            vector_weight=vector_weight,
+            lexical_candidates=len(lex_scores),
+            vector_candidates=len(top_vec_idx),
+            merged_candidates=len(results),
+            lexical_ms=lexical_ms,
+            vector_ms=vector_ms,
+            merge_ms=merge_ms,
+        )
         return results[:top_k]
