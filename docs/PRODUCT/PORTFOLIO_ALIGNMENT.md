@@ -29,7 +29,7 @@ This is meant to be readable by hiring managers and technical interviewers.
 | Auditability | runbooks + logging | `TASK_AUDIT_EVENTS.md` |
 | Observability (dashboards/SLOs/runbooks) | `docs/OBSERVABILITY.md` + runbooks | `TASK_OTEL.md`, `TASK_DASHBOARDS_TERRAFORM.md`, `TASK_SLOS_BURN_RATE.md` |
 | Cost guardrails (no edge WAF) | demo mode + Cloud Run caps | `TASK_COST_GUARDRAILS.md` |
-| Data platform integration (BigQuery) | docs only | `TASK_BIGQUERY_EXPORT.md`, `TASK_BIGQUERY_MODELS.md` |
+| Data platform integration (BigQuery) | Private export + modeling examples (`docs/RUNBOOKS/BIGQUERY_EXPORT.md`, `docs/BIGQUERY_MODELING.md`, `infra/bigquery_models/`) | Expand with project-specific orchestration/BI in client deployments |
 
 ---
 
@@ -37,4 +37,3 @@ This is meant to be readable by hiring managers and technical interviewers.
 
 - Public demo script: `docs/PRODUCT/DEMO_SCRIPT.md`
 - Private deployment operator demo (auth + connector sync): see milestone M2 in `docs/BACKLOG/MILESTONES.md`
-

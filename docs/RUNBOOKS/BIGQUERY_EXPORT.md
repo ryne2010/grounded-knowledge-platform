@@ -79,3 +79,13 @@ Grant the export principal least privilege for a single dataset (for example):
 - `roles/bigquery.jobUser` on the project
 
 Avoid broad project-wide admin roles for routine exports.
+
+## Next step: modeling
+
+After exporting raw operational data, apply the example modeling SQL in:
+
+- `infra/bigquery_models/raw/`
+- `infra/bigquery_models/curated/`
+- `infra/bigquery_models/marts/`
+
+See `docs/BIGQUERY_MODELING.md` for dataset conventions and execution order.

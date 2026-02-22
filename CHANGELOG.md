@@ -28,6 +28,8 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Container image vulnerability scanning workflow (Trivy) on PRs and `main` with SARIF + JSON outputs.
 - BigQuery export module + CLI (`export-bigquery`) for private deployments, with idempotent JSONL snapshots and optional direct BigQuery loads for `docs`, `ingest_events`, and `eval_runs`.
 - New runbook: `docs/RUNBOOKS/BIGQUERY_EXPORT.md`.
+- BigQuery modeling guide (`docs/BIGQUERY_MODELING.md`) with raw->curated->marts conventions.
+- Example BigQuery model SQL under `infra/bigquery_models/{raw,curated,marts}` for ingestion freshness, query latency, eval pass rates, and ops/governance marts.
 
 ### Changed
 
@@ -39,6 +41,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - `SECURITY.md` now documents the repo's continuous security posture (Dependabot + CodeQL) and alert triage model.
 - `SECURITY.md` now includes container image scan posture and optional strict severity-gate config.
 - Product docs now mark BigQuery export as available for private deployments.
+- Portfolio alignment docs now reflect implemented BigQuery export + modeling assets.
 
 ### Fixed
 
