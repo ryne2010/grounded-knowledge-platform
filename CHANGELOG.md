@@ -31,6 +31,8 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - BigQuery modeling guide (`docs/BIGQUERY_MODELING.md`) with raw->curated->marts conventions.
 - Example BigQuery model SQL under `infra/bigquery_models/{raw,curated,marts}` for ingestion freshness, query latency, eval pass rates, and ops/governance marts.
 - Optional tenant-scoped private mode with `X-Tenant-ID` request context and API-key grants that can restrict allowed tenants.
+- Retrieval profiling utility (`app.cli profile-retrieval` + `make profile-retrieval`) to summarize Postgres `EXPLAIN (ANALYZE, BUFFERS)` index usage for lexical and pgvector paths.
+- New runbook: `docs/RUNBOOKS/RETRIEVAL_PERF.md`.
 
 ### Changed
 

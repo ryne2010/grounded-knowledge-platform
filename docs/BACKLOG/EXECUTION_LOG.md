@@ -3183,3 +3183,99 @@ Implemented an optional tenant/workspace boundary with tenant-scoped RBAC for pr
 
 - Commit `TASK_MULTITENANCY_RBAC` on this branch and open PR.
 - Continue with the next unsequenced task: `TASK_SEARCH_PERF_PROFILE`.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-search-perf-profile`
+- Current task: `TASK_SEARCH_PERF_PROFILE` (`agents/tasks/TASK_SEARCH_PERF_PROFILE.md`)
+
+## Task summary
+
+Implemented retrieval performance profiling tooling for Postgres with operator-focused summaries and remediation guidance:
+
+- added new profiling module `app/retrieval_profile.py` that:
+  - runs representative lexical and vector retrieval `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` queries
+  - summarizes index usage, seq-scan signals, planning/execution timing, and per-query errors
+  - emits clear summary output for expected indexes:
+    - lexical: `idx_chunks_fts`
+    - vector: `idx_embeddings_vec_hnsw`
+- added CLI command in `app/cli.py`:
+  - `profile-retrieval` with options for tenant scope, top-k, explicit queries, JSON output, and optional raw plan inclusion
+- added Makefile operator target:
+  - `make profile-retrieval`
+- added retrieval performance runbook:
+  - `docs/RUNBOOKS/RETRIEVAL_PERF.md`
+  - includes good plan expectations, failure modes, and remediation (ANALYZE/REINDEX/index checks)
+- linked the new runbook from Cloud SQL runbook
+- added parser/summary unit tests for plan interpretation (`tests/test_retrieval_profile.py`)
+
+## Decisions made
+
+- Used `EXPLAIN ... FORMAT JSON` to provide robust machine parsing while still honoring the task requirement for `ANALYZE, BUFFERS` capture.
+- Kept output summary-first (index hit ratios + per-query diagnostics) so operators can quickly detect bad plans without inspecting raw dumps.
+- Scoped profiling to Postgres only and added explicit user-facing failure messaging when `DATABASE_URL` is not configured.
+
+## Files changed
+
+- `app/retrieval_profile.py`
+- `app/cli.py`
+- `Makefile`
+- `tests/test_retrieval_profile.py`
+- `docs/RUNBOOKS/RETRIEVAL_PERF.md`
+- `docs/RUNBOOKS/CLOUDSQL.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git checkout main && git pull --ff-only`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_SEARCH_PERF_PROFILE.md`
+   - `sed -n ... docs/ARCHITECTURE/DATA_MODEL.md`
+   - `sed -n ... docs/SPECS/CLOUDSQL_HARDENING.md`
+2. Focused validation during implementation:
+   - `uv run ruff check app/retrieval_profile.py app/cli.py tests/test_retrieval_profile.py`
+   - `uv run mypy app`
+   - `uv run pytest -q tests/test_retrieval_profile.py tests/test_retrieval_tuning.py tests/test_postgres_migrations.py`
+   - `uv run python -m app.cli profile-retrieval`
+   - `make profile-retrieval`
+3. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make test-postgres`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `uv run ruff check ...`: PASS
+- `uv run mypy app`: PASS
+- `uv run pytest -q tests/test_retrieval_profile.py tests/test_retrieval_tuning.py tests/test_postgres_migrations.py`: PASS (`6 passed`)
+- `uv run python -m app.cli profile-retrieval`: expected operator message in non-Postgres env (`Retrieval profiling requires Postgres (set DATABASE_URL)`)
+- `make profile-retrieval`: expected operator message in non-Postgres env (same as above)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`96 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make test-postgres`: PASS (`2 skipped` in this local environment; Docker/psycopg-dependent)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- In environments with a live Postgres dataset, `make profile-retrieval` will print index usage hit rates and per-query plan summaries; optional JSON output can include raw plan payloads.
+- This change is tooling/runbook-only and does not alter public demo request-surface safety constraints.
+
+## What’s next
+
+- Commit `TASK_SEARCH_PERF_PROFILE` on this branch and open PR.
+- Unsequenced backlog task loop is complete after this PR.

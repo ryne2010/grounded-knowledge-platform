@@ -95,7 +95,7 @@ define require
 	@command -v $(1) >/dev/null 2>&1 || (echo "Missing dependency: $(1)"; exit 1)
 endef
 
-.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify smoke smoke-local logs destroy lock release-bump release-notes clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit bigquery-export
+.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify smoke smoke-local logs destroy lock release-bump release-notes clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit bigquery-export profile-retrieval
 
 help:
 	@echo "Targets:"
@@ -135,6 +135,7 @@ help:
 	@echo "  dev-doctor         Run full local quality harness"
 	@echo "  dev-ci             Run CI harness locally (same as GitHub Actions)"
 	@echo "  test-postgres      Run Postgres integration tests (Docker + psycopg)"
+	@echo "  profile-retrieval  Profile Postgres retrieval plans (EXPLAIN ANALYZE BUFFERS)"
 	@echo "  eval-smoke         Run CI-style eval smoke gate locally"
 	@echo "  gcs-sync           Trigger GCS connector sync via API (private deployments only)"
 	@echo "  bigquery-export    Export docs/ingest/eval datasets (JSONL + optional BigQuery load)"
@@ -267,8 +268,13 @@ BQ_LOCATION ?=
 BQ_JSONL_DIR ?= dist/bigquery_export/raw
 BQ_BATCH_SIZE ?= 500
 BQ_JSONL_ONLY ?= true
+PROFILE_TENANT_ID ?= default
+PROFILE_TOP_K ?= 40
+PROFILE_QUERY ?=
+PROFILE_JSON_OUT ?=
+PROFILE_INCLUDE_PLANS ?= false
 
-.PHONY: eval eval-smoke safety-eval retention-sweep retention-sweep-apply purge-expired purge-expired-apply bigquery-export
+.PHONY: eval eval-smoke safety-eval retention-sweep retention-sweep-apply purge-expired purge-expired-apply bigquery-export profile-retrieval
 
 eval: ## Run retrieval evaluation on a golden set (JSONL)
 	uv run python -m app.cli eval $(GOLDEN) --k $(K)
@@ -306,6 +312,22 @@ bigquery-export: ## Export docs/ingest/eval datasets to JSONL and optionally loa
 	  if [ -n "$(BQ_LOCATION)" ]; then \
 	    CMD+=(--location "$(BQ_LOCATION)"); \
 	  fi; \
+	fi; \
+	"$${CMD[@]}"
+
+profile-retrieval: ## Profile Postgres retrieval plans (EXPLAIN ANALYZE BUFFERS)
+	@set -euo pipefail; \
+	CMD=(uv run python -m app.cli profile-retrieval \
+	  --tenant-id "$(PROFILE_TENANT_ID)" \
+	  --top-k "$(PROFILE_TOP_K)"); \
+	if [ -n "$(PROFILE_QUERY)" ]; then \
+	  CMD+=(--query "$(PROFILE_QUERY)"); \
+	fi; \
+	if [ "$(PROFILE_INCLUDE_PLANS)" = "true" ]; then \
+	  CMD+=(--include-plans); \
+	fi; \
+	if [ -n "$(PROFILE_JSON_OUT)" ]; then \
+	  CMD+=(--json-out "$(PROFILE_JSON_OUT)"); \
 	fi; \
 	"$${CMD[@]}"
 
