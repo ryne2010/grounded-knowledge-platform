@@ -325,8 +325,12 @@ Streaming event schema (`/api/query/stream`):
 - `retrieval`: `RetrievalDebug[]`
 - `token`: `{ text: string }`
 - `citations`: `Citation[]`
-- `done`: `{ question, answer, refused, refusal_reason, provider }`
+- `done`: `{ question, answer, refused, refusal_reason, provider, explain? }`
 - `error`: `{ message: string }`
+
+Notes:
+- `done` is always the terminal event, including refusal and internal-error paths.
+- `done.explain` (when present) matches the `explain` payload returned by `POST /api/query`.
 
 `RetrievalDebug` shape:
 

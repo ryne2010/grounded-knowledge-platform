@@ -2750,3 +2750,84 @@ Completed Task #32 PWA hardening slice for offline-first UX, focusing on safe ca
 
 - Commit `TASK_PWA` on this branch and open PR.
 - Move to queue item #33: `TASK_STREAMING`.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-streaming`
+- Current task: `TASK_STREAMING` (`agents/tasks/TASK_STREAMING.md`)
+
+## Task summary
+
+Completed Task #33 streaming closure pass with a minimal, reviewable delta focused on contract accuracy and SSE regression depth:
+
+- updated streaming contract docs in `docs/CONTRACTS.md` to:
+  - document optional `done.explain` parity with `POST /api/query`
+  - explicitly state `done` is the terminal stream event (including refusal/internal-error paths)
+- added tutorial guidance in `docs/TUTORIAL.md` for canceling active streams from the Ask UI
+- strengthened streaming regression coverage in `tests/test_streaming.py`:
+  - explicit event-order/terminal assertions for SSE response bodies
+  - direct helper-level SSE frame test for `_sse_event(...)`
+  - explicit `done.explain` assertions in success/refusal flows
+- updated `CHANGELOG.md` entries for the contract clarification and streaming test hardening
+
+## Decisions made
+
+- Treated backend/API/UI streaming implementation already in `main` as baseline-complete and avoided broad refactors.
+- Chose a focused docs+tests slice to satisfy task acceptance criteria while preserving existing behavior.
+- Kept all public-demo invariants intact (no connector/upload changes; extractive-safe posture unchanged).
+
+## Files changed
+
+- `docs/CONTRACTS.md`
+- `docs/TUTORIAL.md`
+- `tests/test_streaming.py`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status -sb`
+   - `git branch -vv`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/ADR-20260221-public-demo-and-deployment-model.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... harness.toml`
+   - `sed -n ... agents/tasks/TASK_STREAMING.md`
+   - `rg -n ... app web tests docs/CONTRACTS.md docs/TUTORIAL.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git branch -f codex/task-streaming main && git checkout codex/task-streaming`
+3. Implementation + focused verification:
+   - `uv run pytest -q tests/test_streaming.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `uv run pytest -q tests/test_streaming.py`: PASS (`4 passed`)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`85 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- Numbered queue task #33 is now completed; all numbered items in `docs/BACKLOG/QUEUE.md` are addressed.
+- Remaining task files are the unsequenced backlog set (not part of the numbered queue).
+
+## What’s next
+
+- Commit `TASK_STREAMING` on this branch and open PR.
+- After merge, either stop at queue completion or start unsequenced tasks based on maintainer priority.
