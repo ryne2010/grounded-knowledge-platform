@@ -2560,3 +2560,108 @@ Implemented Task #30 BigQuery export baseline for private deployments:
 
 - Commit `TASK_BIGQUERY_EXPORT` on this branch and open PR.
 - Move to queue item #31: `TASK_BIGQUERY_MODELS`.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-bigquery-models`
+- Current task: `TASK_BIGQUERY_MODELS` (`agents/tasks/TASK_BIGQUERY_MODELS.md`)
+
+## Task summary
+
+Implemented Task #31 BigQuery modeling documentation + SQL examples:
+
+- added new modeling guide `docs/BIGQUERY_MODELING.md` covering:
+  - raw -> curated -> marts conventions
+  - dataset naming and placeholder tokens
+  - partitioning/clustering recommendations
+  - operational execution order + lightweight data-quality checks
+- added example SQL model set under `infra/bigquery_models/`:
+  - `raw/` models for exported datasets (`docs`, `ingest_events`, `eval_runs`) plus optional query request logs source
+  - `curated/` models for:
+    - ingestion freshness
+    - retrieval/query latency trends
+    - eval pass rates over time
+  - `marts/` models for:
+    - weekly ops KPIs
+    - governance inventory rollups
+- added `infra/bigquery_models/README.md` for structure/context
+- linked modeling docs from existing runbook/docs surfaces:
+  - `docs/RUNBOOKS/BIGQUERY_EXPORT.md`
+  - `README.md`
+  - `docs/PRODUCT/PORTFOLIO_ALIGNMENT.md`
+  - `CHANGELOG.md`
+
+## Decisions made
+
+- Kept this task doc-and-model only (no runtime/API changes) to preserve small, reviewable scope.
+- Included a retrieval-latency curated model using request-log sink data as a practical latency proxy (`/api/query` and `/api/query/stream`).
+- Used placeholder-based SQL templates (`{{PROJECT_ID}}`, datasets, table prefix) to stay warehouse-agnostic within BigQuery and avoid hard-coded env names.
+- Maintained ADR guardrails by keeping all BigQuery modeling guidance private-deployment focused; no public-demo behavior changed.
+
+## Files changed
+
+- `docs/BIGQUERY_MODELING.md`
+- `infra/bigquery_models/README.md`
+- `infra/bigquery_models/raw/01_docs.sql`
+- `infra/bigquery_models/raw/02_ingest_events.sql`
+- `infra/bigquery_models/raw/03_eval_runs.sql`
+- `infra/bigquery_models/raw/04_query_requests.sql`
+- `infra/bigquery_models/curated/01_ingestion_freshness.sql`
+- `infra/bigquery_models/curated/02_retrieval_latency.sql`
+- `infra/bigquery_models/curated/03_eval_pass_rates.sql`
+- `infra/bigquery_models/marts/01_ops_weekly_kpis.sql`
+- `infra/bigquery_models/marts/02_governance_inventory.sql`
+- `docs/RUNBOOKS/BIGQUERY_EXPORT.md`
+- `README.md`
+- `docs/PRODUCT/PORTFOLIO_ALIGNMENT.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status --short --branch`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... AGENTS.md`
+   - `sed -n ... agents/tasks/TASK_BIGQUERY_MODELS.md`
+   - `sed -n ... docs/SPECS/BIGQUERY_EXPORT.md`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git checkout -b codex/task-bigquery-models`
+3. Discovery/implementation support:
+   - `ls -la docs ...`
+   - `find infra -maxdepth 3 -type d`
+   - `sed -n ... docs/RUNBOOKS/BIGQUERY_EXPORT.md`
+   - `sed -n ... docs/PRODUCT/PORTFOLIO_ALIGNMENT.md`
+   - `rg -n ... app/main.py app/observability.py app/otel.py tests/test_otel.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`84 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- SQL files are intentionally templates with placeholders and no orchestration binding; client deployments should substitute tokens and schedule execution in their preferred tool.
+- Retrieval latency model depends on Cloud Logging sink availability and request-log table mapping (`{{LOGS_DATASET}}.{{REQUEST_LOG_TABLE}}`).
+
+## What’s next
+
+- Commit `TASK_BIGQUERY_MODELS` on this branch and open PR.
+- Move to queue item #32: `TASK_PWA`.

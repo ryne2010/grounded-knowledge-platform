@@ -25,6 +25,7 @@ A small, safety-minded, citation-first **RAG** (retrieval augmented generation) 
 - Runbooks: `docs/RUNBOOKS/`
 - Release process: `docs/RELEASES.md`
 - BigQuery export runbook (private deployments): `docs/RUNBOOKS/BIGQUERY_EXPORT.md`
+- BigQuery modeling notes (raw->curated->marts): `docs/BIGQUERY_MODELING.md`
 
 This repo is intentionally designed to run well:
 
