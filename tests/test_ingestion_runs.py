@@ -182,7 +182,11 @@ def test_rerun_same_sync_is_idempotent_for_docs(tmp_path: Path, monkeypatch: pyt
         json={"bucket": "demo-bucket", "prefix": "knowledge/", "max_objects": 10, "dry_run": False},
     )
     assert run2.status_code == 200, run2.text
-    run2_id = str(run2.json()["run_id"])
+    run2_body = run2.json()
+    run2_id = str(run2_body["run_id"])
+    assert run2_body["changed"] == 0
+    assert len(run2_body["results"]) == 1
+    assert bool(run2_body["results"][0]["changed"]) is False
 
     docs_res = client.get("/api/docs", headers={"X-API-Key": "reader-key"})
     assert docs_res.status_code == 200, docs_res.text

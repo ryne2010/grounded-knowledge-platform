@@ -2920,3 +2920,82 @@ Completed a focused Cloud SQL hardening slice for deterministic migrations, retr
 
 - Commit `TASK_CLOUDSQL` on this branch and open PR.
 - Continue unsequenced backlog with `TASK_CONNECTORS_GCS` or another maintainer-selected task.
+
+---
+
+## Session
+
+- Date: 2026-02-22
+- Agent: Codex
+- Branch: `codex/task-connectors-gcs`
+- Current task: `TASK_CONNECTORS_GCS` (`agents/tasks/TASK_CONNECTORS_GCS.md`)
+
+## Task summary
+
+Completed a focused closure pass for GCS connector acceptance criteria by adding explicit safety/idempotency regression coverage and tightening contract docs:
+
+- added connector sync API safety tests in `tests/test_connectors_gcs_sync_api.py` for:
+  - public demo hard-disable behavior (`PUBLIC_DEMO_MODE=1` keeps connectors unreachable even if flag is set)
+  - admin-only authorization requirement on `POST /api/connectors/gcs/sync`
+  - `max_objects` validation bounds (`1..5000`) including acceptance of min/max limits
+- strengthened idempotency verification in `tests/test_ingestion_runs.py`:
+  - second rerun now asserts per-result `changed=false` and summary `changed=0`
+- updated contracts documentation (`docs/CONTRACTS.md`) to explicitly codify:
+  - `max_objects` allowed range
+  - add/update-only connector behavior (no automatic deletes/tombstones)
+- updated changelog (`CHANGELOG.md`) for task closure visibility
+
+## Decisions made
+
+- Kept implementation scope narrow because connector runtime logic and UI path were already implemented in prior tasks.
+- Prioritized acceptance-criteria proof via tests instead of broad connector refactors.
+- Preserved ADR safety posture: public-demo connectors remain disabled and sync semantics remain add/update only.
+
+## Files changed
+
+- `tests/test_connectors_gcs_sync_api.py`
+- `tests/test_ingestion_runs.py`
+- `docs/CONTRACTS.md`
+- `CHANGELOG.md`
+- `docs/BACKLOG/EXECUTION_LOG.md`
+
+## Commands run
+
+1. Re-grounding/task intake:
+   - `git status -sb`
+   - `sed -n ... docs/BACKLOG/QUEUE.md`
+   - `sed -n ... docs/BACKLOG/CODEX_PLAYBOOK.md`
+   - `sed -n ... docs/BACKLOG/MILESTONES.md`
+   - `sed -n ... docs/DECISIONS/*.md`
+   - `sed -n ... agents/tasks/TASK_CONNECTORS_GCS.md`
+   - `sed -n ... docs/SPECS/CONNECTOR_GCS_INGESTION.md`
+   - `rg -n ... app tests web docs infra`
+2. Branching:
+   - `git checkout main && git pull --ff-only`
+   - `git branch -f codex/task-connectors-gcs main && git checkout codex/task-connectors-gcs`
+3. Focused validation:
+   - `uv run pytest -q tests/test_connectors_gcs_sync_api.py tests/test_ingestion_runs.py`
+4. Full required validation:
+   - `make dev-doctor`
+   - `python scripts/harness.py lint`
+   - `python scripts/harness.py typecheck`
+   - `python scripts/harness.py test`
+   - `make backlog-audit`
+
+## Validation results (summarized)
+
+- `uv run pytest -q tests/test_connectors_gcs_sync_api.py tests/test_ingestion_runs.py`: PASS (`7 passed`)
+- `make dev-doctor`: PASS
+- `python scripts/harness.py lint`: PASS
+- `python scripts/harness.py typecheck`: PASS
+- `python scripts/harness.py test`: PASS (`89 passed, 3 skipped` in Python; `16 passed` in web Vitest)
+- `make backlog-audit`: PASS (`OK`)
+
+## Follow-up notes
+
+- Task validation step `make gcs-sync ...` was not executed in this local run because it requires a live private deployment API + GCS credentials/bucket; coverage is instead provided by deterministic API tests.
+
+## What’s next
+
+- Commit `TASK_CONNECTORS_GCS` on this branch and open PR.
+- Continue with next unsequenced backlog task (`TASK_HYBRID_RETRIEVAL_TUNING` or maintainer-prioritized item).

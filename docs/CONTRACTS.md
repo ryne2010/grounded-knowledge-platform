@@ -286,6 +286,7 @@ Request (JSON):
 
 - `bucket` (required)
 - optional: `prefix`, `max_objects`, `dry_run`, `classification`, `retention`, `tags`, `notes`
+- `max_objects` must be within `1..5000`
 
 Response includes:
 
@@ -293,6 +294,7 @@ Response includes:
 - sync summary (`scanned`, `skipped_unsupported`, `ingested`, `changed`)
 - optional `errors`
 - `results[]` per processed object/doc
+- Sync is **add/update only** (no automatic deletes/tombstones).
 
 Pub/Sub notify response includes:
 - `accepted: true`
