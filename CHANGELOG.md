@@ -21,6 +21,8 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Storage repository abstraction with initial Postgres/Cloud SQL scaffolding and local Postgres integration tests.
 - Cloud SQL Terraform module wiring and Cloud Run integration options.
 - New runbook: `docs/RUNBOOKS/CLOUDSQL.md`.
+- Release tooling script: `scripts/release_tools.py` (`bump`, `notes`).
+- New release process guide: `docs/RELEASES.md`.
 
 ### Changed
 
@@ -28,6 +30,7 @@ The project follows (roughly) [Keep a Changelog](https://keepachangelog.com/) an
 - Ingest lineage APIs/UI now surface contract validation status, errors, and schema drift indicators.
 - Runtime storage operations now switch to Postgres when `DATABASE_URL` is configured.
 - Docs and deployment guides updated for auth, OTEL, streaming, PWA, data contracts, and Cloud SQL.
+- Makefile now includes `release-bump` and `release-notes` targets for consistent release/version workflows.
 
 ### Fixed
 

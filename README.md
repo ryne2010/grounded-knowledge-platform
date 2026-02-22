@@ -23,6 +23,7 @@ A small, safety-minded, citation-first **RAG** (retrieval augmented generation) 
 - Roadmap: `docs/ROADMAP.md`
 - Specs: `docs/SPECS/`
 - Runbooks: `docs/RUNBOOKS/`
+- Release process: `docs/RELEASES.md`
 
 This repo is intentionally designed to run well:
 
