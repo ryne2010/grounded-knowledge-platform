@@ -125,7 +125,7 @@ variable "deletion_protection" {
 
 variable "enable_vpc_connector" {
   type        = bool
-  description = "Create and attach a Serverless VPC Access connector (NOT free). This is auto-enabled when Cloud SQL is enabled to support private IP connectivity."
+  description = "Create and attach a Serverless VPC Access connector (NOT free)."
   default     = false
 }
 
@@ -137,7 +137,7 @@ variable "vpc_egress" {
 
 variable "enable_cloudsql" {
   type        = bool
-  description = "Create a Cloud SQL Postgres instance and mount it to Cloud Run (production baseline)."
+  description = "Create a Cloud SQL Postgres instance and mount it to Cloud Run. Enabled by default with low-cost settings."
   default     = true
 }
 
@@ -296,16 +296,49 @@ variable "scheduler_sync_api_key" {
   sensitive   = true
 }
 
+variable "cloudsql_edition" {
+  type        = string
+  description = "Cloud SQL edition (ENTERPRISE or ENTERPRISE_PLUS)."
+  default     = "ENTERPRISE"
+
+  validation {
+    condition     = contains(["ENTERPRISE", "ENTERPRISE_PLUS"], var.cloudsql_edition)
+    error_message = "cloudsql_edition must be ENTERPRISE or ENTERPRISE_PLUS."
+  }
+}
+
+variable "cloudsql_private_ip_enabled" {
+  type        = bool
+  description = "Use private IP networking for Cloud SQL. When true, this stack also provisions VPC peering and a Serverless VPC Access connector."
+  default     = false
+}
+
 variable "cloudsql_tier" {
   type        = string
   description = "Cloud SQL machine tier."
-  default     = "db-custom-1-3840"
+  default     = "db-f1-micro"
 }
 
 variable "cloudsql_disk_size_gb" {
   type        = number
-  description = "Cloud SQL disk size (GB)."
-  default     = 20
+  description = "Cloud SQL disk size (GB). Cloud SQL requires an integer value with a minimum of 10GB."
+  default     = 10
+
+  validation {
+    condition     = floor(var.cloudsql_disk_size_gb) == var.cloudsql_disk_size_gb && var.cloudsql_disk_size_gb >= 10
+    error_message = "cloudsql_disk_size_gb must be an integer value >= 10."
+  }
+}
+
+variable "cloudsql_disk_type" {
+  type        = string
+  description = "Cloud SQL disk type."
+  default     = "PD_HDD"
+
+  validation {
+    condition     = contains(["PD_HDD", "PD_SSD"], var.cloudsql_disk_type)
+    error_message = "cloudsql_disk_type must be PD_HDD or PD_SSD."
+  }
 }
 
 variable "cloudsql_database" {
@@ -340,7 +373,7 @@ variable "cloudsql_backup_start_time" {
 variable "cloudsql_retained_backups" {
   type        = number
   description = "Number of automated backups retained by Cloud SQL."
-  default     = 14
+  default     = 1
 
   validation {
     condition     = var.cloudsql_retained_backups >= 1
@@ -351,17 +384,28 @@ variable "cloudsql_retained_backups" {
 variable "cloudsql_enable_point_in_time_recovery" {
   type        = bool
   description = "Enable point-in-time recovery (PITR) for Cloud SQL Postgres."
-  default     = true
+  default     = false
 }
 
 variable "cloudsql_transaction_log_retention_days" {
   type        = number
   description = "Transaction log retention (days) used for PITR. Standard Postgres supports 1-7 days."
-  default     = 7
+  default     = 1
 
   validation {
     condition     = var.cloudsql_transaction_log_retention_days >= 1 && var.cloudsql_transaction_log_retention_days <= 7
     error_message = "cloudsql_transaction_log_retention_days must be between 1 and 7 for standard Postgres instances."
+  }
+}
+
+variable "cloudsql_enable_data_cache" {
+  type        = bool
+  description = "Enable Cloud SQL data cache (Enterprise Plus only)."
+  default     = false
+
+  validation {
+    condition     = !var.cloudsql_enable_data_cache || var.cloudsql_edition == "ENTERPRISE_PLUS"
+    error_message = "cloudsql_enable_data_cache=true requires cloudsql_edition=ENTERPRISE_PLUS."
   }
 }
 

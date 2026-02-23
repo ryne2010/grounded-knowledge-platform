@@ -108,7 +108,7 @@ module "service_accounts" {
 
 module "network" {
   # Cloud SQL private IP requires a VPC + serverless connector for Cloud Run egress.
-  count  = (var.enable_vpc_connector || var.enable_cloudsql) ? 1 : 0
+  count  = (var.enable_vpc_connector || (var.enable_cloudsql && var.cloudsql_private_ip_enabled)) ? 1 : 0
   source = "../modules/network"
 
   project_id   = var.project_id
@@ -121,7 +121,7 @@ module "network" {
     }
   }
 
-  create_serverless_connector         = var.enable_vpc_connector || var.enable_cloudsql
+  create_serverless_connector         = var.enable_vpc_connector || (var.enable_cloudsql && var.cloudsql_private_ip_enabled)
   serverless_connector_name           = "${var.service_name}-connector"
   serverless_connector_region         = var.region
   serverless_connector_cidr           = "10.8.0.0/28"
@@ -155,7 +155,7 @@ module "cloud_run" {
   # For real client deployments, consider setting var.deletion_protection=true.
   deletion_protection = var.deletion_protection
 
-  vpc_connector_id = (var.enable_vpc_connector || var.enable_cloudsql) ? module.network[0].serverless_connector_id : null
+  vpc_connector_id = (var.enable_vpc_connector || (var.enable_cloudsql && var.cloudsql_private_ip_enabled)) ? module.network[0].serverless_connector_id : null
   vpc_egress       = var.vpc_egress
 }
 

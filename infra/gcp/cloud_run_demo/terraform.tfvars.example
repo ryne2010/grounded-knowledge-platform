@@ -57,15 +57,19 @@ image_tag          = "latest"
 # enable_clients_observers_monitoring_viewer = true
 
 # Cloud SQL (Postgres) persistence (baseline)
-# enable_cloudsql       = false  # disable (cost/experimentation)
-# cloudsql_tier         = "db-custom-1-3840"
-# cloudsql_disk_size_gb = 20
+# enable_cloudsql       = false  # disable (default is true with low-cost profile)
+# cloudsql_edition      = "ENTERPRISE"
+# cloudsql_private_ip_enabled = false
+# cloudsql_tier         = "db-f1-micro"
+# cloudsql_disk_type    = "PD_HDD"
+# cloudsql_disk_size_gb = 10
 # cloudsql_database     = "gkp"
 # cloudsql_user         = "gkp_app"
 # cloudsql_backup_start_time             = "03:00"  # UTC
-# cloudsql_retained_backups              = 14
-# cloudsql_enable_point_in_time_recovery = true
-# cloudsql_transaction_log_retention_days = 7
+# cloudsql_retained_backups              = 1
+# cloudsql_enable_point_in_time_recovery = false
+# cloudsql_transaction_log_retention_days = 1
+# cloudsql_enable_data_cache             = false
 # cloudsql_backup_location               = null      # optional override
 
 # Optional: Cloud Run request guardrails

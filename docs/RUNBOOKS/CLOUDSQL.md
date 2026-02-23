@@ -19,7 +19,7 @@ Runtime behavior:
 
 ## Cloud SQL in Terraform
 
-Cloud SQL is **enabled by default** in `infra/gcp/cloud_run_demo` via `enable_cloudsql = true` (default).
+Cloud SQL is **enabled by default** in `infra/gcp/cloud_run_demo` using a low-cost profile.
 
 If you want to disable Cloud SQL (cost/experimentation), set:
 
@@ -35,8 +35,8 @@ make apply ENV=dev
 
 When Cloud SQL is enabled, expected outcome:
 - Cloud SQL instance + DB + user created
-- Private IP connectivity is configured for Cloud SQL
-- Serverless VPC Access connector is created/attached for Cloud Run
+- Public-IP Cloud SQL connector path is used by default (`cloudsql_private_ip_enabled=false`)
+- Private IP connectivity + Serverless VPC Access connector are configured only when `cloudsql_private_ip_enabled=true`
 - Cloud Run mounts Cloud SQL socket at `/cloudsql`
 - `DATABASE_URL` injected into Cloud Run env
 - `/api/meta` reports `"database_backend": "postgres"`
@@ -44,9 +44,17 @@ When Cloud SQL is enabled, expected outcome:
 Backup defaults in this repo:
 - automated backups are enabled
 - backup start time is configurable (`cloudsql_backup_start_time`)
-- retained backups are configurable (`cloudsql_retained_backups`)
-- PITR is enabled by default (`cloudsql_enable_point_in_time_recovery=true`)
+- retained backups are configurable (`cloudsql_retained_backups`, default `1`)
+- PITR is disabled by default (`cloudsql_enable_point_in_time_recovery=false`)
 - transaction log retention is configurable (`cloudsql_transaction_log_retention_days`)
+- low-cost baseline uses Enterprise edition + shared-core tier:
+  - `enable_cloudsql=true`
+  - `cloudsql_edition=ENTERPRISE`
+  - `cloudsql_private_ip_enabled=false`
+  - `cloudsql_tier=db-f1-micro`
+  - `cloudsql_disk_type=PD_HDD`
+  - `cloudsql_disk_size_gb=10`
+  - `cloudsql_enable_data_cache=false`
 
 Backup/restore and restore-drill workflow:
 - `docs/RUNBOOKS/BACKUP_RESTORE.md`

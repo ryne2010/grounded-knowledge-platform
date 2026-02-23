@@ -5,7 +5,7 @@ resource "random_password" "cloudsql_password" {
 }
 
 resource "google_compute_global_address" "cloudsql_private_ip_range" {
-  count         = var.enable_cloudsql ? 1 : 0
+  count         = (var.enable_cloudsql && var.cloudsql_private_ip_enabled) ? 1 : 0
   project       = var.project_id
   name          = "${var.service_name}-cloudsql-private-ip-range"
   purpose       = "VPC_PEERING"
@@ -15,7 +15,7 @@ resource "google_compute_global_address" "cloudsql_private_ip_range" {
 }
 
 resource "google_service_networking_connection" "cloudsql_private_vpc_connection" {
-  count                   = var.enable_cloudsql ? 1 : 0
+  count                   = (var.enable_cloudsql && var.cloudsql_private_ip_enabled) ? 1 : 0
   network                 = module.network[0].network_id
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.cloudsql_private_ip_range[0].name]
@@ -29,16 +29,24 @@ resource "google_sql_database_instance" "cloudsql" {
   database_version = "POSTGRES_16"
 
   settings {
+    edition           = var.cloudsql_edition
     tier              = var.cloudsql_tier
     availability_type = "ZONAL"
     disk_size         = var.cloudsql_disk_size_gb
-    disk_type         = "PD_SSD"
+    disk_type         = var.cloudsql_disk_type
     disk_autoresize   = true
+
+    dynamic "data_cache_config" {
+      for_each = var.cloudsql_enable_data_cache ? [1] : []
+      content {
+        data_cache_enabled = true
+      }
+    }
 
     #tfsec:ignore:google-sql-encrypt-in-transit-data Provider v7 removed `require_ssl`; TLS is enforced via `ssl_mode`.
     ip_configuration {
-      ipv4_enabled    = false
-      private_network = module.network[0].network_id
+      ipv4_enabled    = var.cloudsql_private_ip_enabled ? false : true
+      private_network = var.cloudsql_private_ip_enabled ? module.network[0].network_id : null
       ssl_mode        = "ENCRYPTED_ONLY"
     }
 

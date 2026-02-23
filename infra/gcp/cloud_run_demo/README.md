@@ -15,8 +15,8 @@ What this demonstrates (staff-level):
 - **Request guardrails** (Cloud Run timeout + per-instance concurrency caps)
 - Optional **Billing budget alerts** (project-scoped, threshold-based)
 - macOS-friendly **Cloud Build** based image builds
-- **Serverless VPC Access connector** (auto-enabled when Cloud SQL is enabled)
-- **Cloud SQL Postgres** persistence (enabled by default)
+- Optional **Serverless VPC Access connector** (not free; only needed for private IP egress paths)
+- **Cloud SQL Postgres** persistence (enabled by default, low-cost profile)
 - Optional: **Workspace IAM starter pack** (Google Groups → roles)
 - **Observability as code** (small dashboard + alert policies)
 
@@ -74,7 +74,9 @@ See `docs/IAM_STARTER_PACK.md` for the full role matrix.
 
 ## VPC connector
 
-When Cloud SQL is enabled (default), this stack automatically creates and attaches a Serverless VPC Access connector so Cloud Run can reach Cloud SQL over private IP.
+By default, Cloud SQL uses the Cloud SQL connector path with public IP and does **not** require Serverless VPC Access.
+
+If you need private IP Cloud SQL connectivity, set `cloudsql_private_ip_enabled=true`. This stack will then create and attach a Serverless VPC Access connector automatically.
 
 You can also enable `enable_vpc_connector=true` when Cloud SQL is disabled and you still need private networking for other resources.
 
@@ -84,9 +86,9 @@ You can also enable `enable_vpc_connector=true` when Cloud SQL is disabled and y
 
 ## Cloud SQL Postgres (baseline)
 
-Cloud SQL is enabled by default for production-like persistence.
+Cloud SQL is enabled by default using a low-cost profile.
 
-To disable (cost/experimentation):
+To disable Cloud SQL entirely (for near-zero DB cost):
 
 ```hcl
 enable_cloudsql = false
@@ -95,20 +97,36 @@ enable_cloudsql = false
 This stack will:
 - create a Cloud SQL Postgres instance + DB + user
 - enable automated backups with retention controls
-- enable PITR by default with transaction-log retention controls
+- optionally enable PITR with transaction-log retention controls
 - mount the Cloud SQL connection into Cloud Run at `/cloudsql`
 - inject `DATABASE_URL` for app runtime
 
 Runbook: `docs/RUNBOOKS/CLOUDSQL.md`
 Backup/restore drill runbook: `docs/RUNBOOKS/BACKUP_RESTORE.md`
 
+Low-cost Cloud SQL defaults in this repo:
+
+```hcl
+enable_cloudsql                         = true
+cloudsql_edition                        = "ENTERPRISE"
+cloudsql_private_ip_enabled             = false
+cloudsql_tier                           = "db-f1-micro"
+cloudsql_disk_type                      = "PD_HDD"
+cloudsql_disk_size_gb                   = 10
+cloudsql_retained_backups               = 1
+cloudsql_enable_point_in_time_recovery  = false
+cloudsql_enable_data_cache              = false
+```
+
+For stricter networking or higher durability/performance, override these to your required baseline (for example `cloudsql_private_ip_enabled`, `cloudsql_tier`, `cloudsql_retained_backups`, and PITR settings).
+
 Backup defaults can be tuned in tfvars:
 
 ```hcl
 cloudsql_backup_start_time              = "03:00" # UTC
-cloudsql_retained_backups               = 14
-cloudsql_enable_point_in_time_recovery  = true
-cloudsql_transaction_log_retention_days = 7
+cloudsql_retained_backups               = 1
+cloudsql_enable_point_in_time_recovery  = false
+cloudsql_transaction_log_retention_days = 1
 # cloudsql_backup_location              = null
 ```
 

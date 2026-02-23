@@ -125,17 +125,29 @@ Notes:
 
 ## 3c) Cloud SQL Postgres persistence (baseline)
 
-Cloud SQL is enabled by default in `infra/gcp/cloud_run_demo` (production baseline).
+Cloud SQL is enabled by default in `infra/gcp/cloud_run_demo` using a low-cost profile.
 
-To disable (cost/experimentation), set:
+To disable Cloud SQL entirely (for near-zero DB cost), set:
 
 ```hcl
 enable_cloudsql = false
 ```
 
 On apply, Terraform provisions Cloud SQL resources and injects `DATABASE_URL` into Cloud Run.
-When Cloud SQL is enabled, the Terraform root also creates/attaches a Serverless VPC Access connector so Cloud Run can connect over private IP.
-Backups are enabled with retention and PITR controls (`cloudsql_retained_backups`, `cloudsql_enable_point_in_time_recovery`, `cloudsql_transaction_log_retention_days`).
+By default, Cloud SQL uses public IP via the Cloud SQL connector path and does not create a Serverless VPC Access connector.
+If you set `cloudsql_private_ip_enabled=true`, the Terraform root also creates/attaches a Serverless VPC Access connector for private IP connectivity.
+Low-cost Cloud SQL defaults:
+- `enable_cloudsql = true`
+- `cloudsql_edition = "ENTERPRISE"`
+- `cloudsql_private_ip_enabled = false`
+- `cloudsql_tier = "db-f1-micro"`
+- `cloudsql_disk_type = "PD_HDD"`
+- `cloudsql_disk_size_gb = 10`
+- `cloudsql_retained_backups = 1`
+- `cloudsql_enable_point_in_time_recovery = false`
+- `cloudsql_enable_data_cache = false`
+
+Backups remain enabled and can be tuned with `cloudsql_retained_backups`, `cloudsql_enable_point_in_time_recovery`, and `cloudsql_transaction_log_retention_days`.
 Operational runbook: `docs/RUNBOOKS/CLOUDSQL.md`.
 Backup/restore drill runbook: `docs/RUNBOOKS/BACKUP_RESTORE.md`.
 
