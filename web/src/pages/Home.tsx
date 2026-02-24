@@ -679,20 +679,6 @@ export function HomePage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                {suggestedQuestions.map((ex) => (
-                  <Button
-                    key={ex}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => runSuggestedQuery(ex)}
-                    disabled={isBusy || offline}
-                  >
-                    {ex}
-                  </Button>
-                ))}
-              </div>
-
               <div className="flex items-center gap-2">
                 <Button onClick={() => void onAsk()} disabled={!question.trim() || isBusy || offline}>
                   {isBusy ? 'Asking…' : 'Ask'}
@@ -1015,7 +1001,7 @@ export function HomePage() {
                 <CardDescription>Click any query to populate the input and run it immediately.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
-                {DEMO_SUGGESTED_QUERIES.map((query) => (
+                {suggestedQuestions.map((query) => (
                   <Button
                     key={query}
                     variant="outline"
