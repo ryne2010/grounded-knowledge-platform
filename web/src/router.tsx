@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from './api'
 import { AppShell, Badge } from './portfolio-ui'
 import { DocsPage } from './pages/Docs'
-import { DashboardPage } from './pages/Dashboard'
 import { IngestPage } from './pages/Ingest'
 import { DocDetailPage } from './pages/DocDetail'
 import { EvalPage } from './pages/Eval'
@@ -24,7 +23,6 @@ function RootLayout() {
   const evalEnabled = Boolean(meta?.eval_enabled)
 
   const nav = [
-    { to: '/dashboard', label: 'Dashboard' },
     { to: '/', label: 'Ask' },
     { to: '/search', label: 'Search' },
     { to: '/docs', label: 'Docs' },
@@ -109,12 +107,6 @@ function RootLayout() {
 
 const rootRoute = createRootRoute({ component: RootLayout })
 
-const dashboardRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/dashboard',
-  component: DashboardPage,
-})
-
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
@@ -170,7 +162,6 @@ const searchRoute = createRoute({
 })
 
 const routeTree = rootRoute.addChildren([
-  dashboardRoute,
   indexRoute,
   searchRoute,
   docsRoute,

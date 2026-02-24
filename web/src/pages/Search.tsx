@@ -18,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  Label,
   Page,
   Section,
   Spinner,
@@ -167,8 +168,10 @@ export function SearchPage() {
               <div className="sm:col-span-2">
                 <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search chunks (keywords)…" />
               </div>
-              <div>
+              <div className="space-y-1">
+                <Label htmlFor="chunk-search-limit">Result limit</Label>
                 <Input
+                  id="chunk-search-limit"
                   type="number"
                   min={1}
                   max={50}

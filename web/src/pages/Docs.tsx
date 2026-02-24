@@ -16,7 +16,6 @@ import {
   Input,
   Label,
   Page,
-  Section,
   Spinner,
 } from '../portfolio-ui'
 
@@ -142,42 +141,40 @@ export function DocsPage() {
 
   return (
     <Page title="Docs" description="Browse indexed documents, governance metadata, and lifecycle status.">
-      <Section title="Inventory" description="Browse the indexed documents (metadata + versioning).">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              Documents
-              <Badge variant="secondary">{filtered.length}</Badge>
-            </CardTitle>
-            <CardDescription>
-              Click a doc title for details, ingest history, and chunks (when enabled).
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {offline ? (
-              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                Offline: showing cached docs if available.
-              </div>
-            ) : null}
-            <div className="space-y-2">
-              <Label htmlFor="docsFilter">Filter documents</Label>
-              <Input
-                id="docsFilter"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Filter by title/source/tag…"
-              />
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            Documents
+            <Badge variant="secondary">{filtered.length}</Badge>
+          </CardTitle>
+          <CardDescription>
+            Click a doc title for details, ingest history, and chunks (when enabled).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {offline ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Offline: showing cached docs if available.
             </div>
-            {docsQuery.isLoading ? <Spinner /> : null}
-            {docsQuery.isError ? (
-              <div className="rounded-md border bg-destructive/10 p-3 text-sm" role="alert">
-                {offline ? 'Offline and no cached docs available.' : (docsQuery.error as Error).message}
-              </div>
-            ) : null}
-            <DataTable<Doc> data={filtered} columns={columns} height={520} />
-          </CardContent>
-        </Card>
-      </Section>
+          ) : null}
+          <div className="space-y-2">
+            <Label htmlFor="docsFilter">Filter documents</Label>
+            <Input
+              id="docsFilter"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Filter by title/source/tag…"
+            />
+          </div>
+          {docsQuery.isLoading ? <Spinner /> : null}
+          {docsQuery.isError ? (
+            <div className="rounded-md border bg-destructive/10 p-3 text-sm" role="alert">
+              {offline ? 'Offline and no cached docs available.' : (docsQuery.error as Error).message}
+            </div>
+          ) : null}
+          <DataTable<Doc> data={filtered} columns={columns} height={520} />
+        </CardContent>
+      </Card>
     </Page>
   )
 }

@@ -256,9 +256,10 @@ _CSP_STRICT = (
 )
 
 _CSP_SWAGGER = (
-    # Swagger UI needs inline/eval for its bundled scripts/styles.
-    "default-src 'self'; img-src 'self' data:; connect-src 'self'; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; "
+    # FastAPI Swagger/ReDoc pages load assets from jsDelivr by default.
+    "default-src 'self'; img-src 'self' data: https://fastapi.tiangolo.com; connect-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
     "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
 )
 
@@ -1577,59 +1578,114 @@ def search_chunks(q: str, limit: int = 20, _auth: Any = Depends(require_role("re
         init_db(conn)
         tenant_id = str(getattr(_auth, "tenant_id", "default"))
         ph = _sql_ph(conn)
+        is_postgres = ph == "%s"
 
         results: list[ChunkSearchResult] = []
 
-        # Prefer FTS5 if available.
-        try:
-            cur = conn.execute(
-                f"""
-                SELECT
-                    c.chunk_id,
-                    c.doc_id,
-                    c.idx,
-                    substr(c.text, 1, 240) AS preview,
-                    bm25(chunks_fts) AS bm,
-                    d.title AS doc_title,
-                    d.source AS doc_source,
-                    d.classification AS classification,
-                    d.tags_json AS tags_json
-                FROM chunks_fts
-                JOIN chunks c ON chunks_fts.chunk_id = c.chunk_id
-                JOIN docs d ON c.doc_id = d.doc_id AND d.tenant_id = c.tenant_id
-                WHERE chunks_fts MATCH {ph}
-                  AND c.tenant_id = {ph}
-                ORDER BY bm
-                LIMIT {ph}
-                """,
-                (fts_query, tenant_id, limit),
-            )
-            for r in cur.fetchall():
-                try:
-                    tags = json.loads(r["tags_json"] or "[]")
-                except Exception:
-                    tags = []
-                # bm25: smaller is better; expose a "higher is better" score.
-                bm = float(r["bm"])
-                score = -bm
-                results.append(
-                    ChunkSearchResult(
-                        chunk_id=str(r["chunk_id"]),
-                        doc_id=str(r["doc_id"]),
-                        idx=int(r["idx"]),
-                        score=score,
-                        text_preview=str(r["preview"] or ""),
-                        doc_title=str(r["doc_title"]),
-                        doc_source=str(r["doc_source"]),
-                        classification=str(r["classification"]),
-                        tags=[str(t) for t in tags] if isinstance(tags, list) else [],
-                    )
+        # Prefer backend-native full-text search first.
+        if is_postgres:
+            try:
+                cur = conn.execute(
+                    f"""
+                    SELECT
+                        c.chunk_id,
+                        c.doc_id,
+                        c.idx,
+                        LEFT(c.text, 240) AS preview,
+                        ts_rank_cd(
+                            to_tsvector('english', c.text),
+                            plainto_tsquery('english', {ph})
+                        ) AS rank,
+                        d.title AS doc_title,
+                        d.source AS doc_source,
+                        d.classification AS classification,
+                        d.tags_json AS tags_json
+                    FROM chunks c
+                    JOIN docs d ON c.doc_id = d.doc_id AND d.tenant_id = c.tenant_id
+                    WHERE c.tenant_id = {ph}
+                      AND to_tsvector('english', c.text) @@ plainto_tsquery('english', {ph})
+                    ORDER BY rank DESC, d.updated_at DESC, c.idx ASC
+                    LIMIT {ph}
+                    """,
+                    (fts_query, tenant_id, fts_query, limit),
                 )
+                for r in cur.fetchall():
+                    try:
+                        tags = json.loads(r["tags_json"] or "[]")
+                    except Exception:
+                        tags = []
+                    results.append(
+                        ChunkSearchResult(
+                            chunk_id=str(r["chunk_id"]),
+                            doc_id=str(r["doc_id"]),
+                            idx=int(r["idx"]),
+                            score=float(r["rank"]) if r["rank"] is not None else None,
+                            text_preview=str(r["preview"] or ""),
+                            doc_title=str(r["doc_title"]),
+                            doc_source=str(r["doc_source"]),
+                            classification=str(r["classification"]),
+                            tags=[str(t) for t in tags] if isinstance(tags, list) else [],
+                        )
+                    )
 
-            return ChunkSearchResponse(query=q, results=results)
-        except Exception:
-            # FTS unavailable; continue to lexical fallback.
-            pass
+                return ChunkSearchResponse(query=q, results=results)
+            except Exception:
+                # Postgres marks the transaction aborted after an error; rollback before fallback.
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        else:
+            # Prefer SQLite FTS5 when available.
+            try:
+                cur = conn.execute(
+                    f"""
+                    SELECT
+                        c.chunk_id,
+                        c.doc_id,
+                        c.idx,
+                        substr(c.text, 1, 240) AS preview,
+                        bm25(chunks_fts) AS bm,
+                        d.title AS doc_title,
+                        d.source AS doc_source,
+                        d.classification AS classification,
+                        d.tags_json AS tags_json
+                    FROM chunks_fts
+                    JOIN chunks c ON chunks_fts.chunk_id = c.chunk_id
+                    JOIN docs d ON c.doc_id = d.doc_id AND d.tenant_id = c.tenant_id
+                    WHERE chunks_fts MATCH {ph}
+                      AND c.tenant_id = {ph}
+                    ORDER BY bm
+                    LIMIT {ph}
+                    """,
+                    (fts_query, tenant_id, limit),
+                )
+                for r in cur.fetchall():
+                    try:
+                        tags = json.loads(r["tags_json"] or "[]")
+                    except Exception:
+                        tags = []
+                    # bm25: smaller is better; expose a "higher is better" score.
+                    bm = float(r["bm"])
+                    score = -bm
+                    results.append(
+                        ChunkSearchResult(
+                            chunk_id=str(r["chunk_id"]),
+                            doc_id=str(r["doc_id"]),
+                            idx=int(r["idx"]),
+                            score=score,
+                            text_preview=str(r["preview"] or ""),
+                            doc_title=str(r["doc_title"]),
+                            doc_source=str(r["doc_source"]),
+                            classification=str(r["classification"]),
+                            tags=[str(t) for t in tags] if isinstance(tags, list) else [],
+                        )
+                    )
+
+                return ChunkSearchResponse(query=q, results=results)
+            except Exception:
+                # FTS unavailable; continue to lexical fallback.
+                pass
 
         # Lexical fallback (token overlap).
         cur = conn.execute(

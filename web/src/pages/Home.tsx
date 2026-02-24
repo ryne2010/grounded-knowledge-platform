@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
 import { api, type Doc, type QueryExplain, type QueryResponse } from '../api'
@@ -14,7 +14,6 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-  Checkbox,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -23,7 +22,6 @@ import {
   DialogTrigger,
   Label,
   Page,
-  RangeSlider,
   Separator,
   Textarea,
 } from '../portfolio-ui'
@@ -293,8 +291,6 @@ export function HomePage() {
 
   const [question, setQuestion] = React.useState('')
   const [topK, setTopK] = React.useState(5)
-  const [debug, setDebug] = React.useState(false)
-  const [useStreaming, setUseStreaming] = React.useState(true)
   const [streamingTurnId, setStreamingTurnId] = React.useState<string | null>(null)
   const streamAbortRef = React.useRef<AbortController | null>(null)
   const toastTimeoutRef = React.useRef<number | null>(null)
@@ -371,11 +367,6 @@ export function HomePage() {
     }
   }, [tourOpen, currentTour.target])
 
-  const queryMutation = useMutation({
-    mutationFn: (vars: { question: string; top_k: number; debug: boolean }) =>
-      api.query(vars.question, vars.top_k, vars.debug),
-  })
-
   async function onAsk(rawQuestion?: string) {
     const q = (rawQuestion ?? question).trim()
     if (!q) return
@@ -388,119 +379,106 @@ export function HomePage() {
       created_at,
       question: q,
       top_k: topK,
-      debug,
+      debug: false,
     }
 
     setTurns((prev) => [...prev, next].slice(-MAX_TURNS))
-
-    if (useStreaming) {
-      const controller = new AbortController()
-      streamAbortRef.current = controller
-      setStreamingTurnId(id)
-      setTurns((prev) =>
-        prev.map((t) =>
-          t.id === id
-            ? {
-                ...t,
-                response: {
-                  question: q,
-                  answer: '',
-                  refused: false,
-                  refusal_reason: null,
-                  provider: 'stream',
-                  citations: [],
-                  retrieval: [],
-                },
-              }
-            : t,
-        ),
-      )
-
-      try {
-        const res = await api.queryStream(
-          q,
-          topK,
-          {
-            onRetrieval: (rows) => {
-              setTurns((prev) =>
-                prev.map((t) =>
-                  t.id === id && t.response
-                    ? {
-                        ...t,
-                        response: { ...t.response, retrieval: rows },
-                      }
-                    : t,
-                ),
-              )
-            },
-            onToken: (token) => {
-              setTurns((prev) =>
-                prev.map((t) =>
-                  t.id === id && t.response
-                    ? {
-                        ...t,
-                        response: {
-                          ...t.response,
-                          answer: `${t.response.answer}${t.response.answer ? ' ' : ''}${token}`,
-                        },
-                      }
-                    : t,
-                ),
-              )
-            },
-            onCitations: (citations) => {
-              setTurns((prev) =>
-                prev.map((t) =>
-                  t.id === id && t.response
-                    ? {
-                        ...t,
-                        response: { ...t.response, citations },
-                      }
-                    : t,
-                ),
-              )
-            },
-            onExplain: (explain) => {
-              setTurns((prev) =>
-                prev.map((t) =>
-                  t.id === id && t.response
-                    ? {
-                        ...t,
-                        response: { ...t.response, explain },
-                      }
-                    : t,
-                ),
-              )
-            },
-          },
-          controller.signal,
-        )
-        setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, response: res } : t)))
-      } catch (e: unknown) {
-        if ((e as Error)?.name === 'AbortError') {
-          setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, error: 'Canceled' } : t)))
-        } else {
-          const msg = e instanceof Error ? e.message : String(e)
-          setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, error: msg } : t)))
-        }
-      } finally {
-        streamAbortRef.current = null
-        setStreamingTurnId(null)
-      }
-      return
-    }
+    const controller = new AbortController()
+    streamAbortRef.current = controller
+    setStreamingTurnId(id)
+    setTurns((prev) =>
+      prev.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              response: {
+                question: q,
+                answer: '',
+                refused: false,
+                refusal_reason: null,
+                provider: 'stream',
+                citations: [],
+                retrieval: [],
+              },
+            }
+          : t,
+      ),
+    )
 
     try {
-      const res = await queryMutation.mutateAsync({ question: q, top_k: topK, debug })
+      const res = await api.queryStream(
+        q,
+        topK,
+        {
+          onRetrieval: (rows) => {
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === id && t.response
+                  ? {
+                      ...t,
+                      response: { ...t.response, retrieval: rows },
+                    }
+                  : t,
+              ),
+            )
+          },
+          onToken: (token) => {
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === id && t.response
+                  ? {
+                      ...t,
+                      response: {
+                        ...t.response,
+                        answer: `${t.response.answer}${t.response.answer ? ' ' : ''}${token}`,
+                      },
+                    }
+                  : t,
+              ),
+            )
+          },
+          onCitations: (citations) => {
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === id && t.response
+                  ? {
+                      ...t,
+                      response: { ...t.response, citations },
+                    }
+                  : t,
+              ),
+            )
+          },
+          onExplain: (explain) => {
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === id && t.response
+                  ? {
+                      ...t,
+                      response: { ...t.response, explain },
+                    }
+                  : t,
+              ),
+            )
+          },
+        },
+        controller.signal,
+      )
       setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, response: res } : t)))
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, error: msg } : t)))
+      if ((e as Error)?.name === 'AbortError') {
+        setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, error: 'Canceled' } : t)))
+      } else {
+        const msg = e instanceof Error ? e.message : String(e)
+        setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, error: msg } : t)))
+      }
+    } finally {
+      streamAbortRef.current = null
+      setStreamingTurnId(null)
     }
   }
 
-  const maxTopK = typeof meta?.max_top_k === 'number' ? meta.max_top_k : 8
-  const isBusy = queryMutation.isPending || Boolean(streamingTurnId)
+  const isBusy = Boolean(streamingTurnId)
   const runSuggestedQuery = (rawQuestion: string) => {
     setQuestion(rawQuestion)
     void onAsk(rawQuestion)
@@ -644,39 +622,6 @@ export function HomePage() {
                   placeholder="Ask a question…"
                   rows={4}
                 />
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <RangeSlider
-                  label="top_k"
-                  min={1}
-                  max={Math.max(1, maxTopK)}
-                  step={1}
-                  value={topK}
-                  onChange={setTopK}
-                />
-
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id="debug"
-                    checked={debug}
-                    onChange={(e) => setDebug(e.currentTarget.checked)}
-                    disabled={Boolean(meta?.public_demo_mode)}
-                  />
-                  <Label htmlFor="debug">Debug retrieval</Label>
-                  {meta?.public_demo_mode ? (
-                    <span className="text-xs text-muted-foreground">(locked in public read-only mode)</span>
-                  ) : null}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    id="streaming"
-                    checked={useStreaming}
-                    onChange={(e) => setUseStreaming(e.currentTarget.checked)}
-                    disabled={isBusy}
-                  />
-                  <Label htmlFor="streaming">Streaming mode</Label>
-                </div>
               </div>
 
               <div className="flex items-center gap-2">
@@ -1038,13 +983,6 @@ export function HomePage() {
                   className="rounded-sm underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   Search
-                </Link>
-                <span className="text-muted-foreground">·</span>
-                <Link
-                  to="/dashboard"
-                  className="rounded-sm underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  Dashboard
                 </Link>
                 <span className="text-muted-foreground">·</span>
                 <Link

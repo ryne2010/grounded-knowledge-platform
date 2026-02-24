@@ -242,11 +242,13 @@ export function DocDetailPage() {
         header: 'Time',
         accessorKey: 'ingested_at',
         cell: (info: any) => <span className="text-xs">{formatUnixSeconds(Number(info.getValue() ?? 0))}</span>,
+        meta: { width: 148, cellClassName: 'whitespace-nowrap' },
       },
       {
         header: 'v',
         accessorKey: 'doc_version',
         cell: (info: any) => <span className="font-mono text-xs">v{String(info.getValue() ?? '')}</span>,
+        meta: { width: 56, cellClassName: 'whitespace-nowrap' },
       },
       {
         header: 'Changed',
@@ -260,6 +262,7 @@ export function DocDetailPage() {
             </div>
           )
         },
+        meta: { width: 148, cellClassName: 'whitespace-nowrap' },
       },
       {
         header: 'Validation',
@@ -273,6 +276,7 @@ export function DocDetailPage() {
           if (status === 'fail') return <Badge variant="destructive">fail</Badge>
           return <Badge variant="outline">{status}</Badge>
         },
+        meta: { width: 112, cellClassName: 'whitespace-nowrap' },
       },
       {
         header: 'Content SHA',
@@ -281,30 +285,27 @@ export function DocDetailPage() {
           const e = info.row.original as IngestEvent
           const cur = e.content_sha256 ? e.content_sha256.slice(0, 10) : '—'
           const prev = e.prev_content_sha256 ? e.prev_content_sha256.slice(0, 10) : null
-          return (
-            <div className="text-xs font-mono">
-              <div>{cur}</div>
-              {prev ? <div className="text-muted-foreground">prev {prev}</div> : null}
-            </div>
-          )
+          const label = prev ? `${cur} <- ${prev}` : cur
+          return <span className="font-mono text-xs whitespace-nowrap">{label}</span>
         },
+        meta: { width: 190, cellClassName: 'whitespace-nowrap' },
       },
-      { header: 'Chunks', accessorKey: 'num_chunks' },
+      { header: 'Chunks', accessorKey: 'num_chunks', meta: { width: 84, cellClassName: 'whitespace-nowrap' } },
       {
         header: 'Embedding',
         accessorKey: 'embedding_backend',
         cell: (info: any) => {
           const e = info.row.original as IngestEvent
+          const label = `${e.embedding_backend}${e.embeddings_model ? ` · ${e.embeddings_model}` : ''} · dim ${e.embedding_dim}`
           return (
-            <div className="space-y-1">
-              <div className="text-xs">
-                <span className="font-mono">{e.embedding_backend}</span>
-                {e.embeddings_model ? <span className="text-muted-foreground"> · {e.embeddings_model}</span> : null}
-              </div>
-              <div className="text-xs text-muted-foreground">dim {e.embedding_dim}</div>
-            </div>
+            <span className="block max-w-[220px] truncate text-xs" title={label}>
+              <span className="font-mono">{e.embedding_backend}</span>
+              {e.embeddings_model ? <span className="text-muted-foreground"> · {e.embeddings_model}</span> : null}
+              <span className="text-muted-foreground"> · dim {e.embedding_dim}</span>
+            </span>
           )
         },
+        meta: { width: 220, cellClassName: 'whitespace-nowrap' },
       },
       {
         header: 'Chunking',
@@ -317,6 +318,7 @@ export function DocDetailPage() {
             </span>
           )
         },
+        meta: { width: 158, cellClassName: 'whitespace-nowrap' },
       },
       {
         header: 'Note',
@@ -324,18 +326,21 @@ export function DocDetailPage() {
         cell: (info: any) => {
           const e = info.row.original as IngestEvent
           const note = String(info.getValue() ?? '')
+          const validation = e.validation_errors?.length ? e.validation_errors.join(' · ') : ''
+          const text = [note, validation].filter(Boolean).join(' · ') || '—'
           return (
-            <div className="space-y-1">
-              <span className="text-xs">{note}</span>
+            <span className="block max-w-[260px] truncate text-xs" title={text}>
+              {note || '—'}
               {e.validation_errors?.length ? (
-                <div className="text-[11px] text-destructive">
-                  {e.validation_errors.slice(0, 2).join(' · ')}
-                  {e.validation_errors.length > 2 ? ' …' : ''}
-                </div>
+                <span className="text-destructive">
+                  {' · '}
+                  {e.validation_errors.join(' · ')}
+                </span>
               ) : null}
-            </div>
+            </span>
           )
         },
+        meta: { width: 260 },
       },
     ],
     [],
@@ -481,7 +486,7 @@ export function DocDetailPage() {
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="lg:col-span-3">
               <CardHeader>
                 <CardTitle>Ingest lineage</CardTitle>
                 <CardDescription>Each ingest creates an event with content hash + settings.</CardDescription>

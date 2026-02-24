@@ -104,11 +104,6 @@ export function MaintenancePage() {
               <span className="font-medium">Why this exists:</span> retention is a governance control.
               The platform models retention policies at the doc level and can purge expired docs.
             </div>
-            <div>
-              <span className="font-medium">Production tip:</span> Cloud Run has an ephemeral filesystem.
-              If you need durable retention enforcement, migrate storage to Cloud SQL (or another managed store)
-              and schedule a purge job.
-            </div>
           </CardContent>
         </Card>
       </Section>

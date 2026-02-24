@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 
 def test_ui_fallback_blocks_path_traversal(tmp_path, monkeypatch):
@@ -33,3 +34,16 @@ def test_ui_fallback_blocks_path_traversal(tmp_path, monkeypatch):
     resp2 = main.ui_fallback("favicon.svg")
     path2 = Path(getattr(resp2, "path")).resolve()
     assert path2 == (dist / "favicon.svg").resolve()
+
+
+def test_swagger_csp_allows_fastapi_default_cdn_assets():
+    from app import main
+
+    client = TestClient(main.app)
+    resp = client.get("/api/swagger")
+    assert resp.status_code == 200
+    csp = resp.headers.get("content-security-policy", "")
+
+    # FastAPI's default Swagger UI template references jsDelivr assets.
+    assert "https://cdn.jsdelivr.net" in csp
+    assert "script-src" in csp

@@ -25,6 +25,32 @@ export function MetaPage() {
           ) : null}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Notes</CardTitle>
+          <CardDescription>Local-first hosting option</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <div>
+            <span className="font-medium">What it means:</span> you can run this platform as a single local service using
+            SQLite (no Cloud SQL required).
+          </div>
+          <div>
+            <span className="font-medium">How to tell:</span> in the configuration above,{' '}
+            <span className="font-mono">database_backend</span> is <span className="font-mono">sqlite</span> when running
+            local-first.
+          </div>
+          <div>
+            <span className="font-medium">When to use it:</span> local development, demos, and low-cost single-operator
+            setups.
+          </div>
+          <div>
+            <span className="font-medium">Hosted durability:</span> for durable multi-revision hosting, set{' '}
+            <span className="font-mono">DATABASE_URL</span> so the app uses Postgres/Cloud SQL instead of local disk.
+          </div>
+        </CardContent>
+      </Card>
     </Page>
   )
 }
