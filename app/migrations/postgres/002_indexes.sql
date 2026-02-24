@@ -10,4 +10,21 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts ON chunks USING GIN (to_tsvector('engl
 
 -- Vector retrieval (pgvector)
 -- For small corpora, exact search is fine; this index is the production baseline.
-CREATE INDEX IF NOT EXISTS idx_embeddings_vec_hnsw ON embeddings USING hnsw (vec vector_cosine_ops);
+DO $$
+BEGIN
+  -- pgvector HNSW indexes require a dimensioned column type (vector(n)).
+  -- When vec is declared as unbounded vector, skip index creation to avoid
+  -- hard-failing startup migrations.
+  IF EXISTS (
+    SELECT 1
+    FROM pg_attribute
+    WHERE attrelid = 'embeddings'::regclass
+      AND attname = 'vec'
+      AND atttypmod > 0
+  ) THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_embeddings_vec_hnsw ON embeddings USING hnsw (vec vector_cosine_ops)';
+  ELSE
+    RAISE NOTICE 'Skipping idx_embeddings_vec_hnsw: embeddings.vec is not vector(n).';
+  END IF;
+END
+$$;
