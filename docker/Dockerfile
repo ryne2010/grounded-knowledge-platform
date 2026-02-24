@@ -19,6 +19,11 @@ FROM python:3.11-slim AS backend
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_DEFAULT_INDEX=https://pypi.org/simple \
+    UV_HTTP_RETRIES=10 \
+    UV_HTTP_TIMEOUT=120 \
+    UV_HTTP_CONNECT_TIMEOUT=30 \
+    UV_CONCURRENT_DOWNLOADS=4 \
     PATH="/opt/venv/bin:$PATH" \
     PORT=8080
 
@@ -43,7 +48,26 @@ COPY uv.lock ./
 # Install runtime deps + deployment extras:
 # - cloudsql: psycopg for Postgres/Cloud SQL connectivity
 # - observability: OpenTelemetry SDK/instrumentation
-RUN uv sync --no-dev --no-install-project --extra cloudsql --extra observability
+RUN set -euo pipefail; \
+    if grep -Eq "packages\\.applied-caas-gateway1|pypi-public/simple" uv.lock; then \
+      echo "uv.lock references mirror URLs; refreshing lock against ${UV_DEFAULT_INDEX}"; \
+      uv lock --refresh --no-progress; \
+    fi; \
+    max_attempts=5; \
+    for attempt in $(seq 1 "${max_attempts}"); do \
+      echo "uv sync attempt ${attempt}/${max_attempts}"; \
+      if uv sync --no-dev --no-install-project --extra cloudsql --extra observability --frozen --no-progress; then \
+        exit 0; \
+      fi; \
+      if [ "${attempt}" -eq "${max_attempts}" ]; then \
+        break; \
+      fi; \
+      sleep_seconds=$((attempt * 10)); \
+      echo "Retrying in ${sleep_seconds}s..."; \
+      sleep "${sleep_seconds}"; \
+    done; \
+    echo "uv sync failed after ${max_attempts} attempts"; \
+    exit 1
 
 COPY app ./app
 COPY data ./data
