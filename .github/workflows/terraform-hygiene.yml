@@ -53,9 +53,10 @@ jobs:
           # - CKV_GCP_6: check expects legacy require_ssl/trusted-cert mode; Terraform/provider baseline uses ssl_mode
           # - CKV_GCP_83: Pub/Sub CMEK/CSEK for optional demo ingest topics (Google-managed encryption baseline)
           # - CKV_SECRET_4: false-positive secret detection on DATABASE_URL format string template
+          # - CKV_GCP_60: public IP is an intentional low-cost default; private IP remains available via cloudsql_private_ip_enabled=true
           docker run --rm -v "${{ github.workspace }}:/src" bridgecrew/checkov:latest \
             -d "/src/${TF_DIR}" \
-            --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18,CKV_GCP_79,CKV_GCP_6,CKV_GCP_83,CKV_SECRET_4"
+            --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18,CKV_GCP_79,CKV_GCP_6,CKV_GCP_83,CKV_SECRET_4,CKV_GCP_60"
 
       - name: conftest policy (docker)
         run: |

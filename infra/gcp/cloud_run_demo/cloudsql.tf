@@ -44,6 +44,7 @@ resource "google_sql_database_instance" "cloudsql" {
     }
 
     #tfsec:ignore:google-sql-encrypt-in-transit-data Provider v7 removed `require_ssl`; TLS is enforced via `ssl_mode`.
+    #tfsec:ignore:google-sql-no-public-access Public IP is an intentional low-cost default with Cloud SQL connector auth; set cloudsql_private_ip_enabled=true for private IP.
     ip_configuration {
       ipv4_enabled    = var.cloudsql_private_ip_enabled ? false : true
       private_network = var.cloudsql_private_ip_enabled ? module.network[0].network_id : null
