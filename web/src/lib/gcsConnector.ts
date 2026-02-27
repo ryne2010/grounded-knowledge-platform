@@ -5,6 +5,11 @@ export type ConnectorAvailability = {
   message: string
 }
 
+export type ParsedGcsDirectoryLink = {
+  bucket: string
+  prefix: string
+}
+
 export function getConnectorAvailability(meta?: MetaResponse): ConnectorAvailability {
   if (!meta) {
     return {
@@ -31,6 +36,30 @@ export function getConnectorAvailability(meta?: MetaResponse): ConnectorAvailabi
     enabled: true,
     message: 'Run an add/update-only sync from a GCS prefix.',
   }
+}
+
+export function parseGcsDirectoryLink(raw: string): ParsedGcsDirectoryLink {
+  const input = String(raw || '').trim()
+  if (!input) {
+    throw new Error('Directory link is required.')
+  }
+  if (!input.startsWith('gs://')) {
+    throw new Error('Directory link must start with gs://')
+  }
+
+  const rest = input.slice('gs://'.length)
+  const slash = rest.indexOf('/')
+  const bucket = (slash === -1 ? rest : rest.slice(0, slash)).trim()
+  if (!bucket) {
+    throw new Error('Directory link must include a bucket.')
+  }
+  if (/\s/.test(bucket)) {
+    throw new Error('Directory link bucket is invalid.')
+  }
+
+  const rawPrefix = slash === -1 ? '' : rest.slice(slash + 1)
+  const prefix = rawPrefix.replace(/^\/+/, '').replace(/\/+$/, '').trim()
+  return { bucket, prefix }
 }
 
 export type GcsSyncSummary = {

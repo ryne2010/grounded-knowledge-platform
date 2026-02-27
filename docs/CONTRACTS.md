@@ -286,7 +286,7 @@ Request (JSON):
 
 Request (multipart form):
 
-- required: `file` (.txt/.md/.pdf/.csv/.tsv/.xlsx)
+- required: `file` (.txt/.md/.pdf/.csv/.tsv/.xlsx/.xlsm)
   - Note: `.xlsx/.xlsm` ingestion uses `openpyxl` (included in the default dependency set).
 - optional: `contract_file` (YAML, max 64KB; tabular files only)
 - optional: `title`, `source`, `classification`, `retention`, `tags`, `notes`
@@ -294,6 +294,31 @@ Request (multipart form):
 Response:
 
 - `{ doc_id, doc_version, changed, num_chunks, embedding_dim, content_sha256 }`
+
+- `POST /api/ingest/directory`
+
+Request (multipart form):
+
+- required: `files` (repeated file part; each file supports `.txt/.md/.pdf/.csv/.tsv/.xlsx/.xlsm`)
+- optional: `classification`, `retention`, `tags`, `notes`
+- optional: `source_prefix` (default: `ui:directory`)
+
+Behavior:
+
+- best-effort processing (per-file failures do not abort the run)
+- unsupported suffixes are returned as `skipped_unsupported`
+- tabular `contract_file` is intentionally not supported in this endpoint
+
+Response includes:
+
+- run metadata (`run_id`, `started_at`, `finished_at`, `source_prefix`)
+- directory summary (`scanned`, `skipped_unsupported`, `ingested`, `changed`, `unchanged`)
+- `errors[]` (per-file errors for run visibility)
+- `results[]` with:
+  - `path`
+  - `size`
+  - `action` (`changed|unchanged|skipped_unsupported|error`)
+  - optional `doc_id`, `doc_version`, `num_chunks`, `content_sha256`, `error`
 
 ### Connectors (private only)
 

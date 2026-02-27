@@ -151,7 +151,7 @@ Defense in depth:
 
 ### UI
 
-Use the **Upload file** / **Paste text** cards on the **Ingest** page.
+Use the **Upload file** / **Upload directory** / **Paste text** cards on the **Ingest** page.
 
 Supported file uploads:
 
@@ -161,6 +161,9 @@ Supported file uploads:
 - `.xlsx` / `.xlsm` (uses `openpyxl`, included in the default dependency set)
 
 For tabular files, you can optionally attach a YAML `contract_file` to validate required columns/types and record schema drift in ingest lineage.
+
+Directory uploads process each file best-effort and return a per-file run summary in the UI.
+For v1, tabular contracts apply to single-file uploads (not directory uploads).
 
 To ingest docs and inspect ingest lineage across all docs, open the **Ingest** page.
 
@@ -172,6 +175,8 @@ You can attach metadata:
 - retention: `none|30d|90d|1y|indefinite`
 - tags: comma-separated
 - notes: recorded in ingest lineage
+
+For private connector sync, the Ingest page also accepts a GCS directory link (`gs://bucket/prefix`) and resolves it to the existing GCS sync inputs.
 
 ### CLI
 

@@ -766,11 +766,38 @@ class GCSSyncRequest(BaseModel):
     notes: str | None = Field(None, description="Optional ingest notes (applied to all docs)")
 
 
+class DirectoryIngestResult(BaseModel):
+    path: str
+    size: int
+    action: str
+    doc_id: str | None = None
+    doc_version: int | None = None
+    num_chunks: int | None = None
+    content_sha256: str | None = None
+    error: str | None = None
+
+
+class DirectoryIngestResponse(BaseModel):
+    run_id: str
+    started_at: int
+    finished_at: int
+    source_prefix: str
+    scanned: int
+    skipped_unsupported: int
+    ingested: int
+    changed: int
+    unchanged: int
+    errors: list[str]
+    results: list[DirectoryIngestResult]
+
+
 _GCS_FINALIZE_EVENT_TYPES = {
     "OBJECT_FINALIZE",
     "OBJECT_FINALIZED",
     "google.cloud.storage.object.v1.finalized",
 }
+
+_SUPPORTED_UPLOAD_SUFFIXES = {".txt", ".md", ".pdf", ".csv", ".tsv", ".xlsx", ".xlsm"}
 
 
 def _first_nonempty_str(*values: Any) -> str:
@@ -907,6 +934,49 @@ def _record_audit_event(
         request_id=str(request_id) if request_id else None,
     )
 
+
+def _sanitize_upload_filename(raw_name: str, *, default: str = "upload.txt") -> str:
+    """Return a best-effort safe filename for temp storage and suffix checks."""
+
+    safe_name = Path(str(raw_name or default)).name
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", safe_name)
+    if not safe_name:
+        return default
+    return safe_name
+
+
+def _normalize_upload_relative_path(raw_name: str) -> str:
+    """Normalize and sanitize browser-supplied relative paths for directory uploads."""
+
+    raw = str(raw_name or "").replace("\\", "/").strip()
+    parts: list[str] = []
+    for segment in raw.split("/"):
+        token = segment.strip()
+        if not token or token in {".", ".."}:
+            continue
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", token)
+        if not safe:
+            continue
+        parts.append(safe)
+
+    if not parts:
+        return "upload.txt"
+    return "/".join(parts)
+
+
+def _normalize_source_prefix(raw_value: str | None) -> str:
+    value = str(raw_value or "ui:directory").strip()
+    if not value:
+        value = "ui:directory"
+    return value.rstrip("/")
+
+
+def _upload_size_hint(upload: UploadFile) -> int:
+    try:
+        raw = upload.headers.get("content-length")
+        return int(raw or 0)
+    except Exception:
+        return 0
 
 
 class DocUpdateRequest(BaseModel):
@@ -1081,7 +1151,9 @@ def meta(_auth: AuthContext = Depends(require_role("reader"))) -> dict[str, obje
     with connect(settings.sqlite_path) as conn:
         init_db(conn)
         ph = _sql_ph(conn)
-        doc_count = int(conn.execute(f"SELECT COUNT(1) AS n FROM docs WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"])
+        doc_count = int(
+            conn.execute(f"SELECT COUNT(1) AS n FROM docs WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"]
+        )
         chunk_count = int(
             conn.execute(f"SELECT COUNT(1) AS n FROM chunks WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"]
         )
@@ -1154,7 +1226,9 @@ def stats_api(_auth: Any = Depends(require_role("reader"))) -> StatsResponse:
         ph = _sql_ph(conn)
 
         docs = int(conn.execute(f"SELECT COUNT(1) AS n FROM docs WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"])
-        chunks = int(conn.execute(f"SELECT COUNT(1) AS n FROM chunks WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"])
+        chunks = int(
+            conn.execute(f"SELECT COUNT(1) AS n FROM chunks WHERE tenant_id={ph}", (tenant_id,)).fetchone()["n"]
+        )
         embeddings = int(
             conn.execute(
                 f"""
@@ -1734,7 +1808,9 @@ def search_chunks(q: str, limit: int = 20, _auth: Any = Depends(require_role("re
 
 
 @app.delete("/api/docs/{doc_id}")
-def delete_doc_api(doc_id: str, request: Request, _auth: AuthContext = Depends(require_role("admin"))) -> dict[str, Any]:
+def delete_doc_api(
+    doc_id: str, request: Request, _auth: AuthContext = Depends(require_role("admin"))
+) -> dict[str, Any]:
     if settings.public_demo_mode or not settings.allow_doc_delete:
         raise HTTPException(status_code=403, detail="Delete is disabled in this deployment")
 
@@ -1792,6 +1868,7 @@ def ingest_text_api(req: IngestTextRequest, _auth: Any = Depends(require_role("e
         "embedding_dim": res.embedding_dim,
         "content_sha256": res.content_sha256,
     }
+
 
 # ---- Connectors ----
 @app.post("/api/connectors/gcs/sync")
@@ -2106,8 +2183,6 @@ def gcs_notify_api(
     }
 
 
-
-
 @app.post("/api/ingest/file")
 async def ingest_file_api(
     file: UploadFile = File(...),
@@ -2123,13 +2198,10 @@ async def ingest_file_api(
     if settings.public_demo_mode or not settings.allow_uploads:
         raise HTTPException(status_code=403, detail="Uploads are disabled in this deployment")
 
-    orig_name = file.filename or "upload.txt"
-    safe_name = Path(orig_name).name
-    # Best-effort sanitization (defense-in-depth against weird filenames).
-    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", safe_name)
+    safe_name = _sanitize_upload_filename(file.filename or "upload.txt")
 
     suffix = Path(safe_name).suffix.lower()
-    if suffix not in {".txt", ".md", ".pdf", ".csv", ".tsv", ".xlsx", ".xlsm"}:
+    if suffix not in _SUPPORTED_UPLOAD_SUFFIXES:
         raise HTTPException(status_code=400, detail="Only .txt, .md, .pdf, .csv, .tsv, .xlsx, .xlsm supported")
 
     tmp_dir = Path("/tmp/gkp_uploads")
@@ -2190,6 +2262,177 @@ async def ingest_file_api(
         "embedding_dim": res.embedding_dim,
         "content_sha256": res.content_sha256,
     }
+
+
+@app.post("/api/ingest/directory", response_model=DirectoryIngestResponse)
+async def ingest_directory_api(
+    files: list[UploadFile] = File(default=[]),
+    classification: str | None = Form(None),
+    retention: str | None = Form(None),
+    tags: str | None = Form(None),
+    notes: str | None = Form(None),
+    source_prefix: str | None = Form(None),
+    _auth: AuthContext = Depends(require_role("editor")),
+) -> DirectoryIngestResponse:
+    if settings.public_demo_mode or not settings.allow_uploads:
+        raise HTTPException(status_code=403, detail="Uploads are disabled in this deployment")
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required")
+
+    normalized_source_prefix = _normalize_source_prefix(source_prefix)
+    run_id = uuid.uuid4().hex
+    started_at = int(time.time())
+    trigger_payload = {
+        "mode": "directory_upload",
+        "source_prefix": normalized_source_prefix,
+        "files_requested": len(files),
+        "classification": classification,
+        "retention": retention,
+        "tags": tags,
+    }
+    principal = getattr(_auth, "principal", None)
+
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        create_ingestion_run(
+            conn,
+            run_id=run_id,
+            trigger_type="ui",
+            trigger_payload_json=json.dumps(trigger_payload, ensure_ascii=False),
+            principal=principal,
+        )
+        conn.commit()
+
+    scanned = 0
+    skipped_unsupported = 0
+    ingested = 0
+    changed = 0
+    unchanged = 0
+    bytes_processed = 0
+    errors: list[str] = []
+    results: list[DirectoryIngestResult] = []
+    run_status = "succeeded"
+    tmp_dir = Path("/tmp/gkp_uploads")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        for upload in files:
+            scanned += 1
+            relative_path = _normalize_upload_relative_path(upload.filename or "upload.txt")
+            leaf_name = Path(relative_path).name
+            suffix = Path(leaf_name).suffix.lower()
+            size_hint = _upload_size_hint(upload)
+
+            if suffix not in _SUPPORTED_UPLOAD_SUFFIXES:
+                skipped_unsupported += 1
+                results.append(
+                    DirectoryIngestResult(
+                        path=relative_path,
+                        size=size_hint,
+                        action="skipped_unsupported",
+                    )
+                )
+                continue
+
+            safe_leaf_name = _sanitize_upload_filename(leaf_name)
+            stem = Path(safe_leaf_name).stem or "upload"
+            tmp_path = tmp_dir / f"{stem}_{uuid.uuid4().hex}{suffix}"
+            total = 0
+            try:
+                with tmp_path.open("wb") as out:
+                    while True:
+                        chunk = await upload.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > settings.max_upload_bytes:
+                            raise ValueError(f"File too large (max {settings.max_upload_bytes} bytes)")
+                        out.write(chunk)
+
+                source_value = f"{normalized_source_prefix}/{relative_path}"
+                res = ingest_file(
+                    tmp_path,
+                    title=Path(safe_leaf_name).stem or safe_leaf_name,
+                    source=source_value,
+                    classification=classification,
+                    retention=retention,
+                    tags=tags,
+                    notes=notes,
+                    run_id=run_id,
+                )
+                ingested += 1
+                if res.changed:
+                    changed += 1
+                    action = "changed"
+                else:
+                    unchanged += 1
+                    action = "unchanged"
+                bytes_processed += total
+                results.append(
+                    DirectoryIngestResult(
+                        path=relative_path,
+                        size=total,
+                        action=action,
+                        doc_id=res.doc_id,
+                        doc_version=res.doc_version,
+                        num_chunks=res.num_chunks,
+                        content_sha256=res.content_sha256,
+                    )
+                )
+            except Exception as e:
+                errors.append(f"{relative_path}: {type(e).__name__}: {e}")
+                results.append(
+                    DirectoryIngestResult(
+                        path=relative_path,
+                        size=total or size_hint,
+                        action="error",
+                        error=str(e),
+                    )
+                )
+            finally:
+                try:
+                    tmp_path.unlink()
+                except FileNotFoundError:
+                    pass
+    except Exception as e:
+        run_status = "failed"
+        errors.append(f"fatal: {type(e).__name__}: {e}")
+
+    finished_at = int(time.time())
+    with connect(settings.sqlite_path) as conn:
+        init_db(conn)
+        complete_ingestion_run(
+            conn,
+            run_id=run_id,
+            status=run_status,
+            objects_scanned=scanned,
+            docs_changed=changed,
+            docs_unchanged=unchanged,
+            bytes_processed=bytes_processed,
+            errors_json=json.dumps(errors, ensure_ascii=False),
+            finished_at=finished_at,
+        )
+        conn.commit()
+
+    if run_status != "failed":
+        invalidate_cache()
+
+    if run_status == "failed":
+        raise HTTPException(status_code=500, detail="Directory ingest failed")
+
+    return DirectoryIngestResponse(
+        run_id=run_id,
+        started_at=started_at,
+        finished_at=finished_at,
+        source_prefix=normalized_source_prefix,
+        scanned=scanned,
+        skipped_unsupported=skipped_unsupported,
+        ingested=ingested,
+        changed=changed,
+        unchanged=unchanged,
+        errors=errors,
+        results=results,
+    )
 
 
 # ---- Query ----
@@ -2761,7 +3004,11 @@ async def query_stream_api(req: QueryRequest, _auth: Any = Depends(require_role(
                     refusal_reason = "insufficient_evidence"
                     answer_text = "I don’t have enough evidence in the indexed sources to answer that."
                     stream_citations = []
-                if bool(settings.citations_required) and not refused and _citations_are_weak(question, stream_citations):
+                if (
+                    bool(settings.citations_required)
+                    and not refused
+                    and _citations_are_weak(question, stream_citations)
+                ):
                     refused = True
                     refusal_reason = "insufficient_evidence"
                     answer_text = "I don’t have enough evidence in the indexed sources to answer that."

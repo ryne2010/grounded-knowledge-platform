@@ -147,6 +147,31 @@ export type IngestResponse = {
   content_sha256: string
 }
 
+export type DirectoryIngestResult = {
+  path: string
+  size: number
+  action: 'changed' | 'unchanged' | 'skipped_unsupported' | 'error'
+  doc_id?: string
+  doc_version?: number
+  num_chunks?: number
+  content_sha256?: string
+  error?: string
+}
+
+export type DirectoryIngestResponse = {
+  run_id: string
+  started_at: number
+  finished_at: number
+  source_prefix: string
+  scanned: number
+  skipped_unsupported: number
+  ingested: number
+  changed: number
+  unchanged: number
+  errors: string[]
+  results: DirectoryIngestResult[]
+}
+
 export type GcsSyncRequest = {
   bucket: string
   prefix?: string
@@ -636,6 +661,38 @@ export const api = {
       throw new Error(formatHttpError(res, text))
     }
     return (await res.json()) as IngestResponse
+  },
+
+  ingestDirectory: async (opts: {
+    files: File[]
+    classification?: string
+    retention?: string
+    tags?: string
+    notes?: string
+    sourcePrefix?: string
+  }) => {
+    const form = new FormData()
+    for (const file of opts.files) {
+      const relativePath = file.webkitRelativePath && file.webkitRelativePath.trim()
+        ? file.webkitRelativePath
+        : file.name
+      form.append('files', file, relativePath)
+    }
+    if (opts.classification) form.append('classification', opts.classification)
+    if (opts.retention) form.append('retention', opts.retention)
+    if (opts.tags) form.append('tags', opts.tags)
+    if (opts.notes) form.append('notes', opts.notes)
+    if (opts.sourcePrefix) form.append('source_prefix', opts.sourcePrefix)
+
+    const res = await apiFetch('/api/ingest/directory', {
+      method: 'POST',
+      body: form,
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(formatHttpError(res, text))
+    }
+    return (await res.json()) as DirectoryIngestResponse
   },
 
   query: (question: string, top_k = 5, debug = false) =>

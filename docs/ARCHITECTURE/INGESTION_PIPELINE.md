@@ -15,7 +15,8 @@ Public demo posture: ingestion endpoints are disabled.
 
 **Private deployments** may ingest via:
 
-- UI upload (txt/md/pdf/csv/xlsx)
+- UI upload (single file: txt/md/pdf/csv/tsv/xlsx/xlsm)
+- UI directory upload (best-effort batch over txt/md/pdf/csv/tsv/xlsx/xlsm)
 - UI paste text
 - CLI (`python -m app.cli ...`)
 - Connector sync (GCS prefix batch)
@@ -88,4 +89,3 @@ Spec:
 - lineage is sufficient to explain how content changed
 - validation/drift signals are visible and actionable
 - errors are actionable, not mysterious stack traces
-

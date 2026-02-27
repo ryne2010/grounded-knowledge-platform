@@ -2,8 +2,14 @@ import * as React from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 
-import { api, type GcsSyncResponse, type IngestionRunSummary, type IngestEventView } from '../api'
-import { getConnectorAvailability, summarizeGcsSyncRun } from '../lib/gcsConnector'
+import {
+  api,
+  type DirectoryIngestResponse,
+  type GcsSyncResponse,
+  type IngestionRunSummary,
+  type IngestEventView,
+} from '../api'
+import { getConnectorAvailability, parseGcsDirectoryLink, summarizeGcsSyncRun } from '../lib/gcsConnector'
 import { filterIngestionRuns, runErrorsCount, statusBadgeVariant, summarizeRunError } from '../lib/ingestionRuns'
 import { formatUnixSeconds } from '../lib/time'
 import {
@@ -63,6 +69,28 @@ export function IngestPage() {
     },
   })
 
+  // ---- Directory upload form ----
+  const [directoryFiles, setDirectoryFiles] = React.useState<File[]>([])
+  const [dirClassification, setDirClassification] = React.useState('internal')
+  const [dirRetention, setDirRetention] = React.useState('none')
+  const [dirTags, setDirTags] = React.useState('')
+  const [dirNotes, setDirNotes] = React.useState('')
+  const [dirSourcePrefix, setDirSourcePrefix] = React.useState('ui:directory')
+  const [latestDirectoryRun, setLatestDirectoryRun] = React.useState<DirectoryIngestResponse | null>(null)
+
+  const directoryUploadMutation = useMutation({
+    mutationFn: api.ingestDirectory,
+    onSuccess: async (run) => {
+      setLatestDirectoryRun(run)
+      setSelectedRunId(run.run_id)
+      await qc.invalidateQueries({ queryKey: ['docs'] })
+      await qc.invalidateQueries({ queryKey: ['stats'] })
+      await qc.invalidateQueries({ queryKey: ['ingest-events'] })
+      await qc.invalidateQueries({ queryKey: ['recent-ingest-events'] })
+      await qc.invalidateQueries({ queryKey: ['ingestion-runs'] })
+    },
+  })
+
   // ---- Paste form ----
   const [pasteTitle, setPasteTitle] = React.useState('')
   const [pasteSource, setPasteSource] = React.useState('ui:paste')
@@ -85,6 +113,7 @@ export function IngestPage() {
   // ---- GCS connector sync ----
   const [gcsBucket, setGcsBucket] = React.useState('')
   const [gcsPrefix, setGcsPrefix] = React.useState('')
+  const [gcsDirectoryLink, setGcsDirectoryLink] = React.useState('')
   const [gcsMaxObjects, setGcsMaxObjects] = React.useState(200)
   const [gcsDryRun, setGcsDryRun] = React.useState(true)
   const [gcsClassification, setGcsClassification] = React.useState('internal')
@@ -93,6 +122,23 @@ export function IngestPage() {
   const [gcsNotes, setGcsNotes] = React.useState('')
   const [latestSyncRun, setLatestSyncRun] = React.useState<GcsSyncResponse | null>(null)
   const [syncCopyStatus, setSyncCopyStatus] = React.useState<'idle' | 'copied' | 'failed'>('idle')
+
+  const gcsLinkParse = React.useMemo(() => {
+    const raw = gcsDirectoryLink.trim()
+    if (!raw) {
+      return { bucket: null as string | null, prefix: null as string | null, error: null as string | null }
+    }
+    try {
+      const parsed = parseGcsDirectoryLink(raw)
+      return { bucket: parsed.bucket, prefix: parsed.prefix, error: null as string | null }
+    } catch (e) {
+      return {
+        bucket: null,
+        prefix: null,
+        error: (e as Error).message || 'Invalid GCS directory link.',
+      }
+    }
+  }, [gcsDirectoryLink])
 
   const gcsSyncMutation = useMutation({
     mutationFn: api.gcsSync,
@@ -381,6 +427,15 @@ export function IngestPage() {
   const classifications = meta?.doc_classifications ?? ['public', 'internal', 'confidential', 'restricted']
   const retentions = meta?.doc_retentions ?? ['none', '30d', '90d', '1y', 'indefinite']
   const tabularSelected = Boolean(file && /\.(csv|tsv|xlsx|xlsm)$/i.test(file.name))
+  const directoryPickerAttrs = { webkitdirectory: 'true', directory: 'true' } as Record<string, string>
+  const gcsResolvedBucket = gcsLinkParse.bucket ?? gcsBucket.trim()
+  const gcsResolvedPrefix = gcsLinkParse.bucket !== null ? gcsLinkParse.prefix || undefined : gcsPrefix.trim() || undefined
+  const gcsLinkProvided = gcsDirectoryLink.trim().length > 0
+  const gcsSyncDisabled =
+    !connectorsEnabled ||
+    !gcsResolvedBucket ||
+    gcsSyncMutation.isPending ||
+    (gcsLinkProvided && Boolean(gcsLinkParse.error))
 
   return (
     <Page
@@ -395,7 +450,7 @@ export function IngestPage() {
         title="Ingestion workspace"
         description="Add documents to the index and review the ingest lineage (audit feed)."
       >
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
           <Card>
             <CardHeader>
               <CardTitle>Upload file</CardTitle>
@@ -570,6 +625,191 @@ export function IngestPage() {
 
           <Card>
             <CardHeader>
+              <CardTitle>Upload directory</CardTitle>
+              <CardDescription>
+                Select a local folder and ingest supported files (.md, .txt, .pdf, .csv, .tsv, .xlsx, .xlsm).
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {!uploadsEnabled ? (
+                <div className="rounded-md border bg-muted p-3 text-sm">
+                  Directory upload is disabled for this deployment.
+                  {meta?.public_demo_mode ? ' (Public read-only mode is enforced.)' : ''}
+                </div>
+              ) : null}
+
+              <div className="space-y-2">
+                <Label htmlFor="directoryFiles">Directory</Label>
+                <Input
+                  id="directoryFiles"
+                  type="file"
+                  multiple
+                  {...directoryPickerAttrs}
+                  onChange={(e) => setDirectoryFiles(Array.from(e.target.files ?? []))}
+                  disabled={!uploadsEnabled}
+                />
+                <div className="text-xs text-muted-foreground">
+                  {directoryFiles.length} file(s) selected.
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="dirClassification">Classification</Label>
+                  <Input
+                    id="dirClassification"
+                    value={dirClassification}
+                    onChange={(e) => setDirClassification(e.target.value)}
+                    list="classifications"
+                    disabled={!uploadsEnabled}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="dirRetention">Retention</Label>
+                  <Input
+                    id="dirRetention"
+                    value={dirRetention}
+                    onChange={(e) => setDirRetention(e.target.value)}
+                    list="retentions"
+                    disabled={!uploadsEnabled}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="dirTags">Tags</Label>
+                <Input
+                  id="dirTags"
+                  value={dirTags}
+                  onChange={(e) => setDirTags(e.target.value)}
+                  placeholder="comma,separated,tags"
+                  disabled={!uploadsEnabled}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="dirNotes">Notes (optional)</Label>
+                <Input
+                  id="dirNotes"
+                  value={dirNotes}
+                  onChange={(e) => setDirNotes(e.target.value)}
+                  placeholder="Why was this directory ingested?"
+                  disabled={!uploadsEnabled}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="dirSourcePrefix">Source prefix</Label>
+                <Input
+                  id="dirSourcePrefix"
+                  value={dirSourcePrefix}
+                  onChange={(e) => setDirSourcePrefix(e.target.value)}
+                  placeholder="e.g. ui:directory"
+                  disabled={!uploadsEnabled}
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  onClick={() =>
+                    directoryUploadMutation.mutate({
+                      files: directoryFiles,
+                      classification: dirClassification.trim() || undefined,
+                      retention: dirRetention.trim() || undefined,
+                      tags: dirTags.trim() || undefined,
+                      notes: dirNotes.trim() || undefined,
+                      sourcePrefix: dirSourcePrefix.trim() || undefined,
+                    })
+                  }
+                  disabled={!uploadsEnabled || directoryFiles.length === 0 || directoryUploadMutation.isPending}
+                >
+                  {directoryUploadMutation.isPending ? 'Uploading directory…' : 'Ingest directory'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setDirectoryFiles([])
+                    setDirTags('')
+                    setDirNotes('')
+                    setDirSourcePrefix('ui:directory')
+                    setLatestDirectoryRun(null)
+                  }}
+                  disabled={!uploadsEnabled}
+                >
+                  Reset
+                </Button>
+              </div>
+
+              {directoryUploadMutation.isError ? (
+                <div className="rounded-md border bg-destructive/10 p-3 text-sm">
+                  {(directoryUploadMutation.error as Error).message}
+                </div>
+              ) : null}
+
+              {latestDirectoryRun ? (
+                <div className="space-y-3 rounded-md border bg-muted p-3">
+                  <div className="text-sm">
+                    <div className="font-medium">Last directory run: {latestDirectoryRun.run_id}</div>
+                    <div className="text-xs text-muted-foreground">
+                      source: {latestDirectoryRun.source_prefix}
+                      {' · '}
+                      scanned {latestDirectoryRun.scanned}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <Badge variant="outline">ingested: {latestDirectoryRun.ingested}</Badge>
+                    <Badge variant="outline">changed: {latestDirectoryRun.changed}</Badge>
+                    <Badge variant="outline">unchanged: {latestDirectoryRun.unchanged}</Badge>
+                    <Badge variant="outline">skipped_unsupported: {latestDirectoryRun.skipped_unsupported}</Badge>
+                    <Badge variant="outline">errors: {latestDirectoryRun.errors.length}</Badge>
+                  </div>
+
+                  {latestDirectoryRun.errors.length > 0 ? (
+                    <ul className="list-disc space-y-1 pl-5 text-xs">
+                      {latestDirectoryRun.errors.slice(0, 6).map((err) => (
+                        <li key={err}>{err}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+
+                  <div className="max-h-56 overflow-auto rounded border">
+                    <table className="min-w-full text-xs">
+                      <thead className="bg-muted/60">
+                        <tr className="text-left">
+                          <th className="px-3 py-2">Path</th>
+                          <th className="px-3 py-2">Status</th>
+                          <th className="px-3 py-2">Doc</th>
+                          <th className="px-3 py-2">Size</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {latestDirectoryRun.results.map((row) => (
+                          <tr key={`${row.path}:${row.doc_id ?? row.action}`} className="border-t">
+                            <td className="px-3 py-2 font-mono">{row.path}</td>
+                            <td className="px-3 py-2">{row.action}</td>
+                            <td className="px-3 py-2">
+                              {row.doc_id ? (
+                                <Link to="/docs/$docId" params={{ docId: row.doc_id }} className="underline">
+                                  {row.doc_id}
+                                </Link>
+                              ) : (
+                                '—'
+                              )}
+                            </td>
+                            <td className="px-3 py-2">{row.size}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>Paste text</CardTitle>
               <CardDescription>Quickly add a note/runbook without uploading a file.</CardDescription>
             </CardHeader>
@@ -728,6 +968,38 @@ export function IngestPage() {
               </div>
             ) : null}
 
+            <div className="space-y-2">
+              <Label htmlFor="gcsDirectoryLink">Directory link (optional)</Label>
+              <Input
+                id="gcsDirectoryLink"
+                value={gcsDirectoryLink}
+                onChange={(e) => setGcsDirectoryLink(e.target.value)}
+                placeholder="gs://my-bucket/knowledge/"
+                disabled={!connectorsEnabled}
+              />
+              <div className="text-xs text-muted-foreground">
+                If set, the link determines bucket/prefix. Otherwise the fields below are used.
+              </div>
+            </div>
+
+            {gcsLinkParse.error ? (
+              <div className="rounded-md border bg-destructive/10 p-3 text-sm">{gcsLinkParse.error}</div>
+            ) : null}
+
+            {gcsLinkProvided && !gcsLinkParse.error && gcsLinkParse.bucket ? (
+              <div className="rounded-md border bg-muted p-3 text-xs">
+                Parsed link → bucket: <span className="font-mono">{gcsLinkParse.bucket}</span>
+                {gcsLinkParse.prefix ? (
+                  <>
+                    {' '}
+                    prefix: <span className="font-mono">{gcsLinkParse.prefix}</span>
+                  </>
+                ) : (
+                  ' (root prefix)'
+                )}
+              </div>
+            ) : null}
+
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="gcsBucket">Bucket</Label>
@@ -831,8 +1103,8 @@ export function IngestPage() {
               <Button
                 onClick={() =>
                   gcsSyncMutation.mutate({
-                    bucket: gcsBucket.trim(),
-                    prefix: gcsPrefix.trim() || undefined,
+                    bucket: gcsResolvedBucket,
+                    prefix: gcsResolvedPrefix,
                     max_objects: Math.max(1, Math.min(5000, gcsMaxObjects)),
                     dry_run: gcsDryRun,
                     classification: gcsClassification.trim() || undefined,
@@ -841,7 +1113,7 @@ export function IngestPage() {
                     notes: gcsNotes.trim() || undefined,
                   })
                 }
-                disabled={!connectorsEnabled || !gcsBucket.trim() || gcsSyncMutation.isPending}
+                disabled={gcsSyncDisabled}
               >
                 {gcsSyncMutation.isPending ? 'Running sync…' : gcsDryRun ? 'Run dry sync' : 'Run sync'}
               </Button>
@@ -849,6 +1121,7 @@ export function IngestPage() {
               <Button
                 variant="outline"
                 onClick={() => {
+                  setGcsDirectoryLink('')
                   setGcsPrefix('')
                   setGcsMaxObjects(200)
                   setGcsDryRun(true)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { GcsSyncResponse, MetaResponse } from '../api'
-import { getConnectorAvailability, summarizeGcsSyncRun } from './gcsConnector'
+import { getConnectorAvailability, parseGcsDirectoryLink, summarizeGcsSyncRun } from './gcsConnector'
 
 function meta(overrides: Partial<MetaResponse>): MetaResponse {
   return {
@@ -73,5 +73,22 @@ describe('summarizeGcsSyncRun', () => {
     expect(out.unchanged).toBe(1)
     expect(out.wouldIngest).toBe(1)
     expect(out.errors).toEqual(['gs://b/docs/d.md: download timeout', 'token expired'])
+  })
+})
+
+describe('parseGcsDirectoryLink', () => {
+  it('parses bucket and prefix from gs://bucket/prefix', () => {
+    const out = parseGcsDirectoryLink('gs://demo-bucket/knowledge/docs')
+    expect(out).toEqual({ bucket: 'demo-bucket', prefix: 'knowledge/docs' })
+  })
+
+  it('parses bucket-only links and returns empty prefix', () => {
+    const out = parseGcsDirectoryLink('gs://demo-bucket')
+    expect(out).toEqual({ bucket: 'demo-bucket', prefix: '' })
+  })
+
+  it('rejects invalid links', () => {
+    expect(() => parseGcsDirectoryLink('https://example.com/docs')).toThrow(/start with gs:\/\//i)
+    expect(() => parseGcsDirectoryLink('gs:///docs')).toThrow(/include a bucket/i)
   })
 })
