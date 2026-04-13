@@ -22,7 +22,11 @@ Drift detection gives you:
 ## How to enable
 
 1) Configure Workload Identity Federation (WIF) for GitHub Actions (see `docs/WIF_GITHUB_ACTIONS.md`)
-2) Set one GitHub Actions variable:
+2) Set GitHub Environment variables:
+   - `PROJECT_ID`
+   - `REGION`
+   - `GCP_WIF_PROVIDER`
+   - `GCP_WIF_SERVICE_ACCOUNT`
    - `GCP_TF_CONFIG_GCS_PATH` (example: `gs://my-config-bucket/gkp/dev`)
 
 The drift workflow downloads:

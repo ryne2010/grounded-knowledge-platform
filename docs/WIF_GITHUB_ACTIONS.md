@@ -4,7 +4,7 @@ This repo includes GitHub Actions workflows that can run Terraform **without** l
 
 Workflows:
 - `terraform-hygiene.yml` — fmt/validate/lint/sec/policy (no GCP auth required)
-- `gcp-build-and-deploy.yml` — push to `main` → Cloud Build image → Terraform deploy (Cloud Run)
+- `deploy-gcp.yml` — push to `main` (path-filtered) or manual run → Cloud Build image → Terraform deploy (Cloud Run)
 - `gcp-terraform-plan.yml` — plan on demand (workflow_dispatch)
 - `terraform-apply-gcp.yml` — apply on demand (workflow_dispatch)
 - `terraform-drift.yml` — scheduled drift detection (plan -detailed-exitcode)
@@ -19,7 +19,7 @@ This repo includes a small bootstrap root you can run directly:
 It creates:
 - a CI service account (or reuses one you provide)
 - a Workload Identity Pool + Provider for your `OWNER/REPO`
-- bucket access needed to download config + manage state
+- bucket access needed to read/write config + manage state
 
 ### Bootstrap commands (manual)
 
@@ -120,6 +120,12 @@ GitHub → Settings → **Environments** → (create/select `dev`, `stage`, `pro
 Set:
 
 ### WIF variables
+- `PROJECT_ID`
+  Example: `my-project-id`
+
+- `REGION`
+  Example: `us-central1`
+
 - `GCP_WIF_PROVIDER`
   Example: `projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/github`
 
@@ -128,8 +134,8 @@ Set:
 
 ### Single-source-of-truth config (GCS)
 
-This repo’s workflows can fetch Terraform configuration from GCS at runtime so you don’t have to
-duplicate `PROJECT_ID`, `REGION`, state bucket names, image URIs, etc. across GitHub variables.
+This repo’s workflows fetch Terraform configuration from GCS at runtime, and the deploy/apply
+lanes pass the resolved values into the same Make targets used locally.
 
 Create (or reuse) a **config bucket** (separate from your tfstate bucket):
 
@@ -164,17 +170,15 @@ Then set ONE environment variable per GitHub Environment:
 > The workflows expect that path to contain `backend.hcl` and `terraform.tfvars`.
 
 IAM gotcha:
-- The CI service account must be able to **read** the config objects:
-  - grant `roles/storage.objectViewer` on the config bucket (or object prefix)
-- If you use the automated deploy workflow (`gcp-build-and-deploy.yml`), the CI service account must also be able to **write** config objects:
-  - grant `roles/storage.objectAdmin` on the config bucket (or just the specific config prefix)
+- The CI service account must be able to **read/write** the config objects:
+  - grant `roles/storage.objectAdmin` on the config bucket (or object prefix)
 - It must also be able to **read/write** Terraform state in the tfstate bucket referenced by `backend.hcl`.
 
 ---
 
 ## 3) Run an apply
 
-Actions → **terraform-apply-gcp** → Run workflow → env: `dev`
+Actions → **Terraform apply (GCP)** → Run workflow → env: `dev` → `image_tag: <tag>`
 
 If you configure GitHub **Environments** (`dev`, `stage`, `prod`), you can require approvals for applies (recommended).
 
@@ -183,17 +187,18 @@ If you configure GitHub **Environments** (`dev`, `stage`, `prod`), you can requi
 ## 4) Push → build → deploy (automatic)
 
 This repo includes an automated workflow:
-- `.github/workflows/gcp-build-and-deploy.yml`
+- `.github/workflows/deploy-gcp.yml`
 
 What it does (high level):
-1. Runs CI + Terraform hygiene checks (fails fast; no deploy if these fail)
-2. Auths to GCP via WIF (no keys)
-3. Downloads `backend.hcl` + `terraform.tfvars` from `GCP_TF_CONFIG_GCS_PATH`
-4. Bootstraps prerequisite infra (APIs + Artifact Registry + runtime service account)
-5. Builds + pushes an immutable image tag via Cloud Build (`sha-${GITHUB_SHA}`)
-6. Updates `image_tag` in `terraform.tfvars` **in GCS** (single source of truth)
-7. Runs `terraform apply` to deploy to Cloud Run
-8. Verifies `/health` and `/api/meta`
+1. Auths to GCP via WIF (no keys)
+2. Downloads `backend.hcl` + `terraform.tfvars` from `GCP_TF_CONFIG_GCS_PATH`
+3. Resolves the deploy settings from the config bundle
+4. Builds + pushes an immutable image tag via Cloud Build (`sha-${GITHUB_SHA}`)
+5. Persists `image_name` + `image_tag` back to the config bundle, then runs the safe deploy sequence against that tag
+
+Related note:
+- CI/test and Terraform hygiene remain separate workflows (`ci.yml` and `terraform-hygiene.yml`).
+- Apply/deploy rewrite only the image pin in `terraform.tfvars` so later plan/drift runs use the same promoted image.
 
 Enable it:
 - Set the GitHub Environment variables in section (2)

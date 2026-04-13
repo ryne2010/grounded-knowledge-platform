@@ -63,8 +63,10 @@ One command will:
 - verify endpoints
 
 ```bash
-make deploy ENV=dev
+make deploy-gcp-safe ENV=dev
 ```
+
+Use `make deploy-gcp ENV=dev` when you only want the lighter build/apply/verify lane.
 
 ---
 
@@ -175,15 +177,15 @@ See:
 
 This repo includes keyless GitHub Actions workflows (WIF, no long-lived keys):
 
-- `.github/workflows/gcp-build-and-deploy.yml` (push → build image → deploy)
+- `.github/workflows/deploy-gcp.yml` (path-filtered push to `main` or manual run → build image → deploy)
 - `.github/workflows/gcp-terraform-plan.yml` (manual plan)
-- `.github/workflows/terraform-apply-gcp.yml`
+- `.github/workflows/terraform-apply-gcp.yml` (manual apply; requires an explicit `image_tag`)
 - `.github/workflows/terraform-drift.yml`
 
 Notes:
-- `gcp-build-and-deploy.yml` runs on `push` to `main` (and can be run manually). It uses path filters, so doc-only changes won't trigger a deploy.
+- `deploy-gcp.yml` persists the promoted `image_name`/`image_tag` into the shared config bundle, then runs the same safe sequence as local operators.
 - `gcp-terraform-plan.yml` and `terraform-apply-gcp.yml` are `workflow_dispatch` (manual) by design.
-- `terraform-drift.yml` runs on a weekly schedule and can also be run manually.
+- `terraform-drift.yml` runs daily and can also be run manually.
 
 To enable:
 - Bootstrap WIF with `infra/gcp/wif_bootstrap/`

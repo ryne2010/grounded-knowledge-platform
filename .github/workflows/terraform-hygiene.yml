@@ -1,68 +1,31 @@
-name: terraform-hygiene
+name: Terraform hygiene
 
 on:
   pull_request:
     paths:
-      - "infra/gcp/**"
+      - "infra/**"
       - ".github/workflows/terraform-hygiene.yml"
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/terraform-hygiene.yml"
+
+permissions:
+  contents: read
 
 jobs:
-  hygiene:
+  tf-check:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      TF_DIR: infra/gcp/cloud_run_demo
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Terraform
+      - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.14.4"
+          terraform_version: "1.14.5"
 
-      - name: Terraform fmt (check)
-        run: terraform -chdir=${TF_DIR} fmt -check -recursive
-
-      - name: Terraform init (no backend)
-        run: terraform -chdir=${TF_DIR} init -backend=false
-
-      - name: Terraform validate
-        run: terraform -chdir=${TF_DIR} validate
-
-      - name: tflint (docker)
-        run: |
-          docker run --rm -v "${{ github.workspace }}:/repo" -w "/repo/${TF_DIR}" ghcr.io/terraform-linters/tflint:latest --init
-          docker run --rm -v "${{ github.workspace }}:/repo" -w "/repo/${TF_DIR}" ghcr.io/terraform-linters/tflint:latest
-
-      - name: tfsec (docker)
-        run: docker run --rm -v "${{ github.workspace }}:/src" aquasec/tfsec:latest /src/${TF_DIR}
-
-      - name: checkov (docker)
-        run: |
-          # NOTE: These skipped checks are org-policy dependent and are intentionally out of scope for
-          # this public Cloud Run demo stack (cost + complexity tradeoffs).
-          #
-          # - CKV_GCP_84: Artifact Registry CMEK/CSEK enforcement (demo uses Google-managed encryption)
-          # - CKV_GCP_26: VPC Flow Logs for every subnet (network module is optional; default is no VPC)
-          # - CKV2_GCP_18: Require explicit firewall rules (network module is optional; default is no VPC)
-          # - CKV_GCP_79: "latest major" is scanner-version sensitive; DB major upgrades are controlled explicitly
-          # - CKV_GCP_6: check expects legacy require_ssl/trusted-cert mode; Terraform/provider baseline uses ssl_mode
-          # - CKV_GCP_83: Pub/Sub CMEK/CSEK for optional demo ingest topics (Google-managed encryption baseline)
-          # - CKV_SECRET_4: false-positive secret detection on DATABASE_URL format string template
-          # - CKV_GCP_60: public IP is an intentional low-cost default; private IP remains available via cloudsql_private_ip_enabled=true
-          docker run --rm -v "${{ github.workspace }}:/src" bridgecrew/checkov:latest \
-            -d "/src/${TF_DIR}" \
-            --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18,CKV_GCP_79,CKV_GCP_6,CKV_GCP_83,CKV_SECRET_4,CKV_GCP_60"
-
-      - name: conftest policy (docker)
-        run: |
-          set -euo pipefail
-          # Pass explicit *.tf files so we don't accidentally parse .terraform/** artifacts.
-          docker run --rm -v "${{ github.workspace }}:/project" -w /project openpolicyagent/conftest:latest test \
-            --parser hcl2 \
-            --policy infra/gcp/policy \
-            $(find "${TF_DIR}" -path "${TF_DIR}/.terraform" -prune -o -type f -name "*.tf" -print)
+      - name: Terraform hygiene (fmt/validate/tflint/tfsec/checkov/conftest)
+        run: make tf-check

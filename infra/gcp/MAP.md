@@ -57,9 +57,9 @@ This map answers: *what is actively used vs included for reference*.
 - `.github/workflows/terraform-hygiene.yml` — fmt/validate + tflint/tfsec/checkov/conftest (no GCP auth required)
 
 **Terraform plan/apply (GCP via WIF + GCS config)**
-- `.github/workflows/gcp-build-and-deploy.yml` — push to `main` → build image (Cloud Build) → `terraform apply` (deploy)
+- `.github/workflows/deploy-gcp.yml` — path-filtered push to `main` (or manual run) → build image (Cloud Build) → `make deploy-gcp-safe`
 - `.github/workflows/gcp-terraform-plan.yml` — manual `terraform plan`
-- `.github/workflows/terraform-apply-gcp.yml` — manual `terraform apply` (can be approval-gated via GitHub Environments)
+- `.github/workflows/terraform-apply-gcp.yml` — manual `terraform apply` with an explicit image tag (can be approval-gated via GitHub Environments)
 - `.github/workflows/terraform-drift.yml` — scheduled drift detection (`plan -detailed-exitcode`)
 
 These workflows assume a **single source of truth** in GCS:

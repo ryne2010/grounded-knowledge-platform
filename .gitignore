@@ -46,3 +46,4 @@ crash.*.log
 
 # Packaging metadata
 DIST_INFO.json
+.omx/

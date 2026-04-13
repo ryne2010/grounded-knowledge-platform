@@ -52,6 +52,10 @@ TF_DIR ?= infra/gcp/cloud_run_demo
 # Bucket names must be globally unique; using PROJECT_ID is usually sufficient.
 TF_STATE_BUCKET ?= $(PROJECT_ID)-tfstate
 TF_STATE_PREFIX ?= gkp/$(ENV)
+TF_CONFIG_BUCKET ?= $(PROJECT_ID)-config
+TF_CONFIG_PREFIX ?= gkp/$(ENV)
+TF_CONFIG_GCS_PATH ?= gs://$(TF_CONFIG_BUCKET)/$(TF_CONFIG_PREFIX)
+TF_BACKEND_HCL ?=
 # Workspace IAM starter pack (optional; Google Groups)
 WORKSPACE_DOMAIN ?=
 GROUP_PREFIX ?= gkp
@@ -95,27 +99,44 @@ define require
 	@command -v $(1) >/dev/null 2>&1 || (echo "Missing dependency: $(1)"; exit 1)
 endef
 
-.PHONY: help init auth doctor config bootstrap-state tf-init infra grant-cloudbuild plan apply build deploy url verify smoke smoke-local logs destroy lock release-bump release-notes clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit bigquery-export profile-retrieval
+.PHONY: help init auth doctor doctor-gcp config bootstrap-state bootstrap-state-gcp tf-config-bucket-gcp tf-config-print-gcp tf-config-pull-gcp tf-config-push-gcp tf-init tf-init-gcp infra infra-gcp grant-cloudbuild grant-cloudbuild-gcp plan plan-gcp apply apply-gcp build build-gcp deploy deploy-gcp deploy-gcp-safe url url-gcp verify verify-gcp smoke smoke-gcp smoke-local logs logs-gcp destroy destroy-gcp lock release-bump release-notes clean dist gcs-sync task-index queue codex-prompt backlog-export backlog-refresh backlog-audit bigquery-export profile-retrieval
 
 help:
 	@echo "Targets:"
 	@echo "  doctor            Check prerequisites and print resolved config"
+	@echo "  doctor-gcp        Alias for doctor (cloud deploy checks)"
 	@echo "  init              One-time setup: persist gcloud project/region (optional GCLOUD_CONFIG)"
 	@echo "  auth              Authenticate gcloud user + ADC (interactive)"
 	@echo "  config            (Optional) Create/activate a dedicated gcloud config (GCLOUD_CONFIG=...)"
 	@echo "  bootstrap-state   Create the remote Terraform state bucket (GCS)"
+	@echo "  bootstrap-state-gcp Alias for bootstrap-state"
+	@echo "  tf-config-print-gcp Print the GCS path used for backend.hcl + terraform.tfvars"
+	@echo "  tf-config-pull-gcp  Download backend.hcl + terraform.tfvars from GCS"
+	@echo "  tf-config-push-gcp  Upload local backend.hcl + terraform.tfvars back to GCS"
 	@echo "  tf-init           Terraform init with GCS backend-config"
+	@echo "  tf-init-gcp       Alias for tf-init"
 	@echo "  infra             Apply prerequisite infra (APIs, Artifact Registry, service accounts)"
+	@echo "  infra-gcp         Alias for infra"
 	@echo "  plan              Terraform plan (uses remote state)"
+	@echo "  plan-gcp          Alias for plan"
 	@echo "  apply             Terraform apply (deploy Cloud Run)"
+	@echo "  apply-gcp         Alias for apply"
 	@echo "  build             Build+push image with Cloud Build"
+	@echo "  build-gcp         Alias for build"
 	@echo "  deploy            infra + build + apply + smoke"
+	@echo "  deploy-gcp        Build + apply + verify"
+	@echo "  deploy-gcp-safe   Build + apply + smoke"
 	@echo "  url               Print Cloud Run service URL"
+	@echo "  url-gcp           Alias for url"
 	@echo "  verify            Hit /health and /api/meta"
+	@echo "  verify-gcp        Alias for verify"
 	@echo "  smoke             Post-deploy smoke suite (/health,/ready,/api/meta,/api/query)"
+	@echo "  smoke-gcp         Alias for smoke"
 	@echo "  smoke-local       Smoke suite against local API (default $(GKP_API_URL))"
 	@echo "  logs              Read recent Cloud Run logs"
+	@echo "  logs-gcp          Alias for logs"
 	@echo "  destroy           Terraform destroy (does NOT delete tfstate bucket)"
+	@echo "  destroy-gcp       Alias for destroy"
 	@echo "  lock              Generate lockfiles locally (uv.lock + pnpm-lock.yaml)"
 	@echo ""
 	@echo "Local dev / quality:"
@@ -164,6 +185,8 @@ help:
 	@echo "  IMAGE=$(IMAGE)"
 	@echo "  TF_STATE_BUCKET=$(TF_STATE_BUCKET)"
 	@echo "  TF_STATE_PREFIX=$(TF_STATE_PREFIX)"
+	@echo "  TF_CONFIG_GCS_PATH=$(TF_CONFIG_GCS_PATH)"
+	@echo "  TF_BACKEND_HCL=$(TF_BACKEND_HCL)"
 
 # -----------------------------
 # Local development (no GCP required)
@@ -526,7 +549,9 @@ doctor:
 	  echo "Doctor found missing required items for Cloud deploy targets."; \
 	  exit $$fail; \
 	fi; \
-	echo "Doctor OK."
+		echo "Doctor OK."
+doctor-gcp: doctor
+
 config:
 	@test -n "$(GCLOUD_CONFIG)" || (echo "Set GCLOUD_CONFIG=... (e.g., personal-portfolio)"; exit 1)
 	@$(MAKE) init GCLOUD_CONFIG="$(GCLOUD_CONFIG)" PROJECT_ID="$(PROJECT_ID)" REGION="$(REGION)"
@@ -542,16 +567,54 @@ bootstrap-state: doctor
 			echo "Creating bucket..."; \
 			gcloud storage buckets create "gs://$(TF_STATE_BUCKET)" --location="$(REGION)" --uniform-bucket-level-access --public-access-prevention; \
 			echo "Enabling versioning..."; \
-			gcloud storage buckets update "gs://$(TF_STATE_BUCKET)" --versioning; \
-		fi
+				gcloud storage buckets update "gs://$(TF_STATE_BUCKET)" --versioning; \
+			fi
+
+bootstrap-state-gcp: bootstrap-state
+
+tf-config-bucket-gcp: doctor-gcp
+	@echo "Ensuring Terraform config bucket exists: gs://$(TF_CONFIG_BUCKET)"
+	@if gcloud storage buckets describe "gs://$(TF_CONFIG_BUCKET)" >/dev/null 2>&1; then \
+		echo "Bucket already exists."; \
+	else \
+		echo "Creating bucket..."; \
+		gcloud storage buckets create "gs://$(TF_CONFIG_BUCKET)" --location="$(REGION)" --uniform-bucket-level-access --public-access-prevention; \
+	fi
+
+tf-config-print-gcp:
+	@echo "$(TF_CONFIG_GCS_PATH)"
+
+tf-config-pull-gcp: doctor-gcp
+	@set -euo pipefail; \
+	echo "Fetching Terraform config from: $(TF_CONFIG_GCS_PATH)"; \
+	gcloud storage cp "$(TF_CONFIG_GCS_PATH)/backend.hcl" "$(TF_DIR)/backend.hcl"; \
+	gcloud storage cp "$(TF_CONFIG_GCS_PATH)/terraform.tfvars" "$(TF_DIR)/terraform.tfvars"; \
+	echo "Downloaded $(TF_DIR)/backend.hcl and $(TF_DIR)/terraform.tfvars"
+
+tf-config-push-gcp: doctor-gcp tf-config-bucket-gcp
+	@set -euo pipefail; \
+	test -f "$(TF_DIR)/backend.hcl" || (echo "Missing $(TF_DIR)/backend.hcl"; exit 1); \
+	test -f "$(TF_DIR)/terraform.tfvars" || (echo "Missing $(TF_DIR)/terraform.tfvars"; exit 1); \
+	echo "Uploading Terraform config to: $(TF_CONFIG_GCS_PATH)"; \
+	gcloud storage cp "$(TF_DIR)/backend.hcl" "$(TF_CONFIG_GCS_PATH)/backend.hcl"; \
+	gcloud storage cp "$(TF_DIR)/terraform.tfvars" "$(TF_CONFIG_GCS_PATH)/terraform.tfvars"
 
 # Terraform init with explicit backend config.
 # Backend config is kept out of repo files to minimize environment-specific config.
-tf-init: doctor bootstrap-state
-	@echo "Terraform init (remote state)"
-	terraform -chdir=$(TF_DIR) init -reconfigure \
-		-backend-config="bucket=$(TF_STATE_BUCKET)" \
-		-backend-config="prefix=$(TF_STATE_PREFIX)"
+tf-init: doctor-gcp
+	@set -euo pipefail; \
+	if [ -n "$(TF_BACKEND_HCL)" ]; then \
+		echo "Terraform init (backend-config file): $(TF_BACKEND_HCL)"; \
+		terraform -chdir=$(TF_DIR) init -reconfigure -backend-config="$(TF_BACKEND_HCL)"; \
+	else \
+		$(MAKE) bootstrap-state-gcp; \
+		echo "Terraform init (remote state)"; \
+		terraform -chdir=$(TF_DIR) init -reconfigure \
+			-backend-config="bucket=$(TF_STATE_BUCKET)" \
+			-backend-config="prefix=$(TF_STATE_PREFIX)"; \
+	fi
+
+tf-init-gcp: tf-init
 
 # Apply prerequisite infra only (APIs, Artifact Registry, service accounts).
 # This creates the Artifact Registry repo BEFORE we build/push the container.
@@ -568,10 +631,13 @@ infra: tf-init
 		-var "deletion_protection=$(DELETION_PROTECTION)" \
 		-var "service_name=$(SERVICE_NAME)" \
 		-var "artifact_repo_name=$(AR_REPO)" \
-		-var "image=$(IMAGE)" \
+		-var "image_name=$(IMAGE_NAME)" \
+		-var "image_tag=$(TAG)" \
 		-target=module.core_services \
-		-target=module.artifact_registry \
-		-target=module.service_accounts
+			-target=module.artifact_registry \
+			-target=module.service_accounts
+
+infra-gcp: infra
 
 # Cloud Build needs permission to push to Artifact Registry.
 # This IAM binding is safe to re-run.
@@ -579,8 +645,10 @@ grant-cloudbuild: doctor
 	@PROJECT_NUMBER=$$(gcloud projects describe "$(PROJECT_ID)" --format='value(projectNumber)'); \
 	echo "Granting Cloud Build writer on Artifact Registry (project $$PROJECT_NUMBER)"; \
 	gcloud projects add-iam-policy-binding "$(PROJECT_ID)" \
-	  --member="serviceAccount:$${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
-	  --role="roles/artifactregistry.writer" >/dev/null
+		  --member="serviceAccount:$${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+		  --role="roles/artifactregistry.writer" >/dev/null
+
+grant-cloudbuild-gcp: grant-cloudbuild
 
 # Standard plan/apply separation for team workflows.
 plan: tf-init
@@ -595,8 +663,11 @@ plan: tf-init
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
 		-var "deletion_protection=$(DELETION_PROTECTION)" \
 		-var "service_name=$(SERVICE_NAME)" \
-		-var "artifact_repo_name=$(AR_REPO)" \
-		-var "image=$(IMAGE)"
+			-var "artifact_repo_name=$(AR_REPO)" \
+			-var "image_name=$(IMAGE_NAME)" \
+			-var "image_tag=$(TAG)"
+
+plan-gcp: plan
 
 apply: tf-init
 	terraform -chdir=$(TF_DIR) apply -auto-approve \
@@ -610,8 +681,11 @@ apply: tf-init
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
 		-var "deletion_protection=$(DELETION_PROTECTION)" \
 		-var "service_name=$(SERVICE_NAME)" \
-		-var "artifact_repo_name=$(AR_REPO)" \
-		-var "image=$(IMAGE)"
+			-var "artifact_repo_name=$(AR_REPO)" \
+			-var "image_name=$(IMAGE_NAME)" \
+			-var "image_tag=$(TAG)"
+
+apply-gcp: apply
 
 # Build + push image using Cloud Build (recommended on macOS and in CI).
 # This avoids cross-architecture issues and keeps the workflow consistent.
@@ -620,18 +694,28 @@ build: doctor infra grant-cloudbuild
 	# Use the repo's cloudbuild.yaml so we don't rely on a root Dockerfile.
 	gcloud builds submit --config cloudbuild.yaml --substitutions "_IMAGE=$(IMAGE)" .
 
+build-gcp: build
+
 # One-command demo deployment.
 # Safe to run repeatedly; converges infrastructure.
-deploy: build apply smoke
+deploy: build-gcp apply-gcp smoke-gcp
+
+deploy-gcp: build-gcp apply-gcp verify-gcp
+
+deploy-gcp-safe: build-gcp apply-gcp smoke-gcp
 
 url: tf-init
 	@terraform -chdir=$(TF_DIR) output -raw service_url
+
+url-gcp: url
 
 verify: tf-init
 	@URL=$$(terraform -chdir=$(TF_DIR) output -raw service_url); \
 	echo "Service URL: $$URL"; \
 	curl -fsS "$$URL/health" >/dev/null && echo "OK: /health"; \
 	curl -fsS "$$URL/api/meta" >/dev/null && echo "OK: /api/meta"
+
+verify-gcp: verify
 
 smoke: ## Post-deploy smoke checks (use SMOKE_URL=... to override Terraform output URL)
 	@set -euo pipefail; \
@@ -647,8 +731,10 @@ smoke: ## Post-deploy smoke checks (use SMOKE_URL=... to override Terraform outp
 	  --timeout-s "$(SMOKE_TIMEOUT_S)" \
 	  --retries "$(SMOKE_RETRIES)" \
 	  --retry-delay-s "$(SMOKE_RETRY_DELAY_S)"); \
-	if [ -n "$(SMOKE_API_KEY)" ]; then CMD+=(--api-key "$(SMOKE_API_KEY)"); fi; \
-	"$${CMD[@]}"
+		if [ -n "$(SMOKE_API_KEY)" ]; then CMD+=(--api-key "$(SMOKE_API_KEY)"); fi; \
+		"$${CMD[@]}"
+
+smoke-gcp: smoke
 
 smoke-local: ## Smoke checks against local API (default: GKP_API_URL)
 	@set -euo pipefail; \
@@ -665,6 +751,8 @@ smoke-local: ## Smoke checks against local API (default: GKP_API_URL)
 logs: doctor
 	gcloud run services logs read "$(SERVICE_NAME)" --region "$(REGION)" --limit 100
 
+logs-gcp: logs
+
 # Destroy only the Terraform-managed resources (NOT the state bucket).
 destroy: tf-init
 	terraform -chdir=$(TF_DIR) destroy -auto-approve \
@@ -678,8 +766,11 @@ destroy: tf-init
 		-var "enable_observability=$(ENABLE_OBSERVABILITY)" \
 		-var "deletion_protection=$(DELETION_PROTECTION)" \
 		-var "service_name=$(SERVICE_NAME)" \
-		-var "artifact_repo_name=$(AR_REPO)" \
-		-var "image=$(IMAGE)"
+			-var "artifact_repo_name=$(AR_REPO)" \
+			-var "image_name=$(IMAGE_NAME)" \
+			-var "image_tag=$(TAG)"
+
+destroy-gcp: destroy
 
 # Generate lockfiles locally for team reproducibility.
 # We don't auto-run this in CI because it depends on registry access.
@@ -723,6 +814,7 @@ release-notes: ## Extract release notes for VERSION from CHANGELOG.md
 # -----------------------------------------------------------------------------
 
 POLICY_DIR := infra/gcp/policy
+TF_CHECKOV_SKIP_CHECKS := CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18,CKV_GCP_79,CKV_GCP_6,CKV_GCP_83,CKV_SECRET_4,CKV_GCP_60
 
 .PHONY: tf-fmt tf-validate tf-lint tf-sec tf-checkov tf-policy tf-check
 
@@ -756,14 +848,15 @@ tf-sec: ## tfsec (falls back to docker)
 tf-checkov: ## checkov (falls back to docker)
 	@# Keep skip list aligned with .github/workflows/terraform-hygiene.yml.
 	@# These checks are intentionally out-of-scope for this baseline demo stack.
+	@# - CKV_GCP_60: public IP is an intentional low-cost default; private IP remains available via cloudsql_private_ip_enabled=true
 	@if command -v checkov >/dev/null 2>&1; then \
 	  echo "Running checkov (local)"; \
-	  checkov -d $(TF_DIR) --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18,CKV_GCP_79,CKV_GCP_6,CKV_GCP_83,CKV_SECRET_4"; \
+	  checkov -d $(TF_DIR) --skip-check "$(TF_CHECKOV_SKIP_CHECKS)"; \
 	else \
 	  echo "checkov not found; running via Docker"; \
 	  docker run --rm -v "$$(pwd):/src" bridgecrew/checkov:latest \
 	    -d "/src/$(TF_DIR)" \
-	    --skip-check "CKV_GCP_84,CKV_GCP_26,CKV2_GCP_18,CKV_GCP_79,CKV_GCP_6,CKV_GCP_83,CKV_SECRET_4"; \
+	    --skip-check "$(TF_CHECKOV_SKIP_CHECKS)"; \
 	fi
 
 tf-policy: ## OPA/Conftest policy gate for Terraform (falls back to docker)

@@ -1,77 +1,210 @@
-name: terraform-drift-detection
+name: Terraform drift (GCP)
 
 on:
+  schedule:
+    - cron: "17 7 * * *"
   workflow_dispatch:
     inputs:
       env:
-        description: "Environment workspace (dev|stage|prod)"
+        description: "Environment to check (dev/stage/prod)."
         required: true
-        default: "dev"
-  schedule:
-    # Weekly drift check (Mondays 09:00 UTC)
-    - cron: "0 9 * * 1"
+        default: "prod"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: gcp-infra-${{ github.event.inputs.env || 'prod' }}
+  cancel-in-progress: false
 
 jobs:
   drift:
     runs-on: ubuntu-latest
-    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.env || 'dev' }}
-    concurrency:
-      group: terraform-drift-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.env || 'dev' }}
-      cancel-in-progress: true
-    permissions:
-      contents: read
-      id-token: write
+    environment: ${{ github.event.inputs.env || 'prod' }}
 
     env:
-      TF_DIR: infra/gcp/cloud_run_demo
-      TF_CONFIG_GCS_PATH: ${{ vars.GCP_TF_CONFIG_GCS_PATH }}
+      PROJECT_ID: ${{ vars.PROJECT_ID }}
+      REGION: ${{ vars.REGION }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      TF_STATE_PREFIX: ${{ vars.TF_STATE_PREFIX }}
+      AR_REPO: ${{ vars.AR_REPO }}
       GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
       GCP_WIF_SERVICE_ACCOUNT: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+      GCP_TF_CONFIG_GCS_PATH: ${{ vars.GCP_TF_CONFIG_GCS_PATH }}
+      TF_DIR: infra/gcp/cloud_run_demo
 
     steps:
-      - name: Assert required GitHub Environment variables
+      - name: Assert required GitHub variables
         shell: bash
         run: |
           set -euo pipefail
-          : "These must be set at: Repo → Settings → Environments → <env> → Variables"
-          test -n "${GCP_WIF_PROVIDER}" || { echo "::error::Missing env var: GCP_WIF_PROVIDER"; exit 1; }
-          test -n "${GCP_WIF_SERVICE_ACCOUNT}" || { echo "::error::Missing env var: GCP_WIF_SERVICE_ACCOUNT"; exit 1; }
-          test -n "${TF_CONFIG_GCS_PATH}" || { echo "::error::Missing env var: GCP_TF_CONFIG_GCS_PATH"; exit 1; }
+          test -n "${GCP_WIF_PROVIDER}" || { echo "::error::Missing variable: GCP_WIF_PROVIDER"; exit 1; }
+          test -n "${GCP_WIF_SERVICE_ACCOUNT}" || { echo "::error::Missing variable: GCP_WIF_SERVICE_ACCOUNT"; exit 1; }
+          test -n "${GCP_TF_CONFIG_GCS_PATH}" || { echo "::error::Missing variable: GCP_TF_CONFIG_GCS_PATH"; exit 1; }
+          test -n "${PROJECT_ID}" || { echo "::error::Missing variable: PROJECT_ID"; exit 1; }
+          test -n "${REGION}" || { echo "::error::Missing variable: REGION"; exit 1; }
 
-          echo "WIF provider is set (length: ${#GCP_WIF_PROVIDER})"
-          echo "WIF service account: ${GCP_WIF_SERVICE_ACCOUNT}"
-          echo "Terraform config path: ${TF_CONFIG_GCS_PATH}"
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
-
-      - name: Auth to Google Cloud (WIF)
+      - name: Authenticate to Google Cloud (WIF)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
           service_account: ${{ env.GCP_WIF_SERVICE_ACCOUNT }}
 
-      - name: Setup gcloud
+      - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Fetch Terraform config from GCS
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.14.5"
+
+      - name: Fetch Terraform config bundle from GCS
         shell: bash
         run: |
           set -euo pipefail
-          echo "Fetching Terraform config from: ${TF_CONFIG_GCS_PATH}"
-          gcloud storage cp "${TF_CONFIG_GCS_PATH}/backend.hcl" "${TF_DIR}/backend.hcl"
-          gcloud storage cp "${TF_CONFIG_GCS_PATH}/terraform.tfvars" "${TF_DIR}/terraform.tfvars"
+          echo "Fetching Terraform config from: ${GCP_TF_CONFIG_GCS_PATH}"
+          gcloud storage cp "${GCP_TF_CONFIG_GCS_PATH}/backend.hcl" "${TF_DIR}/backend.hcl"
+          gcloud storage cp "${GCP_TF_CONFIG_GCS_PATH}/terraform.tfvars" "${TF_DIR}/terraform.tfvars"
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.14.4"
-
-      - name: Terraform init (remote state)
-        run: |
-          terraform -chdir=${TF_DIR} init -reconfigure \
-            -backend-config="backend.hcl"
-
-      - name: Terraform plan (detect drift)
+      - name: Parse Terraform config bundle
+        id: cfg
+        env:
+          WORKFLOW_ENV: ${{ github.event.inputs.env || 'prod' }}
+        shell: bash
         run: |
           set -euo pipefail
-          terraform -chdir=${TF_DIR} plan -detailed-exitcode -no-color
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          tfvars_path = pathlib.Path(os.environ["TF_DIR"]) / "terraform.tfvars"
+          text = tfvars_path.read_text(encoding="utf-8")
+
+          def get_str(key: str, default: str = "") -> str:
+              quoted = re.search(rf'^\s*{re.escape(key)}\s*=\s*"([^"]*)"\s*(?:#.*)?$', text, re.M)
+              if quoted:
+                  return quoted.group(1)
+              bare = re.search(rf'^\s*{re.escape(key)}\s*=\s*([^\s#]+)\s*(?:#.*)?$', text, re.M)
+              if bare:
+                  return bare.group(1)
+              return default
+
+          def get_bool(key: str, default: bool) -> bool:
+              value = get_str(key, "")
+              if not value:
+                  return default
+              return value.lower() == "true"
+
+          def image_tag_from_image(image: str) -> str:
+              if not image or "@" in image:
+                  return ""
+              tag = image.rsplit(":", 1)[-1]
+              return tag if "/" not in tag else ""
+
+          env_name = get_str("env", os.environ["WORKFLOW_ENV"])
+          service_name = get_str("service_name", f"gkp-{env_name}")
+          artifact_repo_name = get_str("artifact_repo_name", os.environ.get("AR_REPO") or "gkp")
+          image_name = get_str("image_name", "gkp")
+          workspace_domain = get_str("workspace_domain", "")
+          group_prefix = get_str("group_prefix", "gkp")
+          clients_observers_group_email = get_str("clients_observers_group_email", "")
+          enable_clients_observers_monitoring_viewer = "true" if get_bool("enable_clients_observers_monitoring_viewer", False) else "false"
+          enable_observability = "true" if get_bool("enable_observability", True) else "false"
+          deletion_protection = "true" if get_bool("deletion_protection", False) else "false"
+          image_tag = get_str("image_tag", "")
+          if not image_tag:
+              image_tag = image_tag_from_image(get_str("image", ""))
+
+          outputs = {
+              "env_name": env_name,
+              "service_name": service_name,
+              "artifact_repo_name": artifact_repo_name,
+              "image_name": image_name,
+              "workspace_domain": workspace_domain,
+              "group_prefix": group_prefix,
+              "clients_observers_group_email": clients_observers_group_email,
+              "enable_clients_observers_monitoring_viewer": enable_clients_observers_monitoring_viewer,
+              "enable_observability": enable_observability,
+              "deletion_protection": deletion_protection,
+              "image_tag": image_tag,
+          }
+          out_path = pathlib.Path(os.environ["GITHUB_OUTPUT"])
+          with out_path.open("a", encoding="utf-8") as handle:
+              for key, value in outputs.items():
+                  handle.write(f"{key}={value}\n")
+          PY
+
+      - name: Configure gcloud defaults
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud config set project "${PROJECT_ID}"
+          gcloud config set run/region "${REGION}"
+
+      - name: Terraform drift check (plan -detailed-exitcode)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TF_STATE_BUCKET_EFFECTIVE="${TF_STATE_BUCKET:-${PROJECT_ID}-tfstate}"
+          TF_STATE_PREFIX_EFFECTIVE="${TF_STATE_PREFIX:-gkp/${{ steps.cfg.outputs.env_name }}}"
+          AR_REPO_EFFECTIVE="${{ steps.cfg.outputs.artifact_repo_name }}"
+          TAG_EFFECTIVE="${{ steps.cfg.outputs.image_tag }}"
+
+          if [ -z "${TAG_EFFECTIVE}" ]; then
+            TAG_EFFECTIVE="latest"
+          fi
+
+          make tf-init-gcp \
+            PROJECT_ID="${PROJECT_ID}" \
+            REGION="${REGION}" \
+            ENV="${{ steps.cfg.outputs.env_name }}" \
+            SERVICE_NAME="${{ steps.cfg.outputs.service_name }}" \
+            AR_REPO="${AR_REPO_EFFECTIVE}" \
+            WORKSPACE_DOMAIN="${{ steps.cfg.outputs.workspace_domain }}" \
+            GROUP_PREFIX="${{ steps.cfg.outputs.group_prefix }}" \
+            CLIENTS_OBSERVERS_GROUP_EMAIL="${{ steps.cfg.outputs.clients_observers_group_email }}" \
+            ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER="${{ steps.cfg.outputs.enable_clients_observers_monitoring_viewer }}" \
+            ENABLE_OBSERVABILITY="${{ steps.cfg.outputs.enable_observability }}" \
+            DELETION_PROTECTION="${{ steps.cfg.outputs.deletion_protection }}" \
+            TF_STATE_BUCKET="${TF_STATE_BUCKET_EFFECTIVE}" \
+            TF_STATE_PREFIX="${TF_STATE_PREFIX_EFFECTIVE}" \
+            TF_BACKEND_HCL="backend.hcl" \
+            IMAGE_NAME="${{ steps.cfg.outputs.image_name }}" \
+            TAG="${TAG_EFFECTIVE}"
+
+          set +e
+          terraform -chdir="${TF_DIR}" plan -detailed-exitcode -no-color \
+            -var "project_id=${PROJECT_ID}" \
+            -var "region=${REGION}" \
+            -var "env=${{ steps.cfg.outputs.env_name }}" \
+            -var "workspace_domain=${{ steps.cfg.outputs.workspace_domain }}" \
+            -var "group_prefix=${{ steps.cfg.outputs.group_prefix }}" \
+            -var "clients_observers_group_email=${{ steps.cfg.outputs.clients_observers_group_email }}" \
+            -var "enable_clients_observers_monitoring_viewer=${{ steps.cfg.outputs.enable_clients_observers_monitoring_viewer }}" \
+            -var "enable_observability=${{ steps.cfg.outputs.enable_observability }}" \
+            -var "deletion_protection=${{ steps.cfg.outputs.deletion_protection }}" \
+            -var "service_name=${{ steps.cfg.outputs.service_name }}" \
+            -var "artifact_repo_name=${AR_REPO_EFFECTIVE}" \
+            -var "image_name=${{ steps.cfg.outputs.image_name }}" \
+            -var "image_tag=${TAG_EFFECTIVE}"
+          rc=$?
+          set -e
+
+          if [ $rc -eq 0 ]; then
+            echo "No drift detected."
+            exit 0
+          fi
+
+          if [ $rc -eq 2 ]; then
+            echo "Terraform drift detected!"
+            exit 2
+          fi
+
+          echo "Terraform plan failed with exit code $rc"
+          exit $rc

@@ -1,29 +1,40 @@
-name: Terraform plan (GCP)
+name: Deploy to GCP (Cloud Run)
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "web/**"
+      - "docker/**"
+      - "cloudbuild.yaml"
+      - "infra/gcp/cloud_run_demo/**"
+      - "infra/gcp/modules/**"
+      - "scripts/**"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/deploy-gcp.yml"
+      - ".github/workflows/terraform-apply-gcp.yml"
   workflow_dispatch:
     inputs:
       env:
-        description: "Environment name (dev/stage/prod)."
+        description: "Environment to deploy (dev/stage/prod)."
         required: true
         default: "dev"
-      image_tag:
-        description: "Optional Artifact Registry image tag to preview in the plan."
-        required: false
-        default: ""
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: gcp-infra-${{ github.event.inputs.env }}
+  group: gcp-infra-${{ github.event.inputs.env || 'dev' }}
   cancel-in-progress: false
 
 jobs:
-  plan:
+  deploy:
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.env }}
+    environment: ${{ github.event.inputs.env || 'dev' }}
 
     env:
       PROJECT_ID: ${{ vars.PROJECT_ID }}
@@ -75,7 +86,7 @@ jobs:
       - name: Parse Terraform config bundle
         id: cfg
         env:
-          WORKFLOW_ENV: ${{ github.event.inputs.env }}
+          WORKFLOW_ENV: ${{ github.event.inputs.env || 'dev' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -102,12 +113,6 @@ jobs:
                   return default
               return value.lower() == "true"
 
-          def image_tag_from_image(image: str) -> str:
-              if not image or "@" in image:
-                  return ""
-              tag = image.rsplit(":", 1)[-1]
-              return tag if "/" not in tag else ""
-
           env_name = get_str("env", os.environ["WORKFLOW_ENV"])
           service_name = get_str("service_name", f"gkp-{env_name}")
           artifact_repo_name = get_str("artifact_repo_name", os.environ.get("AR_REPO") or "gkp")
@@ -118,9 +123,6 @@ jobs:
           enable_clients_observers_monitoring_viewer = "true" if get_bool("enable_clients_observers_monitoring_viewer", False) else "false"
           enable_observability = "true" if get_bool("enable_observability", True) else "false"
           deletion_protection = "true" if get_bool("deletion_protection", False) else "false"
-          image_tag = get_str("image_tag", "")
-          if not image_tag:
-              image_tag = image_tag_from_image(get_str("image", ""))
 
           outputs = {
               "env_name": env_name,
@@ -133,7 +135,6 @@ jobs:
               "enable_clients_observers_monitoring_viewer": enable_clients_observers_monitoring_viewer,
               "enable_observability": enable_observability,
               "deletion_protection": deletion_protection,
-              "image_tag": image_tag,
           }
           out_path = pathlib.Path(os.environ["GITHUB_OUTPUT"])
           with out_path.open("a", encoding="utf-8") as handle:
@@ -148,9 +149,7 @@ jobs:
           gcloud config set project "${PROJECT_ID}"
           gcloud config set run/region "${REGION}"
 
-      - name: Terraform plan
-        env:
-          IMAGE_TAG_INPUT: ${{ github.event.inputs.image_tag }}
+      - name: Build image
         shell: bash
         run: |
           set -euo pipefail
@@ -158,18 +157,14 @@ jobs:
           TF_STATE_BUCKET_EFFECTIVE="${TF_STATE_BUCKET:-${PROJECT_ID}-tfstate}"
           TF_STATE_PREFIX_EFFECTIVE="${TF_STATE_PREFIX:-gkp/${{ steps.cfg.outputs.env_name }}}"
           AR_REPO_EFFECTIVE="${{ steps.cfg.outputs.artifact_repo_name }}"
-          TAG_EFFECTIVE="${IMAGE_TAG_INPUT:-${{ steps.cfg.outputs.image_tag }}}"
 
-          if [ -z "${TAG_EFFECTIVE}" ]; then
-            TAG_EFFECTIVE="latest"
-          fi
-
-          make plan-gcp \
+          make build-gcp \
             PROJECT_ID="${PROJECT_ID}" \
             REGION="${REGION}" \
             ENV="${{ steps.cfg.outputs.env_name }}" \
             SERVICE_NAME="${{ steps.cfg.outputs.service_name }}" \
             AR_REPO="${AR_REPO_EFFECTIVE}" \
+            IMAGE_NAME="${{ steps.cfg.outputs.image_name }}" \
             WORKSPACE_DOMAIN="${{ steps.cfg.outputs.workspace_domain }}" \
             GROUP_PREFIX="${{ steps.cfg.outputs.group_prefix }}" \
             CLIENTS_OBSERVERS_GROUP_EMAIL="${{ steps.cfg.outputs.clients_observers_group_email }}" \
@@ -179,5 +174,83 @@ jobs:
             TF_STATE_BUCKET="${TF_STATE_BUCKET_EFFECTIVE}" \
             TF_STATE_PREFIX="${TF_STATE_PREFIX_EFFECTIVE}" \
             TF_BACKEND_HCL="backend.hcl" \
+            TAG="${{ github.sha }}"
+
+      - name: Persist image tag to Terraform config bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          tfvars_path = pathlib.Path(os.environ["TF_DIR"]) / "terraform.tfvars"
+          text = tfvars_path.read_text(encoding="utf-8")
+
+          updates = {
+              "image": "",
+              "image_name": "${{ steps.cfg.outputs.image_name }}",
+              "image_tag": "${{ github.sha }}",
+          }
+
+          for key, value in updates.items():
+              pattern = re.compile(rf'^\s*{re.escape(key)}\s*=.*$', re.M)
+              replacement = f'{key} = "{value}"'
+              if pattern.search(text):
+                  text = pattern.sub(replacement, text, count=1)
+              else:
+                  if text and not text.endswith("\n"):
+                      text += "\n"
+                  text += replacement + "\n"
+
+          tfvars_path.write_text(text, encoding="utf-8")
+          PY
+
+          gcloud storage cp "${TF_DIR}/terraform.tfvars" "${GCP_TF_CONFIG_GCS_PATH}/terraform.tfvars"
+
+      - name: Apply + smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TF_STATE_BUCKET_EFFECTIVE="${TF_STATE_BUCKET:-${PROJECT_ID}-tfstate}"
+          TF_STATE_PREFIX_EFFECTIVE="${TF_STATE_PREFIX:-gkp/${{ steps.cfg.outputs.env_name }}}"
+          AR_REPO_EFFECTIVE="${{ steps.cfg.outputs.artifact_repo_name }}"
+
+          make apply-gcp \
+            PROJECT_ID="${PROJECT_ID}" \
+            REGION="${REGION}" \
+            ENV="${{ steps.cfg.outputs.env_name }}" \
+            SERVICE_NAME="${{ steps.cfg.outputs.service_name }}" \
+            AR_REPO="${AR_REPO_EFFECTIVE}" \
             IMAGE_NAME="${{ steps.cfg.outputs.image_name }}" \
-            TAG="${TAG_EFFECTIVE}"
+            WORKSPACE_DOMAIN="${{ steps.cfg.outputs.workspace_domain }}" \
+            GROUP_PREFIX="${{ steps.cfg.outputs.group_prefix }}" \
+            CLIENTS_OBSERVERS_GROUP_EMAIL="${{ steps.cfg.outputs.clients_observers_group_email }}" \
+            ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER="${{ steps.cfg.outputs.enable_clients_observers_monitoring_viewer }}" \
+            ENABLE_OBSERVABILITY="${{ steps.cfg.outputs.enable_observability }}" \
+            DELETION_PROTECTION="${{ steps.cfg.outputs.deletion_protection }}" \
+            TF_STATE_BUCKET="${TF_STATE_BUCKET_EFFECTIVE}" \
+            TF_STATE_PREFIX="${TF_STATE_PREFIX_EFFECTIVE}" \
+            TF_BACKEND_HCL="backend.hcl" \
+            TAG="${{ github.sha }}"
+
+          make smoke-gcp \
+            PROJECT_ID="${PROJECT_ID}" \
+            REGION="${REGION}" \
+            ENV="${{ steps.cfg.outputs.env_name }}" \
+            SERVICE_NAME="${{ steps.cfg.outputs.service_name }}" \
+            AR_REPO="${AR_REPO_EFFECTIVE}" \
+            IMAGE_NAME="${{ steps.cfg.outputs.image_name }}" \
+            WORKSPACE_DOMAIN="${{ steps.cfg.outputs.workspace_domain }}" \
+            GROUP_PREFIX="${{ steps.cfg.outputs.group_prefix }}" \
+            CLIENTS_OBSERVERS_GROUP_EMAIL="${{ steps.cfg.outputs.clients_observers_group_email }}" \
+            ENABLE_CLIENTS_OBSERVERS_MONITORING_VIEWER="${{ steps.cfg.outputs.enable_clients_observers_monitoring_viewer }}" \
+            ENABLE_OBSERVABILITY="${{ steps.cfg.outputs.enable_observability }}" \
+            DELETION_PROTECTION="${{ steps.cfg.outputs.deletion_protection }}" \
+            TF_STATE_BUCKET="${TF_STATE_BUCKET_EFFECTIVE}" \
+            TF_STATE_PREFIX="${TF_STATE_PREFIX_EFFECTIVE}" \
+            TF_BACKEND_HCL="backend.hcl" \
+            TAG="${{ github.sha }}"
