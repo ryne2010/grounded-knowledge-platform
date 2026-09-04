@@ -1,259 +1,78 @@
 # Grounded Knowledge Platform
 
-A small, safety-minded, citation-first **RAG** (retrieval augmented generation) reference app.
+**Answers that show their work—or refuse.**
 
-- **FastAPI** backend + **React (Vite)** frontend
-- **Postgres** storage (Cloud SQL baseline for production); **SQLite** fallback for local/demo
-- **Cloud SQL (Postgres)** wiring for Cloud Run deployments
-- **Hybrid retrieval** (lexical + vector)
-- **Grounding enforced**: answers must be supported by retrieved sources (or the system refuses)
-- **Public demo mode**: read-only + extractive answering + rate limiting
+[![CI](https://github.com/ryne2010/grounded-knowledge-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/ryne2010/grounded-knowledge-platform/actions/workflows/ci.yml)
 
-## Documentation map
+Grounded Knowledge Platform is a citations-first retrieval system for small document collections. It ingests text, Markdown, PDF, and tabular files; combines lexical and vector search; and returns evidence with each answer. When the indexed sources do not support an answer, the API returns an explicit refusal.
 
-- Agent entrypoint: `AGENTS.md`
-- Product: `docs/PRODUCT/PRODUCT_BRIEF.md`, `docs/PRODUCT/FEATURE_MATRIX.md`
-- UX journeys + demo script: `docs/PRODUCT/PERSONAS_AND_JOURNEYS.md`, `docs/PRODUCT/DEMO_SCRIPT.md`
-- Portfolio alignment (what this proves): `docs/PRODUCT/PORTFOLIO_ALIGNMENT.md`
-- Architecture (C4 + models): `docs/ARCHITECTURE/README.md`
-- Durable architecture rules: `docs/DOMAIN.md`, `docs/DESIGN.md`, `docs/CONTRACTS.md`
-- Backlog: `docs/BACKLOG/EPICS.md`, `docs/BACKLOG/MILESTONES.md`
-- Workflow: `docs/WORKFLOW.md`
-- Deployment model: `docs/DEPLOYMENT_MODEL.md`
-- Roadmap: `docs/ROADMAP.md`
-- Specs: `docs/SPECS/`
-- Runbooks: `docs/RUNBOOKS/`
-- Release process: `docs/RELEASES.md`
-- BigQuery export runbook (private deployments): `docs/RUNBOOKS/BIGQUERY_EXPORT.md`
-- BigQuery modeling notes (raw->curated->marts): `docs/BIGQUERY_MODELING.md`
+The default path runs locally without an external model or API key. SQLite, deterministic hash embeddings, and extractive answering make the trust boundary easy to inspect before adding managed infrastructure or a generative provider.
 
-This repo is intentionally designed to run well:
+## Why it exists
 
-- on an **M2 Max MacBook Pro** for development
-- on **Cloud Run** for production
+A useful knowledge system needs more than a plausible response. It needs to explain where the response came from, behave predictably when retrieval fails, and preserve enough history to diagnose a regression.
 
----
+| Risk | Implemented control |
+| --- | --- |
+| Unsupported answer | Citations are required; insufficient evidence produces a refusal |
+| Prompt injection | Suspicious query patterns are screened before answering |
+| Corpus drift | Content hashes, document versions, and immutable ingest events preserve lineage |
+| Retrieval regression | Golden-set evaluation records hit rate, mean reciprocal rank, and configuration |
+| Unsafe public exposure | Demo mode forces read-only, extractive behavior and rate-limits queries |
 
-## Quickstart (M2 Max MacBook Pro)
+## How it works
 
-Full setup notes: `docs/DEV_SETUP_MACOS.md`.
+```mermaid
+flowchart LR
+    D[Documents] --> I[Extract, chunk, hash, embed]
+    I --> S[(SQLite or Postgres)]
+    Q[Question] --> G[Safety screen]
+    G --> R[Hybrid retrieval]
+    S --> R
+    R --> E{Enough evidence?}
+    E -->|yes| A[Answer + citations]
+    E -->|no| F[Explicit refusal]
+```
 
-Prereqs:
+FastAPI owns ingestion, retrieval, policy enforcement, and the HTTP contract. React provides the question-and-answer, document, lineage, evaluation, and maintenance views. Postgres with `pgvector` is the persistence baseline for Cloud Run; SQLite keeps the default local path lightweight.
 
-- Python **3.11+**
-- [`uv`](https://github.com/astral-sh/uv)
-- Node **20+**
-- `pnpm` via Corepack (`corepack enable && corepack prepare pnpm@9.15.0 --activate`)
+## Run it locally
 
-### 1) Configure env
+You need Python 3.11+, [`uv`](https://docs.astral.sh/uv/), Node 20+, and Corepack-enabled `pnpm`.
 
 ```bash
 cp .env.example .env
-```
-
-For local development with **Postgres + Ollama** (recommended for parity with production), use:
-
-```bash
-cp .env.local.example .env
-make db-up
-```
-
-By default `.env.example` enables `PUBLIC_DEMO_MODE=1` (read-only). For local/private development, disable it and enable uploads:
-
-```bash
-# .env
-PUBLIC_DEMO_MODE=0
-ALLOW_UPLOADS=1
-ALLOW_CONNECTORS=1
-ALLOW_EVAL=1
-
-# Dangerous / internal-only (never enable on a public URL)
-ALLOW_CHUNK_VIEW=0
-ALLOW_DOC_DELETE=0
-
-CITATIONS_REQUIRED=1
-BOOTSTRAP_DEMO_CORPUS=1
-```
-
-### 2) Install deps
-
-```bash
 make py-install
 make web-install
-```
-
-### 3) Run (two terminals)
-
-Backend:
-
-```bash
-make run-api
-```
-
-Frontend:
-
-```bash
-make run-ui
-```
-
-Or run both concurrently:
-
-```bash
 make dev
 ```
 
-Open:
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The safe default bootstraps the bundled cloud-platform corpus, disables writes, uses local hash embeddings, and answers extractively. Stop both processes with `Ctrl-C`.
 
-- UI: http://127.0.0.1:5173
-- API: http://127.0.0.1:8080
+For a private local workspace, disable `PUBLIC_DEMO_MODE` and opt into only the write capabilities you need. The [development guide](docs/DEV_SETUP_MACOS.md) covers Postgres, Ollama, higher-quality embeddings, and OCR.
 
----
+## Trust boundaries
 
-## Key concepts
+`PUBLIC_DEMO_MODE=1` is the required posture for an anonymous URL. It disables uploads, evaluation, chunk inspection, and deletion; forces extractive answers and citations; and enables an in-process query limiter. Private deployments may add API-key roles, GCS ingestion, external answer providers, and administrative features behind explicit gates.
 
-- **Doc**: top-level document record (title, source, metadata)
-- **Chunk**: character-based chunking of doc text
-- **Embedding**: vector representation per chunk (hash / sentence-transformers / none; sentence-transformers is an optional extra)
-- **Ingest event**: lineage record for every ingest (content hash, settings, version)
-- **Citation**: chunk quote returned alongside an answer
+The repository includes a Terraform path for Cloud Run and Cloud SQL, but does not claim a verified live deployment. Its baseline isolates clients by GCP project rather than operating as shared multi-tenant SaaS. OIDC is reserved, not implemented, and the in-memory rate limiter is intended for a single demo instance. Prompt screening is a guardrail, not a complete content-security or compliance system.
 
----
-
-## Safety / deployment modes
-
-### PUBLIC_DEMO_MODE (recommended for public URLs)
-
-`PUBLIC_DEMO_MODE=1` forces:
-
-- no uploads
-- no eval endpoints
-- **extractive** answering only
-- rate limiting on `/api/query`
-- citations-required behavior forced on
-- chunk viewing disabled
-
-### Private deployment toggles
-
-These are **dangerous** on a public URL, but useful for private/internal deployments:
-
-- `ALLOW_UPLOADS=1` – enables ingestion endpoints (and doc metadata edits)
-- `ALLOW_EVAL=1` – enables `/api/eval/run`
-- `ALLOW_CHUNK_VIEW=1` – allows full chunk text viewing via `/api/chunks/*`
-- `ALLOW_DOC_DELETE=1` – enables `DELETE /api/docs/{doc_id}`
-
-Defense in depth:
-
-- `MAX_UPLOAD_BYTES=10000000` (10MB default)
-
----
-
-## Ingesting documents
-
-### UI
-
-Use the **Upload file** / **Upload directory** / **Paste text** cards on the **Ingest** page.
-
-Supported file uploads:
-
-- `.txt`, `.md`
-- `.pdf` (optional OCR when `OCR_ENABLED=1`; requires `tesseract` locally)
-- `.csv`, `.tsv` (tabular ingestion is rendered into retrieval-friendly text)
-- `.xlsx` / `.xlsm` (uses `openpyxl`, included in the default dependency set)
-
-For tabular files, you can optionally attach a YAML `contract_file` to validate required columns/types and record schema drift in ingest lineage.
-
-Directory uploads process each file best-effort and return a per-file run summary in the UI.
-For v1, tabular contracts apply to single-file uploads (not directory uploads).
-
-To ingest docs and inspect ingest lineage across all docs, open the **Ingest** page.
-
-For index/config health, open the **Dashboard** page.
-
-You can attach metadata:
-
-- classification: `public|internal|confidential|restricted`
-- retention: `none|30d|90d|1y|indefinite`
-- tags: comma-separated
-- notes: recorded in ingest lineage
-
-For private connector sync, the Ingest page also accepts a GCS directory link (`gs://bucket/prefix`) and resolves it to the existing GCS sync inputs.
-
-### CLI
-
-```bash
-uv run python -m app.cli ingest-folder data/demo_corpus --classification internal --tags "runbook,platform"
-```
-
----
-
-## Cloud Run deployment
-
-This repo ships a production Dockerfile that builds the UI and serves it from the FastAPI container.
-
-Production baseline: **Cloud Run + Cloud SQL (Postgres)** with a public, read-only demo posture by default.
-
-High level:
-
-- build container
-- deploy to Cloud Run
-- set env vars (and secrets)
-
-See:
-
-- `infra/gcp/README.md`
-- `Makefile` targets: `make build`, `make deploy`
-- Cloud SQL runbook: `docs/RUNBOOKS/CLOUDSQL.md`
-- GCS connector runbook (private deployments): `docs/RUNBOOKS/CONNECTORS_GCS.md`
-
----
-
-## Developer workflow
-
-Run the full local quality harness:
+## Validate a change
 
 ```bash
 make dev-doctor
+make eval-smoke
 ```
 
-Or run specific checks:
+The first command runs Python lint and type checks, backend and frontend tests, and a production web build. The second checks retrieval thresholds and prompt-injection refusal behavior against committed fixtures. CI runs both paths on every push and pull request.
 
-```bash
-make lint
-make typecheck
-make test
-make eval
-make safety-eval
-```
+## Read next
 
-(See `scripts/harness.py` for what runs.)
+- [Product brief](docs/PRODUCT/PRODUCT_BRIEF.md) — intent, users, and boundaries
+- [Architecture](docs/ARCHITECTURE/README.md) — system and data-flow views
+- [Contracts](docs/CONTRACTS.md) — API guarantees and feature gates
+- [Security model](docs/ARCHITECTURE/SECURITY_MODEL.md) — threats and controls
+- [GCP deployment](docs/DEPLOY_GCP.md) — Cloud Run and Cloud SQL path
+- [Contributing](CONTRIBUTING.md) — development workflow
 
-Housekeeping:
-
-```bash
-make clean   # remove local caches/build artifacts
-make dist    # create a clean source ZIP in dist/
-```
-
----
-
-## Maintenance (private deployments)
-
-Retention purge is available for persisted/private deployments:
-
-```bash
-make purge-expired         # dry-run
-make purge-expired-apply   # delete expired docs
-```
-
-The web UI also includes a **Maintenance** page that lists currently-expired docs (read-only).
-
-See `docs/RUNBOOKS/MAINTENANCE.md`.
-
-BigQuery/warehouse export is also available for private deployments:
-
-```bash
-make bigquery-export
-```
-
-For direct BigQuery load (instead of JSONL-only snapshots), see
-`docs/RUNBOOKS/BIGQUERY_EXPORT.md`.
+MIT licensed. See [LICENSE](LICENSE).
